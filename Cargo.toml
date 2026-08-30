@@ -1,0 +1,16 @@
+[package]
+name = "aeon"
+version = "0.1.0"
+edition = "2024"
+description = "aeon"
+license = "MIT"
+readme = "README.md"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+
