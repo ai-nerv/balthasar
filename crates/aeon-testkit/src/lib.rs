@@ -15,7 +15,7 @@ mod suite;
 
 pub use adapter::{Dataset, Family, Found, load};
 pub use attack::{ATTACKS, Attack, Report as AttackReport, Verdict as AttackVerdict, run_attacks};
-pub use baseline::Baseline;
+pub use baseline::{Baseline, RECALL_P95_BUDGET_MS};
 pub use experiment::{Decision, Full, Manifest, Metric, Moved, Outcome};
 pub use run::{Measured, Ran, Score, measure, run};
 pub use scenario::{Lesson, Scenario, Session};

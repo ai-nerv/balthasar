@@ -16,6 +16,16 @@
 
 use crate::{Scenario, Score, measure};
 
+/// The recall latency budget, declared rather than observed.
+///
+/// Five milliseconds at the tail. A memory layer sits on the turn path, so this is the number
+/// that decides whether it belongs there at all — and declaring it is what makes a regression a
+/// failure rather than a slightly larger number nobody looks at.
+///
+/// Generous on purpose: the point is to catch an algorithmic change that turns a bounded query
+/// into an unbounded one, not to police a few hundred microseconds on a busy machine.
+pub const RECALL_P95_BUDGET_MS: f64 = 5.0;
+
 /// Everything one evaluation says about itself.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Baseline {
@@ -224,6 +234,19 @@ mod tests {
         let held = baseline();
         assert!(held.injected_tokens > 0, "something was injected");
         assert!(held.store_bytes > 0, "and it took room");
+    }
+
+    #[test]
+    fn recall_stays_inside_its_declared_budget() {
+        // §8.9's last acceptance bullet. Traversal, relationship views and the ledger have all
+        // been added to this path since the budget was set; a change that made any of them
+        // unbounded would show up here rather than as a slow afternoon.
+        let held = baseline();
+        assert!(
+            held.recall_p95_ms < RECALL_P95_BUDGET_MS,
+            "p95 {:.2}ms is over the declared {RECALL_P95_BUDGET_MS}ms budget",
+            held.recall_p95_ms
+        );
     }
 
     #[test]
