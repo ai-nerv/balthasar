@@ -204,7 +204,14 @@ impl Memory {
             // Faded past the point of being worth keeping is faded past the point of being
             // worth stating. Testing for "greater than zero" let a memory that had decayed to
             // 0.004 still be presented to a model as current truth.
-            && self.strength.at(now) >= crate::floor::SPENT
+            && self.strength.at_tier(self.tier, now) >= crate::floor::SPENT
+            // And stale is not the same as faded. A fact barely decays — disuse is not evidence
+            // against a claim about the world — so without this a passing remark from last year
+            // would still be stated flatly, having never been contradicted and never re-seen.
+            // Staleness is about the clock on the observation, not about how often it was
+            // wanted, and a pinned memory is exempt because somebody chose it.
+            && (self.strength.pinned
+                || !crate::is_stale(self.temporal.observed_at, self.temporal.valid_to, now))
     }
 
     /// Note that this was recalled: reinforce it, and say so.

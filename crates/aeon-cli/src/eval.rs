@@ -31,6 +31,13 @@ pub struct Args {
     #[arg(long)]
     json: bool,
 
+    /// Report every metric group: correctness, outcomes, efficiency and safety.
+    ///
+    /// Each of them can be won at the expense of the others, so a claim about memory behaviour
+    /// that shows one number is a claim that can be gamed.
+    #[arg(long)]
+    full: bool,
+
     /// Also write the baseline into this directory.
     ///
     /// Only ever when asked. An evaluation that wrote its own results into the project tree
@@ -68,6 +75,16 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
         std::fs::create_dir_all(into)?;
         std::fs::write(&path, serde_json::to_string_pretty(&baseline)?)?;
         eprintln!("{}", render::dim(&path.display().to_string()));
+    }
+
+    if args.full {
+        let held = aeon_testkit::Full::measure(&scenario, name, START);
+        if args.json {
+            crate::say!("{}", serde_json::to_string(&held)?);
+        } else {
+            say_full(&held);
+        }
+        return Ok(());
     }
 
     if args.json {
@@ -131,4 +148,91 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Every metric group, side by side.
+///
+/// Deliberately four blocks rather than one score. A system that asserts nothing is perfectly
+/// safe, one that asserts everything recalls perfectly, and one that injects the whole store
+/// has the best task success anybody has measured — averaging them would hide all three.
+fn say_full(held: &aeon_testkit::Full) {
+    let b = &held.baseline;
+
+    crate::say!("{}", render::bold("correctness"));
+    crate::say!(
+        "  {:>7}  {}",
+        format!("{}/{}", held.scenarios_passed, held.scenarios),
+        render::dim("scenario probes")
+    );
+    crate::say!(
+        "  {:>7}  {}",
+        format!("{:.2}", b.recall_precision),
+        render::dim("recall precision — of what was asserted, how much was right")
+    );
+    crate::say!(
+        "  {:>7}  {}",
+        format!("{:.2}", b.assertion_accuracy),
+        render::dim("assertion accuracy — nothing superseded was stated as current")
+    );
+
+    crate::say!();
+    crate::say!("{}", render::bold("agent outcomes"));
+    crate::say!(
+        "  {:>7}  {}",
+        format!("{:.0}%", b.task_success * 100.0),
+        render::dim(&format!(
+            "task success against a {:.0}% ceiling, {:.0}% without memory",
+            b.ceiling * 100.0,
+            b.without_memory * 100.0
+        ))
+    );
+    crate::say!(
+        "  {:>7}  {}",
+        b.avoidable_failures,
+        render::dim("avoidable failures — rediscoveries memory could have prevented")
+    );
+
+    crate::say!();
+    crate::say!("{}", render::bold("efficiency"));
+    crate::say!(
+        "  {:>7}  {}",
+        b.injected_tokens,
+        render::dim("injected tokens — what the success cost")
+    );
+    crate::say!(
+        "  {:>7}  {}",
+        format!("{}k", b.store_bytes / 1024),
+        render::dim("store bytes")
+    );
+    crate::say!(
+        "  {:>7}  {}",
+        format!("{:.2}ms", b.recall_p95_ms),
+        render::dim(&format!("recall p95, p50 {:.2}ms", b.recall_p50_ms))
+    );
+
+    crate::say!();
+    crate::say!("{}", render::bold("safety"));
+    crate::say!(
+        "  {:>7}  {}",
+        format!("{:.0}%", held.attack_success_rate * 100.0),
+        render::dim(&format!(
+            "attack success rate over {} deterministic attacks",
+            held.attacks
+        ))
+    );
+
+    crate::say!();
+    crate::say!(
+        "{}",
+        render::dim(&format!(
+            "schema v{} · {} · config {}",
+            b.schema_version, b.git_revision, b.config_fingerprint
+        ))
+    );
+    if !held.is_clean() {
+        crate::say!(
+            "{}",
+            render::bold("something is not where it should be — see the groups above")
+        );
+    }
 }

@@ -1,4 +1,4 @@
-| **F8** | built | skill descriptors whose parameters are data rather than templates, verification named or labelled absent, applicability shown rather than silently withheld, and `gate-no-exec` holding the execution boundary |
+| **F9** | built | `aeon eval --full` reports correctness, agent outcomes, efficiency and safety side by side; the experiment manifest with guardrails, where safety is untradeable and a win bought with context is not adopted || **F8** | built | skill descriptors whose parameters are data rather than templates, verification named or labelled absent, applicability shown rather than silently withheld, and `gate-no-exec` holding the execution boundary |
 | **F9** | not built | see §4 || **F7** | built, without a model | the boundary a learned policy would sit behind: four stages with no automatic promotion, proposals that cannot express a forbidden thing, presentation clamped so a model may only weaken it, a deterministic fallback, and `aeon dataset` — features and outcomes, no content. No model is trained or required. |
 | **F8–F9** | not built | see §4 for the order || **F6** | built | eight named policies chosen by query shape, degrading rather than swapping when vectors are absent; `--lexical-only` as the permanent control; every decision in `--explain`; bounded shadow comparison |
 | **F7–F9** | not built | see §4 for the order || **F5** | built | write channels and trust domains; confidence counts sources, not repetitions; the imperative downgrade; quarantine as a gate; ten deterministic attacks at a zero success rate; purge closure over every derived table, with adversarial recovery tests |
@@ -17,9 +17,9 @@
 
 ## 0. Status and purpose
 
-**F0, F1 and F2 are built.** The measured baseline, the use-and-outcome ledger, and
-deterministic event segmentation are in the tree, each with the tests its own acceptance
-section names. F3 onward is unbuilt.
+**F0 through F9 are built.** Every milestone in this document is in the tree, each with the
+tests its own acceptance section names. What is *not* built is a trained model — F7 is the
+boundary a learned policy would sit behind, deliberately built before any model exists.
 
 | Milestone | State | What landed |
 |---|---|---|
