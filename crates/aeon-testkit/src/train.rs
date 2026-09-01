@@ -146,12 +146,15 @@ pub fn fit(examples: &[Example], holdout: f64, passes: usize) -> Result<Fitted, 
     }
 
     let every = ((1.0 / holdout.clamp(0.1, 0.5)).round() as usize).max(2);
-    let (train, test): (Vec<(usize, &Example)>, Vec<(usize, &Example)>) = examples
-        .iter()
-        .enumerate()
-        .partition(|(at, _)| at % every != 0);
-    let train: Vec<&Example> = train.into_iter().map(|(_, e)| e).collect();
-    let test: Vec<&Example> = test.into_iter().map(|(_, e)| e).collect();
+    let mut train: Vec<&Example> = Vec::with_capacity(examples.len());
+    let mut test: Vec<&Example> = Vec::new();
+    for (at, example) in examples.iter().enumerate() {
+        if at % every == 0 {
+            test.push(example);
+        } else {
+            train.push(example);
+        }
+    }
 
     // Standardised on the training half only. Using the whole set would leak the holdout's
     // distribution into the model and flatter every number that follows.
