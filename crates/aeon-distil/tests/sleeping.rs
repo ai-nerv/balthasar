@@ -134,20 +134,42 @@ fn what_crossed_is_dated_from_when_it_was_first_seen() {
 }
 
 #[test]
-fn a_second_pass_reinforces_rather_than_duplicating() {
+fn a_second_pass_adds_nothing() {
     // A pass that ran nightly and added a copy of everything each time would fill a project
     // with restatements and make confidence meaningless.
+    //
+    // It must not keep *reinforcing* either. This once asserted a reinforcement on the second
+    // pass, which only happened because the sweep was broken: spent scratch was never archived,
+    // so every nightly run found the same two observations again and agreed with itself. One
+    // pair of observations must be worth one crossing however many times the machine is idle.
     let mut store = Store::ephemeral().expect("store");
     said(&mut store, "s1", "the database is postgres", MARCH);
     said(&mut store, "s2", "the database is postgres", MARCH + 86_400);
 
     run(&mut store, AUGUST);
     let after_first = store.all().expect("export").len();
-    let second = run(&mut store, AUGUST + 3600);
+    let crossed = store
+        .all()
+        .expect("export")
+        .into_iter()
+        .find(|m| m.tier == Tier::Fact)
+        .expect("something crossed");
 
-    assert_eq!(second.promoted.len(), 0);
-    assert_eq!(second.reinforced, 1);
-    assert_eq!(store.all().expect("export").len(), after_first);
+    let second = run(&mut store, AUGUST + 3600);
+    assert_eq!(second.promoted.len(), 0, "nothing crossed twice");
+    assert_eq!(
+        store.all().expect("export").len(),
+        after_first,
+        "and nothing was added"
+    );
+
+    let again = store.get(&crossed.id).expect("get").expect("still there");
+    assert!(
+        (again.confidence - crossed.confidence).abs() < f64::EPSILON,
+        "an idle machine agreed with itself: {} -> {}",
+        crossed.confidence,
+        again.confidence
+    );
 }
 
 #[test]

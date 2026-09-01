@@ -1,4 +1,5 @@
-| **F3** | built | `relation_view` with derived edges kept apart from asserted links; temporal, causal, entity and semantic derivations that need no model; query classification; bounded one-hop traversal; `aeon relate` |
+| **F4** | built | tier-aware decay so a fact outlasts an afternoon; habit standing, environment fingerprints and narrow negative procedures; staleness from validity rather than disuse |
+| **F5–F9** | not built | see §4 for the order || **F3** | built | `relation_view` with derived edges kept apart from asserted links; temporal, causal, entity and semantic derivations that need no model; query classification; bounded one-hop traversal; `aeon relate` |
 | **F4–F9** | not built | see §4 for the order |# aeon — Future Experimental Plan
 
 > A research and implementation roadmap for the work after the baseline in `PLAN.md`.

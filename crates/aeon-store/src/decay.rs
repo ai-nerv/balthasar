@@ -96,10 +96,18 @@ impl Store {
                 continue;
             }
             let was = memory.strength.value;
-            let now_value = memory.strength.at(now);
+            // Tier-aware. A fact barely fades; an afternoon's episode does, and a session's
+            // own scratch fades fastest of all.
+            let now_value = memory.strength.at_tier(memory.tier, now);
+            let spent = sweeping && now_value < floor::SPENT;
             // Unchanged is not worth reporting. A pass run twice in a minute should say it
             // did nothing rather than list every memory in the store as "weakened by 0.00".
-            if (was - now_value).abs() < f64::EPSILON {
+            //
+            // Except when it is already spent. Consolidation weakens early and sweeps at the
+            // end of the same pass with the same clock, so by the time sweeping looks, every
+            // strength has already moved and nothing appears to have changed — which meant
+            // the sweep archived nothing at all, ever.
+            if !spent && (was - now_value).abs() < f64::EPSILON {
                 continue;
             }
 
@@ -111,7 +119,7 @@ impl Store {
                 idle_days: ((now - memory.strength.last_accessed).max(0)) as f64 / 86_400.0,
             };
 
-            if sweeping && now_value < floor::SPENT {
+            if spent {
                 report.swept.push(entry);
                 if !preview {
                     self.db().execute(

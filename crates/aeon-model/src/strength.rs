@@ -112,6 +112,21 @@ impl Strength {
         (self.value * (-self.effective_rate() * days).exp()).clamp(0.0, 1.0)
     }
 
+    /// What this will be worth at `now`, for a memory of this tier.
+    ///
+    /// The tier-aware form. A fact and an afternoon's episode should not fade at the same
+    /// speed: disuse is not evidence against a claim about the world, and it is exactly what an
+    /// episode's worth is made of. See [`crate::tempo`] for the multipliers and the case for
+    /// each one.
+    #[must_use]
+    pub fn at_tier(&self, tier: crate::Tier, now: Timestamp) -> f64 {
+        if self.pinned {
+            return 1.0;
+        }
+        let days = ((now - self.last_accessed).max(0)) as f64 / 86_400.0;
+        let rate = self.effective_rate() * crate::tempo(tier);
+        (self.value * (-rate * days).exp()).clamp(0.0, 1.0)
+    }
     /// Apply the fade, up to `now`.
     pub fn decay(&mut self, now: Timestamp) {
         if self.pinned {
