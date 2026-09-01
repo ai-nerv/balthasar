@@ -103,6 +103,7 @@ pub fn answer_with(
         "observe" => crate::window::observe(at, request),
         "amend" => crate::window::amend(at, request),
         "replay" => crate::window::replay(at, request),
+        "scroll" => crate::window::scroll(at, request),
         "resume" => crate::window::resume(at, request),
         "plan" => crate::window::plan(at, request, describe),
         "used" => crate::outcome::used(at, door, request),

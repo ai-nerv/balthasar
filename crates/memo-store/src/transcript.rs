@@ -122,6 +122,11 @@ impl Transcript {
         })
     }
 
+    /// The connection, for the modules that read this store.
+    pub(crate) fn db(&self) -> &Connection {
+        &self.connection
+    }
+
     /// Where it lives.
     #[must_use]
     pub fn path(&self) -> &Path {

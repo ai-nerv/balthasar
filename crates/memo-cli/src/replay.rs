@@ -25,6 +25,47 @@ pub struct Args {
     /// Say where a resuming harness should carry on from.
     #[arg(long)]
     resume: bool,
+
+    /// The most recent turns, within a token budget, instead of the whole run.
+    ///
+    /// A long run has no upper bound — memo is the only copy of it — so reading all of one to
+    /// look at the end is the wrong shape as soon as a session gets long.
+    #[arg(long, value_name = "TOKENS")]
+    tail: Option<usize>,
+
+    /// Only this cursor range. What an episode is.
+    #[arg(long, value_name = "FROM..TO")]
+    span: Option<String>,
+
+    /// The turns either side of this one.
+    #[arg(long, value_name = "CURSOR")]
+    around: Option<u64>,
+
+    /// Only turns mentioning all of these.
+    #[arg(long, value_name = "WORD", num_args = 1..)]
+    matching: Vec<String>,
+}
+
+/// Which bounded read the flags asked for, if any.
+fn wanted(args: &Args) -> anyhow::Result<Option<memo_store::Want>> {
+    if let Some(range) = &args.span {
+        let (from, to) = range
+            .split_once("..")
+            .ok_or_else(|| anyhow::anyhow!("a span reads `from..to`, as in `--span 10..40`"))?;
+        return Ok(Some(memo_store::Want::Span {
+            from: from.trim().parse()?,
+            to: to.trim().parse()?,
+        }));
+    }
+    if let Some(cursor) = args.around {
+        return Ok(Some(memo_store::Want::Around { cursor }));
+    }
+    if !args.matching.is_empty() {
+        return Ok(Some(memo_store::Want::Matching {
+            terms: args.matching.clone(),
+        }));
+    }
+    Ok(args.tail.map(|_| memo_store::Want::Tail))
 }
 
 /// Replay, or list.
@@ -72,7 +113,19 @@ pub fn run(
         return Ok(());
     }
 
-    let turns = held.replay(&session)?;
+    // Bounded when asked, whole otherwise. Restoring a session needs every turn and truncating
+    // it would hand back a run quietly missing its beginning; looking at one needs a slice.
+    let (turns, note) = match wanted(args)? {
+        None => (held.replay(&session)?, None),
+        Some(want) => {
+            let budget = memo_store::Budget {
+                tokens: args.tail.unwrap_or(4_000),
+                ..memo_store::Budget::default()
+            };
+            let read = held.read(&session, &want, &budget)?;
+            (read.turns.clone(), read.note())
+        }
+    };
     if turns.is_empty() {
         crate::say!("{}", render::dim("nothing was recorded for that run"));
         return Ok(());
@@ -100,6 +153,12 @@ pub fn run(
                 render::dim(&format!("        revised {}×", turn.revisions))
             );
         }
+    }
+    // Said last, where it is read after the turns rather than before them. A slice that did
+    // not say it was a slice would be indistinguishable from the whole run.
+    if let Some(said) = note {
+        crate::say!();
+        crate::say!("{}", render::dim(&said));
     }
     Ok(())
 }

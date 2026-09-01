@@ -303,9 +303,86 @@ pub fn replay(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Reply::refused("this memo keeps no scrollback");
     };
+    // Unbounded on purpose, and only here. `replay` is what a harness restoring a session
+    // needs — every turn, in order, byte for byte — and truncating it would mean handing back
+    // a session that is quietly missing its beginning. Everything that wants *part* of a
+    // scrollback asks `scroll`, which is bounded.
     match scrollback.replay(&session) {
         Ok(turns) => Reply::one(serde_json::json!(turns)),
         Err(why) => Reply::refused(why.to_string()),
+    }
+}
+
+/// `scroll(session, {want, from, to, cursor, terms, tokens, turns})`.
+///
+/// Part of a scrollback, within a budget. A run's transcript grows without limit — memo is the
+/// only copy — and a model's context does not, so this is the read for everything except
+/// restoring a session.
+///
+/// The reply carries what was left out and where to continue from, because a caller cannot
+/// otherwise tell "that is all there was" from "that is all you asked for".
+pub fn scroll(at: &mut Answering<'_>, request: &Request) -> Reply {
+    let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
+        return Reply::refused("scroll needs a session");
+    };
+    let session = SessionId::new(session);
+    let said = request.args.get(1);
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Reply::refused("this memo keeps no scrollback");
+    };
+
+    let number = |name: &str| -> Option<u64> {
+        said.and_then(|s| s.get(name))
+            .and_then(serde_json::Value::as_u64)
+    };
+    let budget = memo_store::Budget {
+        tokens: number("tokens").unwrap_or(4_000) as usize,
+        turns: number("turns").unwrap_or(200) as usize,
+    };
+
+    let want = match said
+        .and_then(|s| s.get("want"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("tail")
+    {
+        "tail" => memo_store::Want::Tail,
+        "span" => match (number("from"), number("to")) {
+            (Some(from), Some(to)) => memo_store::Want::Span { from, to },
+            _ => return Reply::refused("a span needs `from` and `to`"),
+        },
+        "around" => match number("cursor") {
+            Some(cursor) => memo_store::Want::Around { cursor },
+            None => return Reply::refused("`around` needs a cursor"),
+        },
+        "matching" => memo_store::Want::Matching {
+            terms: said
+                .and_then(|s| s.get("terms"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        },
+        other => {
+            return Reply::refused(format!(
+                "no such read: '{other}' — try tail, span, around or matching"
+            ));
+        }
+    };
+
+    match scrollback.read(&session, &want, &budget) {
+        Err(why) => Reply::refused(why.to_string()),
+        Ok(held) => Reply::one(serde_json::json!({
+            "turns": held.turns,
+            "tokens": held.tokens,
+            "omitted": held.omitted,
+            "next": held.next,
+            "complete": held.is_complete(),
+        })),
     }
 }
 
