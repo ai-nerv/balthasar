@@ -273,6 +273,12 @@ fn turn_of(
             .get("tokens")
             .and_then(serde_json::Value::as_u64)
             .and_then(|n| u32::try_from(n).ok()),
+        // What the extractors will read later. A harness that says whether its tool succeeded
+        // and how long it took is a harness memo can learn a repair from; one that says neither
+        // still gets a working transcript.
+        ok: turn.get("ok").and_then(serde_json::Value::as_bool),
+        ms: turn.get("ms").and_then(serde_json::Value::as_u64),
+        args: turn.get("args").map(ToString::to_string),
         cursor: turn
             .get("cursor")
             .and_then(serde_json::Value::as_u64)

@@ -333,7 +333,8 @@ impl Transcript {
     /// Every turn in a cursor range, in order.
     fn range(&self, session: &SessionId, from: u64, to: u64) -> Result<Vec<Turn>, StoreError> {
         let mut statement = self.db().prepare(
-            "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, revisions FROM turn \
+            "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, \
+                    ok, ms, args, revisions FROM turn \
              WHERE session = ?1 AND cursor >= ?2 AND cursor <= ?3 ORDER BY cursor",
         )?;
         // Clamped, because SQLite has no unsigned integer and `u64::MAX as i64` is -1 — which
@@ -355,7 +356,10 @@ impl Transcript {
                     tokens: r.get::<_, Option<i64>>(8)?.map(|n| n.max(0) as u32),
                     state: r.get::<_, String>(9)?.parse().unwrap_or_default(),
                     pinned: r.get::<_, i64>(10)? != 0,
-                    revisions: r.get::<_, i64>(11)? as u32,
+                    ok: r.get(11)?,
+                    ms: r.get::<_, Option<i64>>(12)?.map(|n| n.max(0) as u64),
+                    args: r.get(13)?,
+                    revisions: r.get::<_, i64>(14)? as u32,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

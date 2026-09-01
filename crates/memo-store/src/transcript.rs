@@ -116,6 +116,23 @@ pub struct Turn {
     /// estimate — a missing count must never read as a free turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<u32>,
+    /// Whether a tool call succeeded.
+    ///
+    /// The cost signal rides in on this. A call that failed and then succeeded is a repair, and
+    /// a repair is the single most valuable thing a coding session produces — but only if
+    /// somebody wrote down which of the two it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
+    /// How long a tool took, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms: Option<u64>,
+    /// What the tool was asked for, as the harness's own JSON.
+    ///
+    /// Held as text and never interpreted here. What reads it is an extractor asking a narrow
+    /// question — which file, which command — and a harness that supplies nothing simply gets
+    /// no answer to those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
     /// What is sent for this turn right now.
     #[serde(default)]
     pub state: State,
@@ -284,11 +301,12 @@ impl Transcript {
     pub fn write(&mut self, session: &SessionId, turn: &Turn) -> Result<(), StoreError> {
         self.connection.execute(
             "INSERT INTO turn \
-             (session, cursor, at, role, kind, text, tool, raw, entry, tokens, pinned, revisions) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0) \
+             (session, cursor, at, role, kind, text, tool, raw, entry, tokens, pinned, \
+              ok, ms, args, revisions) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0) \
              ON CONFLICT(session, cursor) DO UPDATE SET \
                at = ?3, role = ?4, kind = ?5, text = ?6, tool = ?7, raw = ?8, entry = ?9, \
-               tokens = ?10, pinned = ?11, \
+               tokens = ?10, pinned = ?11, ok = ?12, ms = ?13, args = ?14, \
                revisions = revisions + 1",
             params![
                 session.as_str(),
@@ -302,6 +320,9 @@ impl Transcript {
                 turn.entry,
                 turn.tokens,
                 i64::from(turn.pinned),
+                turn.ok,
+                turn.ms.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
+                turn.args,
             ],
         )?;
         Ok(())
@@ -313,7 +334,8 @@ impl Transcript {
     /// first written — a tool call comes back with its result.
     pub fn replay(&self, session: &SessionId) -> Result<Vec<Turn>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, revisions \
+            "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, \
+                    ok, ms, args, revisions \
              FROM turn WHERE session = ?1 ORDER BY cursor",
         )?;
         let found = statement
@@ -329,7 +351,8 @@ impl Transcript {
         let found = self
             .connection
             .query_row(
-                "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, revisions \
+                "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, \
+                    ok, ms, args, revisions \
                  FROM turn WHERE session = ?1 AND cursor = ?2",
                 params![session.as_str(), cursor as i64],
                 |r| Ok(read(r)),
@@ -431,7 +454,7 @@ impl Transcript {
                     CASE state WHEN 'live' THEN text ELSE '' END, \
                     tool, raw, entry, \
                     COALESCE(tokens, (LENGTH(text) + 3) / 4), \
-                    state, pinned, revisions \
+                    state, pinned, ok, ms, args, revisions \
              FROM turn WHERE session = ?1 AND state IN ('live', 'masked') ORDER BY cursor",
         )?;
         let found = statement
@@ -478,7 +501,10 @@ fn read(row: &rusqlite::Row<'_>) -> Result<Turn, StoreError> {
         tokens: row.get::<_, Option<i64>>(8)?.map(|n| n.max(0) as u32),
         state: row.get::<_, String>(9)?.parse().unwrap_or_default(),
         pinned: row.get::<_, i64>(10)? != 0,
-        revisions: row.get::<_, i64>(11)?.max(0) as u32,
+        ok: row.get(11)?,
+        ms: row.get::<_, Option<i64>>(12)?.map(|n| n.max(0) as u64),
+        args: row.get(13)?,
+        revisions: row.get::<_, i64>(14)?.max(0) as u32,
     })
 }
 
@@ -518,6 +544,13 @@ CREATE TABLE IF NOT EXISTS turn (
   -- What the harness was charged, when it says. NULL means nobody counted and a reader
   -- estimates -- never that the turn was free.
   tokens     INTEGER,
+  -- What the extractors read. `ok` and `ms` are how a repair and a slow command are told
+  -- apart from ordinary output; `args` is the harness's own call, kept as text and never
+  -- parsed here. A harness that supplies none of them still gets a working transcript --
+  -- it simply produces no SCAR.
+  ok         INTEGER,
+  ms         INTEGER,
+  args       TEXT,
   -- What is sent for this turn, and whether a plan may touch it. Compaction changes these and
   -- never the text, which is what makes it reversible: a masked turn still has its words here.
   state      TEXT NOT NULL DEFAULT 'live',
@@ -554,13 +587,8 @@ mod tests {
             role: "user".into(),
             kind: "prose".into(),
             text: text.to_owned(),
-            tool: None,
-            entry: None,
-            tokens: None,
-            state: State::default(),
-            pinned: false,
             raw: Some(format!(r#"{{"type":"user","text":{text:?}}}"#)),
-            revisions: 0,
+            ..Turn::default()
         }
     }
 

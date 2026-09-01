@@ -141,6 +141,21 @@ impl Loaded {
         memo_distil::ingest(&mut self.engine, store, settings, ask)
     }
 
+    /// Read one of this project's own runs and offer what it taught.
+    ///
+    /// Here rather than in the command, for the same reason `ingest` is: the pass needs the VM's
+    /// promote gate as well as the settings, and this is the one place holding both.
+    pub fn distil(
+        &mut self,
+        store: &mut memo_store::Store,
+        held: &memo_store::Transcript,
+        session: &memo_model::SessionId,
+        ask: &memo_distil::Ingest,
+    ) -> Result<memo_distil::Report, memo_distil::DistilError> {
+        let settings = self.settings.clone();
+        memo_distil::distil_run(store, &mut self.engine, &settings, held, session, ask)
+    }
+
     /// Every source a configuration declared.
     #[must_use]
     pub fn sources(&self) -> Vec<String> {

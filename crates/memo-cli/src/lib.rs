@@ -9,6 +9,7 @@ mod configs;
 mod consolidate;
 mod context;
 mod decay;
+pub(crate) mod distil;
 mod eval;
 mod forget;
 mod ingest;
@@ -93,6 +94,9 @@ enum What {
     Context(context::Args),
     /// Read a source's existing transcripts into memory.
     Ingest(ingest::Args),
+
+    /// Run the extractors over what this project's own runs said.
+    Distil(distil::Args),
     /// Give memories their vectors. Never on the critical path.
     Reindex(reindex::Args),
     /// Everything a run said, back out again.
@@ -176,6 +180,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Some(What::Why(args)) => ask::run(where_, &scope, &tool, args, floors),
         Some(What::Promote(args)) => promote::run(where_, &scope, &tool, args, &mut loaded),
         Some(What::Forget(args)) => forget::run(where_, &scope, &tool, args, &mut loaded),
+        Some(What::Distil(args)) => distil::run(where_, &scope, &tool, args, &mut loaded),
         Some(What::Context(args)) => context::run(where_, &scope, &tool, args, &mut loaded),
         Some(What::Ingest(args)) => ingest::run(where_, &scope, &tool, args, &mut loaded),
         Some(What::Reindex(args)) => reindex::run(where_, &scope, &tool, args, &loaded),

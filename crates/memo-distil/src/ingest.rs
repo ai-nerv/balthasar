@@ -42,6 +42,29 @@ pub struct Source {
     pub meta: Meta,
 }
 
+/// Where a batch of candidates came from, in the only terms landing them needs.
+///
+/// Both readers fill this in: one walks a harness's own journal files, the other walks memo's
+/// transcript. What follows — the floors, the configuration's gate, the witness — must not be
+/// able to tell them apart, because the evidence is the same evidence.
+#[derive(Debug, Clone)]
+pub struct Provenance {
+    /// Which project.
+    pub scope: ScopeId,
+    /// Which run taught it.
+    pub session: SessionId,
+    /// What to record as having carried it in.
+    pub through: memo_model::Through,
+    /// The name of the reader, for the witness note.
+    pub who: String,
+    /// When the run happened, which is not when it was read.
+    pub happened: Timestamp,
+    /// The moment being scored against.
+    pub now: Timestamp,
+    /// Say what would happen without writing anything.
+    pub dry_run: bool,
+}
+
 /// What an ingest did.
 #[derive(Debug, Default, Clone)]
 pub struct Report {
@@ -117,7 +140,16 @@ pub fn ingest(
         }
         let found = extract(&turns, &settings.imperatives);
         report.proposed += found.candidates.len();
-        land(store, engine, settings, ask, &source, &found, &mut report)?;
+        let from = Provenance {
+            scope: ask.scope.clone(),
+            session: SessionId::new(&source.meta.id),
+            through: memo_model::Through::Ingest,
+            who: ask.source.clone(),
+            happened: source.meta.opened.max(0),
+            now: ask.now,
+            dry_run: ask.dry_run,
+        };
+        land(store, engine, settings, &from, &found, &mut report)?;
 
         if !ask.dry_run {
             store.stamp(&ask.source, &file, EXTRACTOR_VERSION, ask.now)?;
@@ -193,12 +225,11 @@ fn spread(value: serde_json::Value) -> Vec<serde_json::Value> {
 }
 
 /// Offer every candidate to the gate, then to the store.
-fn land(
+pub(crate) fn land(
     store: &mut Store,
     engine: &mut Engine,
     settings: &Settings,
-    ask: &Ingest,
-    source: &Source,
+    from: &Provenance,
     found: &Extracted,
     report: &mut Report,
 ) -> Result<(), DistilError> {
@@ -210,11 +241,11 @@ fn land(
             Verdict::Refuse { reason } => report.refused.push((candidate.text(), reason)),
             Verdict::Hold => report.held += 1,
             Verdict::Promote { importance, pinned } => {
-                if ask.dry_run {
+                if from.dry_run {
                     report.promoted += 1;
                     continue;
                 }
-                let landing = write(store, ask, source, candidate, importance, pinned)?;
+                let landing = write(store, from, candidate, importance, pinned)?;
                 match landing {
                     Landing::Added(_) => report.promoted += 1,
                     Landing::Reinforced(_) => report.reinforced += 1,
@@ -278,30 +309,29 @@ fn decide(engine: &mut Engine, settings: &Settings, candidate: &Candidate, score
 /// Write one candidate, with the evidence that earned it.
 fn write(
     store: &mut Store,
-    ask: &Ingest,
-    source: &Source,
+    from: &Provenance,
     candidate: &Candidate,
     importance: memo_model::Importance,
     pinned: bool,
 ) -> Result<Landing, DistilError> {
-    let session = SessionId::new(&source.meta.id);
+    let session = from.session.clone();
     // The claim dates from when it happened, not from when the backfill ran. Six months of
     // transcripts read this afternoon did not all become true this afternoon.
-    let happened = source.meta.opened.max(0);
+    let happened = from.happened;
     let mut memory = Memory::new(
-        mint(ask.now),
+        mint(from.now),
         candidate.tier,
-        ask.scope.clone(),
+        from.scope.clone(),
         candidate.body.clone(),
-        ask.now,
+        from.now,
     );
-    memory.temporal = memo_model::Temporal::recalled(ask.now, happened);
+    memory.temporal = memo_model::Temporal::recalled(from.now, happened);
     memory.session = Some(session.clone());
     memory.strength.importance = importance;
     memory.strength.pinned = pinned;
     memory.provenance = memo_model::Provenance {
-        through: memo_model::Through::Ingest,
-        who: Some(ask.source.clone()),
+        through: from.through,
+        who: Some(from.who.clone()),
     };
 
     let witness = Witness::new(
@@ -313,7 +343,7 @@ fn write(
         )),
         candidate.witness,
         session,
-        ask.scope.clone(),
+        from.scope.clone(),
         happened,
     )
     .noted(format!("{} (rules, not a model)", candidate.from));
@@ -322,5 +352,5 @@ fn write(
         None => witness,
     };
 
-    Ok(store.remember(memory, witness, ask.now)?)
+    Ok(store.remember(memory, witness, from.now)?)
 }

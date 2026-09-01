@@ -4,7 +4,7 @@
 //! "sleep-time compute" is exactly what to spend it on. Shows first, like `decay`: a pass that
 //! changes what a project believes should not be a surprise.
 
-use crate::{Which, now, open, render, runs_under};
+use crate::{Which, now, open, render, runs_under, scrollback};
 use clap::Parser;
 use memo_distil::Consolidated;
 use memo_model::ScopeId;
@@ -36,6 +36,14 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let at = now();
     let mut store = open(store_path, scope, tool)?;
+
+    // What the runs here said, before what they had in common. A pass that clustered first
+    // would be looking for corroboration among scratch it had not finished reading — and the
+    // rules are where "the person told us" comes from, which is the strongest thing there is.
+    let held = scrollback(store_path, scope, tool)?;
+    let unread = memo_distil::undistilled(&store, &held, memo_distil::RUNS_PER_PASS)?;
+    let read = crate::distil::pass(&mut store, &held, scope, &unread, at, !args.commit, loaded)?;
+
     let mut pad = memo_store::Scratchpad::at(runs_under(store_path, scope, tool));
     let settings = loaded.settings().clone();
     let report = memo_distil::consolidate(
@@ -56,6 +64,8 @@ pub fn run(
             "{}",
             serde_json::json!({
                 "dry_run": report.dry_run,
+                "read": read.sessions,
+                "read_promoted": read.promoted,
                 "decayed": report.decayed,
                 "swept": report.swept,
                 "clusters": report.clusters,
@@ -65,8 +75,27 @@ pub fn run(
         );
         return Ok(());
     }
+    say_read(&read);
     say(&report, args.explain);
     Ok(())
+}
+
+/// What reading this project's own runs turned up, when it turned up anything.
+///
+/// Silent otherwise. `consolidate` is run on a timer, and a pass that announced "0 runs read"
+/// every time would train people to stop reading its output.
+fn say_read(read: &memo_distil::Report) {
+    if read.sessions == 0 {
+        return;
+    }
+    crate::say!(
+        "{}",
+        render::dim(&format!(
+            "read {} run(s) of this project's own transcript — {} proposed, {} crossed, {} waiting",
+            read.sessions, read.proposed, read.promoted, read.held
+        ))
+    );
+    crate::say!();
 }
 
 /// Print what happened, or what would.

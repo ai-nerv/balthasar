@@ -15,22 +15,24 @@ mod derive;
 mod distil;
 mod episode;
 mod extract;
-mod ingest;
+pub(crate) mod ingest;
 mod instruction;
 mod observation;
+mod own;
 mod segment;
 
 pub use candidate::{Candidate, Decided, Verdict, weigh};
-pub use consolidate::{Consolidated, DISTINCT_SESSIONS, consolidate};
+pub use consolidate::{Consolidated, DISTINCT_SESSIONS, RUNS_PER_PASS, consolidate};
 pub use derive::{
     DERIVATION as RELATION_DERIVATION, Step, Thresholds, entities, overlap, repairs, temporal,
 };
 pub use distil::{Budget, Distil, DistilFailure, Spawned, backends, first_answer};
 pub use episode::{Told, avoidance, tell};
 pub use extract::{Extracted, extract};
-pub use ingest::{EXTRACTOR_VERSION, Ingest, Report, Source, ingest};
+pub use ingest::{EXTRACTOR_VERSION, Ingest, Provenance, Report, Source, ingest};
 pub use instruction::{Instruction, read as read_instruction};
 pub use observation::{Kind, Meta, Observation, Role};
+pub use own::{SOURCE as TRANSCRIPT_SOURCE, distil_run, undistilled};
 pub use segment::{Boundary, DERIVATION, METHOD, Rules as SegmentRules, Segment, Signal, segment};
 
 /// What went wrong while reading somebody else's transcripts.
