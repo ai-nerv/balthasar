@@ -25,6 +25,7 @@ mod serve;
 mod sessions;
 mod status;
 mod trace;
+mod train;
 mod transfer;
 mod trust;
 
@@ -106,6 +107,8 @@ enum What {
     Export(transfer::ExportArgs),
     /// Read back what `export` wrote.
     Import(transfer::ImportArgs),
+    /// Fit the ranking policy from this store's ledger, and say whether to believe it.
+    Train(train::Args),
     /// Write what a learned policy could be trained on. Explicit, and never automatic.
     Dataset(trace::DatasetArgs),
     /// Work out which memories are related.
@@ -182,6 +185,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Some(What::Decay(args)) => decay::run(where_, &scope, &tool, args),
         Some(What::Export(args)) => transfer::export(where_, &scope, &tool, args),
         Some(What::Import(args)) => transfer::import(where_, &scope, &tool, args),
+        Some(What::Train(args)) => train::run(where_, &scope, &tool, args),
         Some(What::Dataset(args)) => trace::dataset(where_, &scope, &tool, args),
         Some(What::Relate(args)) => relate::run(where_, &scope, &tool, args),
         Some(What::Trace(args)) => trace::trace(where_, &scope, &tool, args),

@@ -17,7 +17,10 @@ use rusqlite::params;
 ///
 /// Deliberately flat and numeric. Anything a model needs to learn from is here as a number; a
 /// feature that could only be expressed as text is a feature that would carry content with it.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+/// Deserialisable as well as serialisable: `aeon dataset` writes these and `aeon train` reads
+/// them back, which is what lets a dataset be inspected, edited, or fitted on a different
+/// machine from the one that produced it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Row {
     /// Which search, so rows from one decision stay together.
     pub recall: String,

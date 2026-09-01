@@ -12,6 +12,7 @@ mod experiment;
 mod run;
 mod scenario;
 mod suite;
+mod train;
 
 pub use adapter::{Dataset, Family, Found, load};
 pub use attack::{ATTACKS, Attack, Report as AttackReport, Verdict as AttackVerdict, run_attacks};
@@ -20,3 +21,4 @@ pub use experiment::{Decision, Full, Manifest, Metric, Moved, Outcome};
 pub use run::{Measured, Ran, Score, measure, run};
 pub use scenario::{Lesson, Scenario, Session};
 pub use suite::{Act, Case, Category, Expect, Failure, Probe, Report, Verdict, corpus, run_suite};
+pub use train::{Example, Fitted, TrainError, auc, features_of, fit, label};
