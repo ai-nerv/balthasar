@@ -527,45 +527,6 @@ fn breakdown(hit: &Scored) -> String {
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use aeon_model::{Body, Memory, Tier as T};
-
-    #[test]
-    fn a_breakdown_names_every_signal_that_moved_the_score() {
-        // `--explain` exists so a ranking can be argued with. One missing term and it cannot.
-        let memory = Memory::new(
-            aeon_model::MemoryId::new("x"),
-            T::Fact,
-            ScopeId::global(),
-            Body::fact("a", "b", "c"),
-            0,
-        );
-        let text = breakdown(&Scored {
-            memory,
-            score: 0.5,
-            semantic: Some(0.7),
-            lexical: 0.4,
-            entity: 0.55,
-            frecency: 0.3,
-            confidence: 0.6,
-            strength: 0.9,
-            near: true,
-        });
-        for term in [
-            "lexical",
-            "confidence",
-            "strength",
-            "score",
-            "frecency",
-            "semantic",
-        ] {
-            assert!(text.contains(term), "{text} is missing {term}");
-        }
-    }
-}
-
 /// Run a policy beside the real one, and keep only the comparison.
 ///
 /// The shadow's candidates are computed and dropped. What survives is bounded — overlap, count,
@@ -643,4 +604,43 @@ fn shadow(
         tokens,
         micros,
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aeon_model::{Body, Memory, Tier as T};
+
+    #[test]
+    fn a_breakdown_names_every_signal_that_moved_the_score() {
+        // `--explain` exists so a ranking can be argued with. One missing term and it cannot.
+        let memory = Memory::new(
+            aeon_model::MemoryId::new("x"),
+            T::Fact,
+            ScopeId::global(),
+            Body::fact("a", "b", "c"),
+            0,
+        );
+        let text = breakdown(&Scored {
+            memory,
+            score: 0.5,
+            semantic: Some(0.7),
+            lexical: 0.4,
+            entity: 0.55,
+            frecency: 0.3,
+            confidence: 0.6,
+            strength: 0.9,
+            near: true,
+        });
+        for term in [
+            "lexical",
+            "confidence",
+            "strength",
+            "score",
+            "frecency",
+            "semantic",
+        ] {
+            assert!(text.contains(term), "{text} is missing {term}");
+        }
+    }
 }
