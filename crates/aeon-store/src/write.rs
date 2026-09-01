@@ -497,8 +497,8 @@ fn write_witness(
 ) -> Result<(), StoreError> {
     tx.execute(
         "INSERT OR IGNORE INTO witness \
-         (id, memory, kind, session, scope, at, cursor, weight, note) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+         (id, memory, kind, session, scope, at, cursor, weight, note, channel, domain) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             witness.id.as_str(),
             memory.as_str(),
@@ -509,6 +509,8 @@ fn write_witness(
             witness.cursor.map(|c| c as i64),
             witness.weight,
             witness.note,
+            witness.channel.as_str(),
+            witness.domain.as_ref().map(aeon_model::Domain::as_str),
         ],
     )?;
     Ok(())

@@ -6,8 +6,8 @@
 //! notices.
 //!
 //! ```text
-//!   confidence = saturate( Σ witness.value(now) )    how much evidence
-//!              × diversity(distinct sessions)         from how many directions
+//!   confidence = saturate( Σ per-source evidence )    how much evidence, per source
+//!              × diversity(sessions ∧ sources)        from how many directions
 //!              × (1 − contradiction_pressure)         against how much dissent
 //!              × currency                             and is it still claimed to hold
 //! ```
@@ -34,6 +34,14 @@ const LONE_SESSION: f64 = 0.75;
 /// claim whose confidence collapsed to nothing could not be told apart from one nobody ever
 /// had reason to believe.
 const SUPERSEDED: f64 = 0.3;
+
+/// How much repetition within one source is worth.
+///
+/// A quarter of the strongest witness, spread across every repeat. Ten copies of a claim from
+/// one document are worth 1.25 witnesses, not ten. Not zero, because a source that says the
+/// same thing consistently is marginally better evidence than one that says it once — and not
+/// more, because the alternative is a store where anything can be made true by being repeated.
+const WITHIN_DOMAIN: f64 = 0.25;
 
 /// A claim pulling against this one, and how sure *it* is.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -68,16 +76,41 @@ pub fn of(
         return 0.0;
     }
 
-    let evidence: f64 = witnesses.iter().map(|w| w.value(now)).sum();
+    // Evidence is summed per source, not per witness.
+    //
+    // Ten sessions quoting one document are ten runs and one source. The document is what they
+    // all agree with, so counting them as ten observations would let repetition manufacture
+    // corroboration — which is the whole of the poisoning attack, and it defeats a defence that
+    // only discounts *diversity*, because the evidence sum would still grow ten-fold.
+    //
+    // Within one source the strongest witness carries it, and everything after adds at most
+    // WITHIN_DOMAIN. Saying the same thing twice from one place is slightly more than saying it
+    // once — it is consistent — and nowhere near twice.
+    let evidence: f64 = by_domain(witnesses, now)
+        .into_values()
+        .map(|values| {
+            let strongest = values.iter().copied().fold(0.0_f64, f64::max);
+            let n = values.len() as f64;
+            strongest * (1.0 + WITHIN_DOMAIN * (1.0 - 1.0 / n))
+        })
+        .sum();
     let saturated = evidence / (evidence + HALF);
 
+    // Independence is the narrower of two counts: how many runs saw it, and how many sources it
+    // came from.
+    //
+    // A witness with no recorded domain counts as its own session, so a person meeting the same
+    // problem in two runs is still worth two. Only an explicit shared origin collapses.
     let sessions: BTreeSet<&str> = witnesses.iter().map(|w| w.session.as_str()).collect();
-    let diversity = if sessions.len() <= 1 {
+    let domains: BTreeSet<String> = witnesses.iter().map(Witness::domain_of).collect();
+    let independent = sessions.len().min(domains.len());
+
+    let diversity = if independent <= 1 {
         LONE_SESSION
     } else {
         // Approaches 1.0 quickly: two independent runs is most of the signal, and the fifth
         // adds very little that the second did not.
-        1.0 - (1.0 - LONE_SESSION) * (-((sessions.len() - 1) as f64)).exp()
+        1.0 - (1.0 - LONE_SESSION) * (-((independent - 1) as f64)).exp()
     };
 
     let dissent: f64 = contradictions.iter().map(|c| c.confidence).sum();
@@ -88,6 +121,19 @@ pub fn of(
     (saturated * diversity * (1.0 - pressure) * currency).clamp(0.0, 1.0)
 }
 
+/// Witness values, grouped by where they came from.
+fn by_domain(
+    witnesses: &[Witness],
+    now: Timestamp,
+) -> std::collections::BTreeMap<String, Vec<f64>> {
+    let mut out: std::collections::BTreeMap<String, Vec<f64>> = std::collections::BTreeMap::new();
+    for witness in witnesses {
+        out.entry(witness.domain_of())
+            .or_default()
+            .push(witness.value(now));
+    }
+    out
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +153,96 @@ mod tests {
 
     fn plain(witnesses: &[Witness]) -> f64 {
         of(witnesses, &[], false, false, NOW)
+    }
+
+    #[test]
+    fn one_document_quoted_in_ten_runs_is_not_ten_witnesses() {
+        // The poisoning attack, as arithmetic. Ten genuinely distinct sessions each read the
+        // same page and each file a witness. Session diversity alone sees ten independent
+        // confirmations; domain diversity sees one source saying one thing ten times.
+        let page = crate::Domain::external("https://example.test/guide");
+        let poisoned: Vec<Witness> = (0..10)
+            .map(|n| {
+                w(WitnessKind::Distillation, &format!("s{n}"))
+                    .through(crate::Channel::ExternalContent, Some(page.clone()))
+            })
+            .collect();
+
+        let genuine: Vec<Witness> = (0..10)
+            .map(|n| w(WitnessKind::Distillation, &format!("s{n}")))
+            .collect();
+
+        let manufactured = plain(&poisoned);
+        let earned = plain(&genuine);
+        assert!(
+            manufactured < earned,
+            "repetition bought the same confidence as corroboration: {manufactured} vs {earned}"
+        );
+    }
+
+    #[test]
+    fn a_document_read_twice_is_still_one_source() {
+        // Two runs, one origin: the discount is the lone-source one, not the two-session one.
+        let page = crate::Domain::external("https://example.test/guide");
+        let held: Vec<Witness> = ["s1", "s2"]
+            .iter()
+            .map(|s| {
+                w(WitnessKind::Distillation, s)
+                    .through(crate::Channel::ExternalContent, Some(page.clone()))
+            })
+            .collect();
+        let alone = vec![w(WitnessKind::Distillation, "s1")];
+
+        assert!(
+            (plain(&held) - plain(&alone)).abs() < 0.05,
+            "two readings of one page scored like two sources"
+        );
+    }
+
+    #[test]
+    fn two_different_sources_do_corroborate() {
+        // The defence must not make everything worthless. Two runs reading two different pages
+        // are two sources, and that is what corroboration is.
+        let one = w(WitnessKind::Distillation, "s1").through(
+            crate::Channel::ExternalContent,
+            Some(crate::Domain::external("https://a.test/x")),
+        );
+        let two = w(WitnessKind::Distillation, "s2").through(
+            crate::Channel::ExternalContent,
+            Some(crate::Domain::external("https://b.test/y")),
+        );
+        let together = plain(&[one.clone(), two]);
+        let alone = plain(&[one]);
+        assert!(together > alone, "{together} vs {alone}");
+    }
+
+    #[test]
+    fn a_person_repeating_themselves_across_runs_still_counts_twice() {
+        // Domains must not collapse the honest case. Meeting the same problem in two sessions
+        // is two occasions, and a defence that discounted it would punish ordinary use.
+        let held = vec![
+            w(WitnessKind::Imperative, "s1"),
+            w(WitnessKind::Imperative, "s2"),
+        ];
+        let once = vec![w(WitnessKind::Imperative, "s1")];
+        assert!(plain(&held) > plain(&once));
+    }
+
+    #[test]
+    fn summaries_of_one_document_are_not_independent_of_it() {
+        // Ten model summaries of one page are still one page. Every one carries the model's
+        // domain, so they collapse together however many sessions produced them.
+        let held: Vec<Witness> = (0..10)
+            .map(|n| {
+                w(WitnessKind::Distillation, &format!("s{n}"))
+                    .through(crate::Channel::ModelInference, Some(crate::Domain::model()))
+            })
+            .collect();
+        let alone = vec![w(WitnessKind::Distillation, "s1")];
+        assert!(
+            (plain(&held) - plain(&alone)).abs() < 0.15,
+            "ten summaries scored as ten opinions"
+        );
     }
 
     #[test]

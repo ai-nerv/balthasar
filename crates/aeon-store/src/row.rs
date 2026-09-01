@@ -101,6 +101,15 @@ pub fn witness(row: &Row<'_>) -> Result<Witness, StoreError> {
         cursor: row.get::<_, Option<i64>>("cursor")?.map(|c| c as u64),
         weight: row.get("weight")?,
         note: row.get("note")?,
+        // An older row has neither. The defaults are what it always meant: a peer assertion
+        // whose source is its own session.
+        channel: row
+            .get::<_, Option<String>>("channel")?
+            .and_then(|t| t.parse().ok())
+            .unwrap_or_default(),
+        domain: row
+            .get::<_, Option<String>>("domain")?
+            .map(aeon_model::Domain::new),
     })
 }
 

@@ -9,7 +9,7 @@
 use rusqlite::Connection;
 
 /// Every migration, in order. The index is the version it produces.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
 
 /// What schema a store this build writes is at.
 ///
@@ -386,6 +386,25 @@ CREATE TABLE relation_view (
 CREATE INDEX relation_out ON relation_view(from_memory, kind) WHERE stale_at IS NULL;
 CREATE INDEX relation_in  ON relation_view(to_memory, kind)   WHERE stale_at IS NULL;
 CREATE INDEX relation_gen ON relation_view(source, derivation_version);
+"#;
+
+/// Where a witness's content came from, and how it arrived.
+///
+/// The process boundary and the information source are different questions, and conflating them
+/// is how a persistent store turns untrusted text into durable instruction: a trusted local peer
+/// can submit a web page it just fetched.
+///
+/// `domain` is the load-bearing one. It is what makes ten sessions quoting one document count
+/// as one source rather than ten confirmations — the attack that witness diversity by session
+/// alone cannot see, because all ten arrivals really are distinct runs. `NULL` means the session
+/// is the domain, which is what every witness written before this meant and still means.
+const V5: &str = r#"
+ALTER TABLE witness ADD COLUMN channel TEXT NOT NULL DEFAULT 'peer-assertion';
+ALTER TABLE witness ADD COLUMN domain TEXT;
+
+-- "which memories came from this source" has to be answerable in one read, because it is the
+-- question a purge of a poisoned origin starts from.
+CREATE INDEX witness_domain ON witness(domain) WHERE domain IS NOT NULL;
 "#;
 #[cfg(test)]
 mod tests {

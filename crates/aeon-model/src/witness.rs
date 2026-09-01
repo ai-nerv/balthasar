@@ -99,6 +99,20 @@ pub struct Witness {
     /// Distilled output that came out of the rules must not be indistinguishable from output
     /// that came out of a model, and a write from a peer must name the peer.
     pub note: Option<String>,
+    /// How the content reached aeon.
+    ///
+    /// The process boundary and the information source are different questions: a trusted local
+    /// peer can submit a web page it just fetched.
+    #[serde(default)]
+    pub channel: crate::Channel,
+    /// Where it ultimately came from, when that is narrower than the session.
+    ///
+    /// `None` means the session is the domain, which is the ordinary case and what every
+    /// witness written before trust domains existed means. Set explicitly when several
+    /// witnesses share an origin — the same document read in ten runs is ten sessions and one
+    /// source, and only this can say so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<crate::Domain>,
 }
 
 impl Witness {
@@ -120,6 +134,32 @@ impl Witness {
             cursor: None,
             weight: kind.weight(),
             note: None,
+            channel: crate::Channel::default(),
+            domain: None,
+        }
+    }
+
+    /// Say how this reached aeon, and where it came from.
+    ///
+    /// The domain is what makes repetition stop counting as corroboration, so a caller that
+    /// knows several witnesses share an origin has to say so here or the store cannot tell.
+    #[must_use]
+    pub fn through(mut self, channel: crate::Channel, domain: Option<crate::Domain>) -> Self {
+        self.channel = channel;
+        self.domain = domain;
+        self
+    }
+
+    /// The domain this counts towards for diversity.
+    ///
+    /// The session when nothing narrower was recorded. A person meeting the same problem in two
+    /// runs is two occasions and genuinely worth two; a document quoted in two runs is one
+    /// source, and only an explicit domain can tell them apart.
+    #[must_use]
+    pub fn domain_of(&self) -> String {
+        match &self.domain {
+            Some(held) => held.as_str().to_owned(),
+            None => format!("session:{}", self.session),
         }
     }
 

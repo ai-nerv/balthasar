@@ -165,7 +165,17 @@ impl fmt::Display for Attribution {
 /// Distinct from confidence, and the thing a reader needs in order to know what weight to give
 /// it. The same memory may be asserted in one context and shown as evidence in another.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Presentation {
@@ -176,9 +186,39 @@ pub enum Presentation {
     Advisory,
     /// Historical or uncertain material, offered for reasoning rather than belief.
     Evidence,
+    /// Kept and findable, never placed in an ordinary context.
+    ///
+    /// Not deleted — excluded. Something that looks like an attack is worth keeping precisely
+    /// because it is worth analysing, and a defence whose only move is to forget leaves nothing
+    /// to learn from. Reaching it takes an explicit request.
+    Quarantined,
 }
 
 impl Presentation {
+    /// Whether a memory in this mode may be placed in an ordinary context.
+    ///
+    /// The one gate that matters for quarantine: everything else about the mode is advice to
+    /// the reader, and this is the part enforced.
+    #[must_use]
+    pub fn may_inject(self) -> bool {
+        !matches!(self, Self::Quarantined)
+    }
+
+    /// Whether a memory in this mode may be stated as true.
+    #[must_use]
+    pub fn may_assert(self) -> bool {
+        matches!(self, Self::Asserted)
+    }
+
+    /// The weaker of two modes.
+    ///
+    /// Combining is always downward. A memory that is advisory for one reason and quarantined
+    /// for another is quarantined, and no amount of other evidence promotes it back.
+    #[must_use]
+    pub fn and(self, other: Self) -> Self {
+        self.max(other)
+    }
+
     /// The word this is spelled with.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -186,6 +226,7 @@ impl Presentation {
             Self::Asserted => "asserted",
             Self::Advisory => "advisory",
             Self::Evidence => "evidence",
+            Self::Quarantined => "quarantined",
         }
     }
 }
@@ -198,6 +239,7 @@ impl FromStr for Presentation {
             "asserted" => Ok(Self::Asserted),
             "advisory" => Ok(Self::Advisory),
             "evidence" => Ok(Self::Evidence),
+            "quarantined" => Ok(Self::Quarantined),
             _ => Err(()),
         }
     }

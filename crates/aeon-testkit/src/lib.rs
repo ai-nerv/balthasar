@@ -5,11 +5,13 @@
 //! is ours to invent, and it is the only number here that would make somebody change what they
 //! run.
 
+mod attack;
 mod baseline;
 mod run;
 mod scenario;
 mod suite;
 
+pub use attack::{ATTACKS, Attack, Report as AttackReport, Verdict as AttackVerdict, run_attacks};
 pub use baseline::Baseline;
 pub use run::{Measured, Ran, Score, measure, run};
 pub use scenario::{Lesson, Scenario, Session};

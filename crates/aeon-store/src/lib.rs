@@ -42,7 +42,7 @@ pub use paths::{
     HOME, Tool, data_dir, home_of, make_home, project_home, scope_of, scope_path, session_dir,
     session_dir_in, session_path, session_transcript_path, tools_in,
 };
-pub use purge::purge;
+pub use purge::{Closure, closure_of, purge};
 pub use read::{Cluster, Recall};
 pub use relate::Reach;
 pub use schema::VERSION as SCHEMA_VERSION;
