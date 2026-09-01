@@ -26,6 +26,7 @@ fn turn(cursor: u64, text: &str) -> Turn {
         kind: "prose".to_owned(),
         text: text.to_owned(),
         tool: None,
+        entry: None,
         raw: None,
         revisions: 0,
     }
@@ -339,4 +340,136 @@ fn a_bounded_read_of_a_huge_run_is_quick() {
         took.as_millis() < 250,
         "took {took:?} on a ten-thousand-turn run"
     );
+}
+
+/// One assistant message written as four blocks: prose, then three tool calls.
+fn a_message_of_blocks(held: &mut Transcript, from: u64, entry: &str) {
+    for (n, (role, kind, text)) in [
+        ("assistant", "prose", "I will check three things"),
+        ("assistant", "tool_call", "make test"),
+        ("assistant", "tool_call", "make lint"),
+        ("assistant", "tool_call", "make build"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        held.write(
+            &run(),
+            &Turn {
+                cursor: from + n as u64,
+                at: NOW,
+                role: (*role).to_owned(),
+                kind: (*kind).to_owned(),
+                text: format!("{text} {}", "padding ".repeat(12)),
+                tool: None,
+                entry: Some(entry.to_owned()),
+                raw: (n == 0).then(|| format!("{{\"entry\":\"{entry}\"}}")),
+                revisions: 0,
+            },
+        )
+        .expect("write");
+    }
+}
+
+#[test]
+fn one_message_is_several_blocks_and_each_is_addressable() {
+    // The point of the split: a span can name one tool call inside a message rather than only
+    // the whole message.
+    let mut held = Transcript::ephemeral().expect("transcript");
+    held.open_run(&run(), "/w/thing", "/w/thing", "suite", NOW)
+        .expect("open");
+    a_message_of_blocks(&mut held, 0, "e1");
+
+    let read = held
+        .read(&run(), &Want::Span { from: 2, to: 2 }, &Budget::default())
+        .expect("read");
+    assert_eq!(read.turns.len(), 1);
+    assert_eq!(read.turns[0].kind, "tool_call");
+    assert!(read.turns[0].text.starts_with("make lint"));
+}
+
+#[test]
+fn blocks_of_one_message_share_an_entry() {
+    let mut held = Transcript::ephemeral().expect("transcript");
+    held.open_run(&run(), "/w/thing", "/w/thing", "suite", NOW)
+        .expect("open");
+    a_message_of_blocks(&mut held, 0, "e1");
+
+    let all = held.replay(&run()).expect("replay");
+    assert_eq!(all.len(), 4);
+    assert!(all.iter().all(|t| t.entry.as_deref() == Some("e1")));
+}
+
+#[test]
+fn a_tail_never_starts_in_the_middle_of_a_message() {
+    // An assistant turn without the tool call it made, or a tool result with nothing that asked
+    // for it, is worse than not showing the message at all.
+    let mut held = Transcript::ephemeral().expect("transcript");
+    held.open_run(&run(), "/w/thing", "/w/thing", "suite", NOW)
+        .expect("open");
+    a_message_of_blocks(&mut held, 0, "e1");
+    a_message_of_blocks(&mut held, 4, "e2");
+
+    // A budget that lands part-way into the first message.
+    let read = held
+        .read(
+            &run(),
+            &Want::Tail,
+            &Budget {
+                tokens: 30,
+                turns: 6,
+            },
+        )
+        .expect("read");
+
+    let entries: std::collections::BTreeSet<Option<String>> =
+        read.turns.iter().map(|t| t.entry.clone()).collect();
+    for entry in entries.iter().flatten() {
+        let shown = read
+            .turns
+            .iter()
+            .filter(|t| t.entry.as_ref() == Some(entry))
+            .count();
+        let total = held
+            .replay(&run())
+            .expect("replay")
+            .iter()
+            .filter(|t| t.entry.as_ref() == Some(entry))
+            .count();
+        assert_eq!(shown, total, "message {entry} came back in pieces");
+    }
+}
+
+#[test]
+fn a_turn_that_is_its_own_message_needs_no_entry() {
+    // A plain user turn is one block, and should not have to invent a grouping to be read.
+    let held = a_long_run(10);
+    let read = held
+        .read(&run(), &Want::Tail, &Budget::default())
+        .expect("read");
+    assert!(read.turns.iter().all(|t| t.entry.is_none()));
+    assert_eq!(read.turns.len(), 10);
+}
+
+#[test]
+fn only_the_first_block_carries_the_record_to_restore_from() {
+    // Restoring reassembles messages, not blocks: the harness's own record belongs to the
+    // message, so it is written once and `replay --raw` emits it once. The other blocks exist
+    // for reading, not for restoring.
+    let mut held = Transcript::ephemeral().expect("transcript");
+    held.open_run(&run(), "/w/thing", "/w/thing", "suite", NOW)
+        .expect("open");
+    a_message_of_blocks(&mut held, 0, "e1");
+
+    let raws: Vec<&String> = held
+        .replay(&run())
+        .expect("replay")
+        .iter()
+        .filter_map(|t| t.raw.as_ref())
+        .cloned()
+        .collect::<Vec<_>>()
+        .leak()
+        .iter()
+        .collect();
+    assert_eq!(raws.len(), 1, "one record per message, not per block");
 }

@@ -114,6 +114,30 @@ impl Read {
     }
 }
 
+/// Drop a leading part-message.
+///
+/// One assistant message is several blocks — prose, a thought, three tool calls — written as
+/// separate turns so a span can address one of them. A read that cut into the middle would hand
+/// a model an assistant turn without the tool call it made, or a tool result with nothing that
+/// asked for it, which is worse than not showing the message at all.
+///
+/// Only the front is trimmed. A read growing backwards from the end stops where the budget runs
+/// out, and that edge is the one that lands mid-message; the other edge is the end of the run.
+fn on_a_boundary(turns: &mut Vec<Turn>, all: &[Turn]) {
+    let Some(first) = turns.first() else { return };
+    let Some(entry) = first.entry.clone() else {
+        return;
+    };
+    // Whether anything earlier belongs to the same message. If not, this already starts on a
+    // boundary and nothing needs dropping.
+    let started_earlier = all
+        .iter()
+        .any(|t| t.cursor < first.cursor && t.entry.as_ref() == Some(&entry));
+    if started_earlier {
+        turns.retain(|t| t.entry.as_ref() != Some(&entry));
+    }
+}
+
 /// What a turn costs.
 #[must_use]
 pub fn tokens_of(turn: &Turn) -> usize {
@@ -187,6 +211,7 @@ impl Transcript {
             turns.push(turn.clone());
         }
         turns.reverse();
+        on_a_boundary(&mut turns, &all);
         let omitted = all.len() - turns.len();
         // Reading backwards, "more" is what came *before* — so continuing means asking for the
         // span that ends just before the earliest turn returned.
@@ -301,7 +326,7 @@ impl Transcript {
     /// Every turn in a cursor range, in order.
     fn range(&self, session: &SessionId, from: u64, to: u64) -> Result<Vec<Turn>, StoreError> {
         let mut statement = self.db().prepare(
-            "SELECT cursor, at, role, kind, text, tool, raw, revisions FROM turn \
+            "SELECT cursor, at, role, kind, text, tool, raw, entry, revisions FROM turn \
              WHERE session = ?1 AND cursor >= ?2 AND cursor <= ?3 ORDER BY cursor",
         )?;
         // Clamped, because SQLite has no unsigned integer and `u64::MAX as i64` is -1 — which
@@ -319,7 +344,8 @@ impl Transcript {
                     text: r.get(4)?,
                     tool: r.get(5)?,
                     raw: r.get(6)?,
-                    revisions: r.get::<_, i64>(7)? as u32,
+                    entry: r.get(7)?,
+                    revisions: r.get::<_, i64>(8)? as u32,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

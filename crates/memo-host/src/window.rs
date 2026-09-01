@@ -233,6 +233,12 @@ fn turn_of(
         .unwrap_or_default();
     let _ = session;
     memo_store::Turn {
+        // Which message this block belongs to, when the harness splits one into several. Absent
+        // for a turn that is its own message, which is what a plain user turn is.
+        entry: turn
+            .get("entry")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
         cursor: turn
             .get("cursor")
             .and_then(serde_json::Value::as_u64)

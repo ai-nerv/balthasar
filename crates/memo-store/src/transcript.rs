@@ -38,6 +38,16 @@ pub struct Turn {
     /// Which tool, when it is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// Which message this block belongs to, as the harness names it.
+    ///
+    /// One assistant message carries several blocks — some prose, a thought, three tool calls —
+    /// and each is written as its own turn so a span can address one of them. They share this,
+    /// which is what stops a read from handing back half a message: an assistant turn shown
+    /// without the tool call it made is worse than not showing it.
+    ///
+    /// `None` means the turn is its own message, which is what a plain user turn is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
     /// The harness's own record, verbatim.
     ///
     /// Opaque. memo stores it, hands it back, and never looks inside — which is what lets a
@@ -170,10 +180,11 @@ impl Transcript {
     /// as the turn being safe.
     pub fn write(&mut self, session: &SessionId, turn: &Turn) -> Result<(), StoreError> {
         self.connection.execute(
-            "INSERT INTO turn (session, cursor, at, role, kind, text, tool, raw, revisions) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0) \
+            "INSERT INTO turn \
+             (session, cursor, at, role, kind, text, tool, raw, entry, revisions) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0) \
              ON CONFLICT(session, cursor) DO UPDATE SET \
-               at = ?3, role = ?4, kind = ?5, text = ?6, tool = ?7, raw = ?8, \
+               at = ?3, role = ?4, kind = ?5, text = ?6, tool = ?7, raw = ?8, entry = ?9, \
                revisions = revisions + 1",
             params![
                 session.as_str(),
@@ -184,6 +195,7 @@ impl Transcript {
                 turn.text,
                 turn.tool,
                 turn.raw,
+                turn.entry,
             ],
         )?;
         Ok(())
@@ -195,7 +207,7 @@ impl Transcript {
     /// first written — a tool call comes back with its result.
     pub fn replay(&self, session: &SessionId) -> Result<Vec<Turn>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT cursor, at, role, kind, text, tool, raw, revisions \
+            "SELECT cursor, at, role, kind, text, tool, raw, entry, revisions \
              FROM turn WHERE session = ?1 ORDER BY cursor",
         )?;
         let found = statement
@@ -211,7 +223,7 @@ impl Transcript {
         let found = self
             .connection
             .query_row(
-                "SELECT cursor, at, role, kind, text, tool, raw, revisions \
+                "SELECT cursor, at, role, kind, text, tool, raw, entry, revisions \
                  FROM turn WHERE session = ?1 AND cursor = ?2",
                 params![session.as_str(), cursor as i64],
                 |r| Ok(read(r)),
@@ -278,7 +290,8 @@ fn read(row: &rusqlite::Row<'_>) -> Result<Turn, StoreError> {
         text: row.get(4)?,
         tool: row.get(5)?,
         raw: row.get(6)?,
-        revisions: row.get::<_, i64>(7)?.max(0) as u32,
+        entry: row.get(7)?,
+        revisions: row.get::<_, i64>(8)?.max(0) as u32,
     })
 }
 
@@ -306,10 +319,14 @@ CREATE TABLE IF NOT EXISTS turn (
   tool       TEXT,
   raw        TEXT,
   revisions  INTEGER NOT NULL DEFAULT 0,
+  -- Which message a block belongs to. Blocks of one assistant message share it, so a bounded
+  -- read can stop on a message boundary rather than in the middle of one.
+  entry      TEXT,
   PRIMARY KEY (session, cursor)
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS turn_of ON turn(session, cursor);
+CREATE INDEX IF NOT EXISTS turn_entry ON turn(session, entry) WHERE entry IS NOT NULL;
 "#;
 
 #[cfg(test)]
@@ -324,6 +341,7 @@ mod tests {
             kind: "prose".into(),
             text: text.to_owned(),
             tool: None,
+            entry: None,
             raw: Some(format!(r#"{{"type":"user","text":{text:?}}}"#)),
             revisions: 0,
         }
