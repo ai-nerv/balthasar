@@ -30,6 +30,12 @@ pub struct Args {
     #[arg(long)]
     remote: bool,
 
+    /// Use the control policy: full-text search, no vectors, no traversal.
+    ///
+    /// The permanent floor, and what every retrieval experiment is measured against.
+    #[arg(long)]
+    lexical_only: bool,
+
     /// Show the score breakdown.
     #[arg(long)]
     explain: bool,
@@ -87,16 +93,30 @@ pub fn run(
             found.push(hit);
         }
     }
-    // What the relationship views reach that search alone did not. The query's shape picks
-    // which families are walked; a plain lexical query walks none and pays nothing.
+    // Which retrieval behaviour this query gets. The policy decides where candidates come from
+    // and how far to walk; it decides nothing about what may be asserted or injected, because
+    // those are constraints rather than choices and sit outside every policy.
     let shape = aeon_recall::shape_of(&ask.query);
+    let policy = if args.lexical_only {
+        aeon_recall::Policy::lexical_only()
+    } else {
+        let held = aeon_recall::Policy::for_shape(shape);
+        // A missing embedder degrades the policy rather than swapping it, so a store with no
+        // vectors behaves like the same strategy doing less — not like a different one.
+        if ask.embedding.is_some() {
+            held
+        } else {
+            held.without_vectors()
+        }
+    };
+
     let mut paths: std::collections::HashMap<String, aeon_model::Relation> =
         std::collections::HashMap::new();
-    if !shape.families().is_empty() {
+    if !policy.families.is_empty() {
         let seeds: Vec<aeon_model::MemoryId> =
             found.iter().take(5).map(|h| h.memory.id.clone()).collect();
         for (store, _, named) in stores(store_path, scope, tool)? {
-            for (hit, edge) in reached(&store, &seeds, shape, &ask, at)? {
+            for (hit, edge) in reached(&store, &seeds, &policy, &ask, at)? {
                 if found.iter().any(|h| h.memory.id == hit.memory.id) {
                     continue;
                 }
@@ -161,6 +181,32 @@ pub fn run(
     // an explanation id a caller has to reconstruct from a log file is one nobody uses.
     if let Some(id) = &traced {
         crate::say!("{}", render::dim(&format!("recall {id}")));
+    }
+
+    // Every policy decision appears in `--explain`. A retrieval that behaved differently and
+    // could not say why is one nobody can debug and nobody can compare against another.
+    if args.explain {
+        crate::say!(
+            "{}",
+            render::dim(&format!(
+                "policy {} · {} · {}",
+                policy.name,
+                if policy.families.is_empty() {
+                    "no traversal".to_owned()
+                } else {
+                    format!(
+                        "walks {}",
+                        policy
+                            .families
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                },
+                policy.because
+            ))
+        );
     }
 
     if found.is_empty() {
@@ -300,15 +346,18 @@ fn capture(store: &mut Store, said: &Capturing<'_>) -> anyhow::Result<String> {
 fn reached(
     store: &Store,
     seeds: &[aeon_model::MemoryId],
-    shape: aeon_recall::Shape,
+    policy: &aeon_recall::Policy,
     ask: &Recall,
     at: aeon_model::Timestamp,
 ) -> anyhow::Result<Vec<(Scored, aeon_model::Relation)>> {
-    let families = shape.families();
-    if families.is_empty() || seeds.is_empty() {
+    if policy.families.is_empty() || seeds.is_empty() {
         return Ok(Vec::new());
     }
-    let found = store.traverse(seeds, families, &aeon_store::Reach::default())?;
+    let reach = aeon_store::Reach {
+        hops: policy.hops,
+        ..aeon_store::Reach::default()
+    };
+    let found = store.traverse(seeds, &policy.families, &reach)?;
 
     let mut out = Vec::new();
     for (id, edge) in found {
@@ -317,7 +366,7 @@ fn reached(
         };
         // The same gates as any other candidate. A traversal must not be a way past the live
         // floor, the archive filter, or the privacy boundary.
-        if memory.archived_at.is_some() && !ask.include_archived {
+        if memory.archived_at.is_some() && !(ask.include_archived || policy.archive) {
             continue;
         }
         if memory.strength.at(at) < ask.floor {
