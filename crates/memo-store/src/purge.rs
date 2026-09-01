@@ -70,6 +70,47 @@ pub fn closure_of(store: &Store, id: &MemoryId) -> Result<Closure, StoreError> {
     })
 }
 
+impl Store {
+    /// Every memory a run owns.
+    ///
+    /// Owning is not having seen: a memory another run wrote and this one merely witnessed
+    /// belongs to the other, and forgetting this run must leave it standing.
+    pub fn owned_by(&self, session: &memo_model::SessionId) -> Result<Vec<MemoryId>, StoreError> {
+        let mut statement = self
+            .db()
+            .prepare("SELECT id FROM memory WHERE session = ?1")?;
+        let found = statement
+            .query_map(params![session.as_str()], |r| {
+                Ok(MemoryId::new(r.get::<_, String>(0)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(found)
+    }
+}
+
+/// Remove one run's own scratch, permanently.
+///
+/// The third place a run lives. Its memories are in the project store, its turns are in the
+/// scrollback, and everything it thought but never promoted is in a directory of its own —
+/// which is where a pasted key would still be sitting after the other two were cleared.
+pub fn purge_scratch(
+    pad: &mut crate::Scratchpad,
+    session: &memo_model::SessionId,
+) -> Result<bool, StoreError> {
+    let path = pad.path_of(session);
+    let Some(dir) = path.parent() else {
+        return Ok(false);
+    };
+    if !dir.is_dir() {
+        return Ok(false);
+    }
+    // Before removing the file, not after: an open connection to a file that has stopped
+    // existing is a store that answers questions out of a deleted inode.
+    pad.close(session);
+    std::fs::remove_dir_all(dir).map_err(|why| StoreError::Foreign(why.to_string()))?;
+    Ok(true)
+}
+
 /// Remove one run's turns from the scrollback, permanently.
 ///
 /// The other half of forgetting a run. The scrollback is a separate file, so `purge_session`
@@ -157,16 +198,7 @@ pub fn purge_session(
     store: &mut Store,
     session: &memo_model::SessionId,
 ) -> Result<usize, StoreError> {
-    let owned: Vec<MemoryId> = {
-        let mut statement = store
-            .db()
-            .prepare("SELECT id FROM memory WHERE session = ?1")?;
-        statement
-            .query_map(params![session.as_str()], |r| {
-                Ok(MemoryId::new(r.get::<_, String>(0)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?
-    };
+    let owned = store.owned_by(session)?;
 
     let mut gone = 0;
     for id in &owned {

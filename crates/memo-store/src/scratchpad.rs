@@ -71,6 +71,14 @@ impl Scratchpad {
         self.of(session).map(Some)
     }
 
+    /// Let go of a run's store, so its file can be moved or removed.
+    ///
+    /// Only [`purge`](crate::purge) has reason to call this: an open connection to a file that
+    /// is about to stop existing would hand the next caller a store backed by nothing.
+    pub(crate) fn close(&mut self, session: &SessionId) {
+        self.open.remove(session);
+    }
+
     /// Every run that has left scratch behind, oldest first.
     ///
     /// Directory names are session names that survived being one, so this is the listing and

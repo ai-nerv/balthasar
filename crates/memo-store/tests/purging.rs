@@ -327,3 +327,132 @@ fn forgetting_a_source_does_not_take_honest_memories_with_it() {
     assert_eq!(left.len(), 1, "with the tainted evidence removed");
     assert_eq!(left[0].session, SessionId::new("01ME"));
 }
+
+#[test]
+fn forgetting_a_run_closes_all_three_of_its_hiding_places() {
+    // A run lives in three files: what it promoted into the project, what it said, and the
+    // scratch it never promoted. Clearing one and calling it forgotten would answer "delete the
+    // key I pasted" with the key still on disk — so this checks all three, and checks that a
+    // neighbouring run keeps everything of its own.
+    let home = std::env::temp_dir().join(format!("memo-forget-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let doomed = SessionId::new("01DOOMED");
+    let bystander = SessionId::new("01SAFE");
+
+    let mut store = Store::ephemeral().expect("a store");
+    let mut held = memo_store::Transcript::ephemeral().expect("a transcript");
+    let mut pad = memo_store::Scratchpad::at(&home);
+
+    for (session, secret) in [(&doomed, SECRET), (&bystander, "nothing to hide")] {
+        store
+            .open_session(session, &scope(), "/w/thing", "test", NOW)
+            .expect("open");
+        held.open_run(session, "/w/thing", "/w/thing", "test", NOW)
+            .expect("open run");
+        held.write(
+            session,
+            &memo_store::Turn {
+                cursor: 1,
+                at: NOW,
+                role: "user".into(),
+                kind: "prose".into(),
+                text: secret.to_owned(),
+                ..memo_store::Turn::default()
+            },
+        )
+        .expect("write");
+
+        let mut scratch = Memory::new(
+            mint(NOW),
+            Tier::Scratch,
+            scope(),
+            Body::note(secret, NoteKind::Observation),
+            NOW,
+        );
+        scratch.session = Some(session.clone());
+        pad.of(session)
+            .expect("scratch")
+            .keep_scratch(scratch)
+            .expect("keep");
+    }
+
+    memo_store::purge_session(&mut store, &doomed).expect("session");
+    memo_store::purge_run(&held, &doomed).expect("run");
+    assert!(
+        memo_store::purge_scratch(&mut pad, &doomed).expect("scratch"),
+        "the run had scratch to remove"
+    );
+
+    assert!(
+        held.replay(&doomed).expect("replay").is_empty(),
+        "what it said is gone"
+    );
+    assert!(
+        !pad.path_of(&doomed).exists(),
+        "and what it thought but never promoted is gone with it"
+    );
+
+    // The neighbour is untouched, which is the half a purge gets wrong by being too eager.
+    assert_eq!(held.replay(&bystander).expect("replay").len(), 1);
+    assert!(pad.path_of(&bystander).is_file());
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn a_purged_secret_is_not_still_in_the_file() {
+    // Every other test here asks whether a path back through the store is closed. This one asks
+    // the file. SQLite does not zero a freed page by default: the row leaves the table, every
+    // query says the secret is gone, and `strings store.db` prints it. `secure_delete` is what
+    // makes the yes in "delete the key I pasted" true.
+    let path = std::env::temp_dir().join(format!("memo-secure-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+
+    let id = {
+        let mut store = Store::open(&path).expect("store");
+        let id = store
+            .remember(
+                Memory::new(
+                    mint(NOW),
+                    Tier::Fact,
+                    scope(),
+                    Body::note(SECRET, NoteKind::Observation),
+                    NOW,
+                ),
+                Witness::new(
+                    WitnessId::new("w"),
+                    WitnessKind::Imperative,
+                    SessionId::new("01ME"),
+                    scope(),
+                    NOW,
+                ),
+                NOW,
+            )
+            .expect("remember")
+            .id()
+            .clone();
+        assert!(on_disk(&path), "it is in the file to begin with");
+        id
+    };
+
+    let mut store = Store::open(&path).expect("reopen");
+    assert_eq!(memo_store::purge(&mut store, &id).expect("purge"), 1);
+    drop(store);
+
+    assert!(!on_disk(&path), "and the words went with the row");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Whether the secret's bytes are anywhere in a file, table or freed page alike.
+fn on_disk(path: &std::path::Path) -> bool {
+    let mut found = false;
+    for suffix in ["", "-wal", "-shm"] {
+        let at = path.with_file_name(format!(
+            "{}{suffix}",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        if let Ok(bytes) = std::fs::read(&at) {
+            found |= bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes());
+        }
+    }
+    found
+}

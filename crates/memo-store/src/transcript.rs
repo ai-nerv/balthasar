@@ -214,6 +214,9 @@ impl Transcript {
         let connection = Connection::open(path)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
+        // The scrollback holds whatever was pasted into it verbatim, which makes it the most
+        // likely place for a secret to be sitting. A freed page SQLite has not zeroed keeps it.
+        connection.pragma_update(None, "secure_delete", true)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch(SCHEMA)?;
         Ok(Self {

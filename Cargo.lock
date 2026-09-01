@@ -308,6 +308,8 @@ name = "memo"
 version = "0.1.0"
 dependencies = [
  "memo-cli",
+ "memo-model",
+ "memo-store",
 ]
 
 [[package]]

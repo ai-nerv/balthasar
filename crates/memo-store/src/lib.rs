@@ -43,7 +43,9 @@ pub use paths::{
     HOME, Tool, data_dir, home_of, make_home, project_home, scope_of, scope_path, session_dir,
     session_dir_in, session_path, session_transcript_path, tools_in,
 };
-pub use purge::{Closure, closure_of, purge, purge_domain, purge_run, purge_session};
+pub use purge::{
+    Closure, closure_of, purge, purge_domain, purge_run, purge_scratch, purge_session,
+};
 pub use read::{Cluster, Recall};
 pub use relate::Reach;
 pub use schema::VERSION as SCHEMA_VERSION;
@@ -98,6 +100,11 @@ impl Store {
     /// WAL, because consolidation reads while a session writes and the default journal mode
     /// makes those wait for each other. `foreign_keys` on, so a witness cannot outlive the
     /// memory it is evidence for.
+    ///
+    /// `secure_delete` on, because SQLite does not zero a freed page by default: the row leaves
+    /// the table and the words stay in the file, where `strings` finds them. For a store that
+    /// answers "delete the key I pasted" with yes, a purge that only unlinks a row is a wrong
+    /// answer — and one nobody notices, because every way back through the store is closed.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(parent.to_owned(), e))?;
@@ -105,6 +112,7 @@ impl Store {
         let connection = Connection::open(path)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", true)?;
+        connection.pragma_update(None, "secure_delete", true)?;
         // A busy store is a store being consolidated. Waiting is right; failing is not.
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         schema::migrate(&connection)?;
