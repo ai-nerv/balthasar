@@ -30,6 +30,14 @@ pub struct Args {
     #[arg(long)]
     remote: bool,
 
+    /// Also compute this policy's answer, and report how it differed.
+    ///
+    /// The shadow's results are discarded. Nobody is served an experiment, and the data to judge
+    /// one accumulates anyway — which is the only arrangement in which a retrieval change can be
+    /// evaluated on real queries without anybody being the subject of it.
+    #[arg(long, value_name = "POLICY")]
+    shadow: Option<String>,
+
     /// Use the control policy: full-text search, no vectors, no traversal.
     ///
     /// The permanent floor, and what every retrieval experiment is measured against.
@@ -131,6 +139,13 @@ pub fn run(
     found.truncate(args.limit);
     let latency_us = started.elapsed().as_micros() as u64;
 
+    // Computed after the answer and thrown away. The comparison is kept; the candidates are
+    // not, and nothing here can reach the results above.
+    let shadowed = match &args.shadow {
+        Some(name) => shadow(store_path, scope, tool, name, &ask, &found, at)?,
+        None => None,
+    };
+
     // After the answer, never before it. The ledger is instrumentation: it records that a
     // search happened and what it weighed, and there is no path from here back into the result.
     let traced = if loaded.settings().ledger().capture && store_path.is_none() {
@@ -205,6 +220,25 @@ pub fn run(
                     )
                 },
                 policy.because
+            ))
+        );
+    }
+
+    if let Some(held) = &shadowed {
+        crate::say!(
+            "{}",
+            render::dim(&format!(
+                "shadow {} · {:.0}% overlap · {} result(s) · {} token(s) · {:.1}ms{}",
+                held.shadowed,
+                held.overlap * 100.0,
+                held.returned,
+                held.tokens,
+                held.micros as f64 / 1000.0,
+                if held.differs() {
+                    ""
+                } else {
+                    " · would have changed nothing"
+                }
             ))
         );
     }
@@ -530,4 +564,83 @@ mod tests {
             assert!(text.contains(term), "{text} is missing {term}");
         }
     }
+}
+
+/// Run a policy beside the real one, and keep only the comparison.
+///
+/// The shadow's candidates are computed and dropped. What survives is bounded — overlap, count,
+/// token cost, latency — because storing both result sets would be a second copy of the store
+/// keyed by query, which is a privacy problem wearing a research hat.
+fn shadow(
+    store_path: Option<&Path>,
+    scope: &ScopeId,
+    tool: &Which,
+    name: &str,
+    ask: &Recall,
+    served: &[Scored],
+    at: aeon_model::Timestamp,
+) -> anyhow::Result<Option<aeon_recall::Shadow>> {
+    let policy = match name {
+        "lexical-only" => aeon_recall::Policy::lexical_only(),
+        "balanced" => aeon_recall::Policy::balanced(),
+        other => {
+            // Named by shape, so `--shadow temporal` means "what would the temporal policy have
+            // done". An unknown name is refused rather than silently ignored: a shadow that did
+            // not run would report perfect agreement, which is the most misleading answer.
+            let shape = match other {
+                "temporal" => aeon_recall::Shape::Temporal,
+                "repair" | "causal" => aeon_recall::Shape::Causal,
+                "entity" => aeon_recall::Shape::Entity,
+                "similar" | "semantic" => aeon_recall::Shape::Semantic,
+                "current-fact" | "current" => aeon_recall::Shape::Current,
+                "procedure" | "procedural" => aeon_recall::Shape::Procedural,
+                _ => anyhow::bail!(
+                    "no policy called '{other}' — try balanced, lexical-only, temporal, \
+                     repair, entity, similar, current-fact or procedure"
+                ),
+            };
+            aeon_recall::Policy::for_shape(shape)
+        }
+    };
+
+    let started = std::time::Instant::now();
+    let mut candidates: Vec<Scored> = Vec::new();
+    let mut ask = ask.clone();
+    for (store, near, _) in stores(store_path, scope, tool)? {
+        ask.near = near;
+        candidates.extend(store.recall(&ask)?);
+    }
+    if !policy.families.is_empty() {
+        let seeds: Vec<aeon_model::MemoryId> = candidates
+            .iter()
+            .take(5)
+            .map(|h| h.memory.id.clone())
+            .collect();
+        for (store, _, _) in stores(store_path, scope, tool)? {
+            for (hit, _) in reached(&store, &seeds, &policy, &ask, at)? {
+                if !candidates.iter().any(|h| h.memory.id == hit.memory.id) {
+                    candidates.push(hit);
+                }
+            }
+        }
+    }
+    candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+    candidates.truncate(ask.limit);
+    let micros = started.elapsed().as_micros() as u64;
+
+    let tokens: usize = candidates
+        .iter()
+        .map(|h| h.memory.text().len().div_ceil(4))
+        .sum();
+    let served_ids: Vec<String> = served.iter().map(|h| h.memory.id.to_string()).collect();
+    let shadow_ids: Vec<String> = candidates.iter().map(|h| h.memory.id.to_string()).collect();
+
+    Ok(Some(aeon_recall::Shadow::of(
+        &aeon_recall::Policy::balanced(),
+        &policy,
+        &served_ids,
+        &shadow_ids,
+        tokens,
+        micros,
+    )))
 }
