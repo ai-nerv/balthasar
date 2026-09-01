@@ -124,14 +124,45 @@ make.recipe{
 -- costs a second full compile of everything. `test-release` exists for when the shipped code
 -- itself is what needs testing.
 local PROFILE = "--release"
-local BUILT = "target/release"
 
-make.recipe{ name = "build", desc = "the binary, optimized and stripped",
+-- Static, against musl. A dynamic binary needs a matching libc wherever it lands, which for a
+-- tool people copy between machines is a failure that happens at somebody else's prompt.
+--
+-- The C toolchain comes from the flake as a path rather than a package: `rusqlite` compiles
+-- SQLite's amalgamation, so the static build needs a compiler targeting musl -- and putting one
+-- on the default search path would let an ordinary build compile against musl headers while
+-- linking against glibc, which succeeds silently and crashes at startup.
+local TRIPLE = "x86_64-unknown-linux-musl"
+local BUILT = "target/" .. TRIPLE .. "/release"
+
+local function musl()
+  local cc = os.getenv("MUSL_CC")
+  assert(cc, "MUSL_CC is not set -- this needs `nix develop`, where the flake hands it over")
+  return {
+    "CC_x86_64_unknown_linux_musl=" .. cc .. "/bin/cc",
+    "AR_x86_64_unknown_linux_musl=" .. cc .. "/bin/ar",
+    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=" .. cc .. "/bin/cc",
+  }
+end
+
+make.recipe{ name = "build", desc = "the binary: static, optimized, stripped",
              run = function()
-               sh.cargo("build", "--workspace", PROFILE)
+               local argv = musl()
+               for _, a in ipairs({ "cargo", "build", "--workspace", PROFILE,
+                                    "--target", TRIPLE }) do
+                 argv[#argv + 1] = a
+               end
+               table.insert(argv, 1, "env")
+               assert(oslo.run(argv).ok, "build failed")
                report(BUILT .. "/" .. NAME)
              end }
 make.alias("b", "build")
+
+make.recipe{ name = "build-host", desc = "the binary for this machine, dynamic",
+             run = function()
+               sh.cargo("build", "--workspace", PROFILE)
+               report("target/release/" .. NAME)
+             end }
 
 make.recipe{ name = "build-debug", desc = "the binary, unoptimized and quick",
              run = function()
