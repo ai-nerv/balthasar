@@ -23,6 +23,7 @@ mod mint;
 mod paths;
 mod purge;
 mod read;
+mod relate;
 mod row;
 mod schema;
 mod score;
@@ -43,6 +44,7 @@ pub use paths::{
 };
 pub use purge::purge;
 pub use read::{Cluster, Recall};
+pub use relate::Reach;
 pub use schema::VERSION as SCHEMA_VERSION;
 pub use score::{Scored, Weights, cosine, coverage, frecency};
 pub use scratchpad::Scratchpad;

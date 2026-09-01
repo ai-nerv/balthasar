@@ -293,6 +293,27 @@ impl Store {
         Ok(out)
     }
 
+    /// How many memories each entity is linked to, for rarity weighting.
+    ///
+    /// One query rather than one per term: deriving relationships over a few hundred memories
+    /// asks about the same names repeatedly, and a round trip each would dominate the work.
+    pub fn entity_counts(
+        &self,
+        scope: &str,
+    ) -> Result<std::collections::HashMap<String, u32>, StoreError> {
+        let mut statement = self
+            .db()
+            .prepare("SELECT name, count(*) FROM entity WHERE scope = ?1 GROUP BY name")?;
+        let rows = statement
+            .query_map(rusqlite::params![scope], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .map(|(name, n)| (name, n.max(0) as u32))
+            .collect())
+    }
     /// Every entity one memory is about, for `aeon why`.
     pub fn entities_of(&self, id: &MemoryId) -> Result<Vec<Entity>, StoreError> {
         let mut statement = self

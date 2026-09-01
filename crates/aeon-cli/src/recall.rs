@@ -87,6 +87,26 @@ pub fn run(
             found.push(hit);
         }
     }
+    // What the relationship views reach that search alone did not. The query's shape picks
+    // which families are walked; a plain lexical query walks none and pays nothing.
+    let shape = aeon_recall::shape_of(&ask.query);
+    let mut paths: std::collections::HashMap<String, aeon_model::Relation> =
+        std::collections::HashMap::new();
+    if !shape.families().is_empty() {
+        let seeds: Vec<aeon_model::MemoryId> =
+            found.iter().take(5).map(|h| h.memory.id.clone()).collect();
+        for (store, _, named) in stores(store_path, scope, tool)? {
+            for (hit, edge) in reached(&store, &seeds, shape, &ask, at)? {
+                if found.iter().any(|h| h.memory.id == hit.memory.id) {
+                    continue;
+                }
+                paths.insert(hit.memory.id.to_string(), edge);
+                from.insert(hit.memory.id.to_string(), named.clone());
+                found.push(hit);
+            }
+        }
+    }
+
     found.sort_by(|a, b| b.score.total_cmp(&a.score));
     found.truncate(args.limit);
     let latency_us = started.elapsed().as_micros() as u64;
@@ -184,6 +204,12 @@ pub fn run(
                 render::origin(&hit.memory, project.as_deref(), named)
             ))
         );
+        if let Some(edge) = paths.get(&hit.memory.id.to_string()) {
+            crate::say!(
+                "     {}",
+                render::dim(&format!("reached by {}", edge.explain()))
+            );
+        }
         if args.explain {
             crate::say!("     {}", render::dim(&breakdown(hit)));
             if let Some(why) = render::withheld(&hit.memory, floors.inject, at) {
@@ -260,6 +286,59 @@ fn capture(store: &mut Store, said: &Capturing<'_>) -> anyhow::Result<String> {
         &candidates,
     )?;
     Ok(id)
+}
+
+/// Candidates the relationship views reach that search alone did not.
+///
+/// The query's shape decides which families are walked; classification changes what is
+/// *generated* and never what relevance means, so these arrive as ordinary candidates and are
+/// scored by the same function as everything else. A shape with no families walks nothing and
+/// costs nothing.
+///
+/// Returns each memory with the edge that reached it, so `--explain` can show the path rather
+/// than asserting a relevance nobody can check.
+fn reached(
+    store: &Store,
+    seeds: &[aeon_model::MemoryId],
+    shape: aeon_recall::Shape,
+    ask: &Recall,
+    at: aeon_model::Timestamp,
+) -> anyhow::Result<Vec<(Scored, aeon_model::Relation)>> {
+    let families = shape.families();
+    if families.is_empty() || seeds.is_empty() {
+        return Ok(Vec::new());
+    }
+    let found = store.traverse(seeds, families, &aeon_store::Reach::default())?;
+
+    let mut out = Vec::new();
+    for (id, edge) in found {
+        let Some(memory) = store.get(&id)? else {
+            continue;
+        };
+        // The same gates as any other candidate. A traversal must not be a way past the live
+        // floor, the archive filter, or the privacy boundary.
+        if memory.archived_at.is_some() && !ask.include_archived {
+            continue;
+        }
+        if memory.strength.at(at) < ask.floor {
+            continue;
+        }
+        out.push((
+            Scored {
+                score: edge.weight * 0.5,
+                semantic: None,
+                lexical: 0.0,
+                entity: 0.0,
+                frecency: 0.0,
+                confidence: memory.confidence,
+                strength: memory.strength.at(at),
+                near: true,
+                memory,
+            },
+            edge,
+        ));
+    }
+    Ok(out)
 }
 /// Which stores answer a search: the scope asked for, and `global` underneath it unless it
 /// already is `global`.

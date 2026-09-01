@@ -11,6 +11,7 @@
 
 mod candidate;
 mod consolidate;
+mod derive;
 mod distil;
 mod extract;
 mod ingest;
@@ -20,6 +21,9 @@ mod segment;
 
 pub use candidate::{Candidate, Decided, Verdict, weigh};
 pub use consolidate::{Consolidated, DISTINCT_SESSIONS, consolidate};
+pub use derive::{
+    DERIVATION as RELATION_DERIVATION, Step, Thresholds, entities, overlap, repairs, temporal,
+};
 pub use distil::{Budget, Distil, DistilFailure, Spawned, backends, first_answer};
 pub use extract::{Extracted, extract};
 pub use ingest::{EXTRACTOR_VERSION, Ingest, Report, Source, ingest};

@@ -7,8 +7,10 @@
 
 mod assemble;
 mod budget;
+mod classify;
 mod section;
 
 pub use assemble::{Ask, Bound, Context, Rendered, assemble, stores_for};
 pub use budget::{CHARS_PER_TOKEN, fit, near_duplicate, share, tokens};
+pub use classify::{Shape, shape_of};
 pub use section::{Filter, Section};

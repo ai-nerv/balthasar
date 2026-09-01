@@ -17,6 +17,7 @@ mod loaded;
 mod promote;
 mod recall;
 mod reindex;
+mod relate;
 mod remember;
 mod render;
 mod replay;
@@ -104,6 +105,8 @@ enum What {
     Export(transfer::ExportArgs),
     /// Read back what `export` wrote.
     Import(transfer::ImportArgs),
+    /// Work out which memories are related.
+    Relate(relate::Args),
     /// Follow one search to whatever came of it.
     Trace(trace::TraceArgs),
     /// What using a memory has actually led to.
@@ -172,6 +175,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Some(What::Decay(args)) => decay::run(where_, &scope, &tool, args),
         Some(What::Export(args)) => transfer::export(where_, &scope, &tool, args),
         Some(What::Import(args)) => transfer::import(where_, &scope, &tool, args),
+        Some(What::Relate(args)) => relate::run(where_, &scope, &tool, args),
         Some(What::Trace(args)) => trace::trace(where_, &scope, &tool, args),
         Some(What::Utility(args)) => trace::utility(where_, &scope, &tool, args),
         Some(What::Init(args)) => init::run(args),

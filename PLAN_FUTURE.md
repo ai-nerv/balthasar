@@ -1,4 +1,5 @@
-# aeon — Future Experimental Plan
+| **F3** | built | `relation_view` with derived edges kept apart from asserted links; temporal, causal, entity and semantic derivations that need no model; query classification; bounded one-hop traversal; `aeon relate` |
+| **F4–F9** | not built | see §4 for the order |# aeon — Future Experimental Plan
 
 > A research and implementation roadmap for the work after the baseline in `PLAN.md`.
 >

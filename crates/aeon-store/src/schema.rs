@@ -9,7 +9,7 @@
 use rusqlite::Connection;
 
 /// Every migration, in order. The index is the version it produces.
-const MIGRATIONS: &[&str] = &[V1, V2, V3];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
 
 /// What schema a store this build writes is at.
 ///
@@ -352,6 +352,40 @@ CREATE TABLE episode_segment (
 
 CREATE UNIQUE INDEX episode_span ON episode_segment(session, derivation, start_cursor);
 CREATE INDEX episode_of ON episode_segment(session, start_cursor);
+"#;
+
+/// Derived relationships, kept apart from the asserted ones in `link`.
+///
+/// Two tables rather than a `source` column on one, because the two have opposite lifecycles.
+/// An asserted link is part of what a memory means and is never rebuilt; a derived edge is an
+/// index over things the store already holds, and the ability to drop every one and recompute
+/// is what makes changing a derivation something that can be tried.
+///
+/// `stale_at` rather than a delete: an edge whose derivation has been superseded stops being
+/// traversed and stays readable, so a comparison between two versions has both to look at.
+///
+/// No weight floor in the schema. What is worth traversing is a policy question that changes
+/// with the query, and baking a threshold into the table would decide it once for everything.
+const V4: &str = r#"
+CREATE TABLE relation_view (
+  from_memory        TEXT NOT NULL,
+  to_memory          TEXT NOT NULL,
+  kind               TEXT NOT NULL,
+  weight             REAL NOT NULL DEFAULT 1.0,
+  source             TEXT NOT NULL,
+  derivation_version INTEGER NOT NULL DEFAULT 1,
+  evidence_cursor    INTEGER,
+  created_at         INTEGER NOT NULL,
+  stale_at           INTEGER,
+  PRIMARY KEY (from_memory, to_memory, kind, derivation_version)
+) STRICT;
+
+-- Traversal reads outward from a memory, filtered by kind. Live edges only, which is what the
+-- partial index is for: a store holding three derivation versions should not pay for the two
+-- nobody is traversing.
+CREATE INDEX relation_out ON relation_view(from_memory, kind) WHERE stale_at IS NULL;
+CREATE INDEX relation_in  ON relation_view(to_memory, kind)   WHERE stale_at IS NULL;
+CREATE INDEX relation_gen ON relation_view(source, derivation_version);
 "#;
 #[cfg(test)]
 mod tests {
