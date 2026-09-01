@@ -26,7 +26,13 @@ boundary a learned policy would sit behind, deliberately built before any model 
 | **F0** | built | `aeon eval --json` emits the full baseline; two seeded runs agree on every logical field; schema, revision and config fingerprint travel with every number |
 | **F1** | built | `recall_run` through `outcome`; the `used`, `outcome`, `trace` and `utility` verbs; `aeon trace` and `aeon utility`; the twelve refusals of §6.10 |
 | **F2** | built | rule-based segmentation over ten signals, every boundary carrying its reason, and versioned `episode_segment` rows that rebuild from the transcript |
-| **F3–F9** | not built | see §4 for the order |
+| **F3** | built | `relation_view`, kept apart from asserted links; temporal, causal, entity and semantic derivations that need no model; query classification; bounded one-hop traversal; `aeon relate` |
+| **F4** | built | tier-aware decay so a fact outlasts an afternoon; habit standing, environment fingerprints and narrow negative procedures; staleness from validity rather than disuse |
+| **F5** | built | write channels and trust domains; confidence counts sources, not repetitions; the imperative downgrade; quarantine as a gate; ten deterministic attacks at a zero success rate; purge closure over every derived table |
+| **F6** | built | eight policies chosen by query shape, degrading rather than swapping without vectors; `--lexical-only` as the permanent control; every decision in `--explain` |
+| **F7** | boundary built, no model | four stages with no automatic promotion; proposals that cannot express a forbidden thing; presentation clamped so a model may only weaken it; a deterministic fallback; `aeon dataset` carrying features and outcomes and no content |
+| **F8** | built | skill descriptors whose parameters are data rather than templates; verification named or labelled absent; applicability shown rather than silently withheld; `gate-no-exec` |
+| **F9** | built | `aeon eval --full` reports correctness, outcomes, efficiency and safety side by side; the experiment manifest, where safety is untradeable and a win bought with context is not adopted |
 
 Aeon already has the difficult foundation:
 
