@@ -180,6 +180,8 @@ local GATES = {
   { "gate-no-delete",    "nothing is deleted outside purge.rs" },
   { "gate-independent",  "no Rust file names a harness" },
   { "gate-witnessed",    "every asserted memory answers for itself" },
+  { "gate-untrusted",    "untrusted content cannot become durable instruction" },
+  { "gate-no-exec",      "aeon describes procedures and never runs them" },
 }
 
 for _, gate in ipairs(GATES) do
@@ -196,7 +198,14 @@ end
 make.recipe{
   name = "gates",
   desc = "every architectural gate",
-  deps = { "gate-file-size", "gate-no-delete", "gate-independent", "gate-witnessed" },
+  deps = {
+    "gate-file-size",
+    "gate-no-delete",
+    "gate-independent",
+    "gate-witnessed",
+    "gate-untrusted",
+    "gate-no-exec",
+  },
 }
 
 make.recipe{
