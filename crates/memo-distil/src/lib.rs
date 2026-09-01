@@ -23,7 +23,7 @@ mod observation;
 mod own;
 mod segment;
 
-pub use akin::{Akin, claim_overlap, merge, same_claim};
+pub use akin::{Akin, merge};
 pub use candidate::{Candidate, Decided, Verdict, weigh};
 pub use consolidate::{Consolidated, DISTINCT_SESSIONS, RUNS_PER_PASS, consolidate};
 pub use derive::{

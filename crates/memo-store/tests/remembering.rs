@@ -25,6 +25,17 @@ fn fact(subject: &str, predicate: &str, object: &str, at: Timestamp) -> Memory {
     )
 }
 
+/// A claim with no slot, which is what most of what people say looks like.
+fn note(text: &str, at: Timestamp) -> Memory {
+    Memory::new(
+        mint(at),
+        Tier::Fact,
+        ScopeId::global(),
+        Body::note(text, memo_model::NoteKind::Claim),
+        at,
+    )
+}
+
 fn saw(kind: WitnessKind, session: &str, at: Timestamp) -> Witness {
     Witness::new(
         WitnessId::new(format!("w-{session}-{at}-{kind}")),
@@ -385,4 +396,73 @@ fn evidence_for_one_claim_is_not_swallowed_by_another() {
             .expect("there");
         assert_eq!(found.witnesses.len(), 1, "{subject} kept its evidence");
     }
+}
+
+#[test]
+fn one_claim_restated_lands_on_the_claim_already_held() {
+    // The write path's half of learning from paraphrase. Before this, a project told a thing in
+    // one run and told it again in other words in the next held two beliefs with one witness
+    // each — so neither ever reached the confidence the two runs between them had earned.
+    let mut store = store();
+    for (session, at) in [("s1", MARCH), ("s2", MARCH + 86_400)] {
+        store
+            .remember(
+                note("we run the tests with make test", at),
+                saw(WitnessKind::Imperative, session, at),
+                at,
+            )
+            .expect("first wording");
+    }
+    let restated = store
+        .remember(
+            note("the tests are run with make test", MARCH + 172_800),
+            saw(WitnessKind::Imperative, "s3", MARCH + 172_800),
+            MARCH + 172_800,
+        )
+        .expect("restated");
+
+    assert!(
+        matches!(restated, memo_store::Landing::Reinforced(_)),
+        "a restatement reinforces rather than replacing: {restated:?}"
+    );
+    let all = store.all().expect("all");
+    assert_eq!(
+        all.len(),
+        1,
+        "one claim: {:?}",
+        all.iter().map(memo_model::Memory::text).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        store.witnesses_of(&all[0].id).expect("witnesses").len(),
+        3,
+        "and every run that said it is on the record"
+    );
+}
+
+#[test]
+fn one_word_swapped_is_a_different_claim_however_alike_it_reads() {
+    // The direction that would do damage. These share three content words out of five, which is
+    // enough overlap to read as a rewording — and they are two claims about two subjects.
+    let mut store = store();
+    for (text, session) in [
+        ("the staging box is at 10.0.0.7", "s1"),
+        ("the staging box is at 10.0.0.8", "s2"),
+        ("the primary box is at 10.0.0.7", "s3"),
+    ] {
+        store
+            .remember(
+                note(text, MARCH),
+                saw(WitnessKind::Manual, session, MARCH),
+                MARCH,
+            )
+            .expect("keep");
+    }
+    let held = store.all().expect("all");
+    assert!(
+        held.len() >= 2,
+        "a changed value is not corroboration: {:?}",
+        held.iter()
+            .map(memo_model::Memory::text)
+            .collect::<Vec<_>>()
+    );
 }

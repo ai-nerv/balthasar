@@ -15,6 +15,7 @@
 //! simultaneously-true answers to one slot impossible at the database level, so contradiction
 //! handling is a constraint that fails loudly rather than a policy code must remember.
 
+mod collide;
 mod decay;
 mod entity;
 mod episode;

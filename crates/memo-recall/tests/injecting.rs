@@ -162,7 +162,10 @@ fn a_local_memory_does_not_leave_the_machine() {
 }
 
 #[test]
-fn one_claim_restated_is_said_once() {
+fn one_claim_restated_is_never_held_twice() {
+    // Two runs saying one thing in different words. The store settles this on the way in now —
+    // they land as one memory with two witnesses rather than two beliefs with one each — so a
+    // model is told once and the confidence reflects both runs.
     let mut store = fresh();
     for text in [
         "we run the tests with make test",
@@ -176,6 +179,7 @@ fn one_claim_restated_is_said_once() {
             WitnessKind::Imperative,
         );
     }
+    assert_eq!(store.all().expect("all").len(), 1, "one claim, one memory");
 
     let context = assemble(
         &[(store, true)],
@@ -185,7 +189,45 @@ fn one_claim_restated_is_said_once() {
     )
     .expect("assemble");
     assert_eq!(context.sections[0].lines.len(), 1);
-    assert_eq!(context.deduplicated, 1);
+}
+
+#[test]
+fn the_same_claim_in_two_stores_is_still_said_once() {
+    // What the write path cannot reach. A project store and a global one are separate files, so
+    // each can hold its own copy of a claim and neither knows about the other — which is why
+    // the assembler deduplicates as well, and why removing that would be wrong.
+    let mut project = fresh();
+    let mut global = fresh();
+    keep(
+        &mut project,
+        Tier::Fact,
+        Body::note(
+            "we run the tests with make test",
+            memo_model::NoteKind::Claim,
+        ),
+        Importance::High,
+        WitnessKind::Imperative,
+    );
+    keep(
+        &mut global,
+        Tier::Fact,
+        Body::note(
+            "the tests are run with make test",
+            memo_model::NoteKind::Claim,
+        ),
+        Importance::High,
+        WitnessKind::Imperative,
+    );
+
+    let context = assemble(
+        &[(project, true), (global, true)],
+        &[section("facts", serde_json::json!({ "tiers": ["fact"] }))],
+        &ask(1000, Bound::Local),
+        plain,
+    )
+    .expect("assemble");
+    assert_eq!(context.sections[0].lines.len(), 1);
+    assert_eq!(context.deduplicated, 1, "the assembler caught it");
 }
 
 #[test]
