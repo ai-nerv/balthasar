@@ -1,0 +1,18 @@
+[package]
+name = "aeon-distil"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "aeon's ladder: what crosses from a session into memory, and why"
+
+[dependencies]
+aeon-lua.workspace = true
+aeon-model.workspace = true
+aeon-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

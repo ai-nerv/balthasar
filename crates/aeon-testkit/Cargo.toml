@@ -1,0 +1,19 @@
+[package]
+name = "aeon-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "aeon's evaluation: whether session k+1 is less annoying than session k"
+
+[dependencies]
+aeon-distil.workspace = true
+aeon-lua.workspace = true
+aeon-model.workspace = true
+aeon-recall.workspace = true
+aeon-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
