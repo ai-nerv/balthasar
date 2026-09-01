@@ -50,12 +50,41 @@ pub use witness::{Witness, WitnessKind};
 ///
 /// Over the rendered text rather than the struct: two memories that say the same thing in
 /// different tiers are the same claim, and a hash that included the tier would not say so.
+///
+/// Normalised first, by [`normalised`]. The difference between ``use `make test``` and
+/// `use make test.` is formatting, and two people who typed those have said one thing.
 #[must_use]
 pub fn content_hash(text: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(text.trim().to_lowercase().as_bytes());
+    hasher.update(normalised(text).as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+/// Punctuation that is formatting when it sits at the edge of a word.
+///
+/// Trimmed only at a token's edges, never from inside it. `fly.io`, `make-test` and `-v` are
+/// claims about the world; the comma in `fly.io,` is somebody typing a sentence. A blanket
+/// strip would merge `use -v` with `use v`, which are different instructions.
+const EDGE: &[char] = &[
+    '.', ',', '!', '?', ';', ':', '"', '\'', '`', '(', ')', '[', ']', '{', '}', '\u{2018}',
+    '\u{2019}', '\u{201c}', '\u{201d}',
+];
+
+/// One claim's text, with the ways of typing it that do not change what it says removed.
+///
+/// Case, runs of whitespace, and edge punctuation. Nothing cleverer: this is the exact half of
+/// clustering, and everything it merges becomes corroboration — so it may only merge what is
+/// the same claim beyond argument. Anything needing judgement belongs above it, where there is
+/// a threshold to tune and a witness note to record what was done.
+#[must_use]
+pub fn normalised(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| word.trim_matches(EDGE))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 #[cfg(test)]
@@ -72,5 +101,44 @@ mod tests {
     #[test]
     fn a_hash_distinguishes_different_claims() {
         assert_ne!(content_hash("uses make"), content_hash("uses cargo"));
+    }
+
+    #[test]
+    fn a_hash_ignores_how_a_claim_was_typed() {
+        // The commonest way one claim became two: a person writing prose, an extractor quoting
+        // a command. None of these differences change what was said.
+        let same = [
+            "we deploy with `make ship`",
+            "We deploy with make ship.",
+            "we  deploy   with make ship",
+            "\"we deploy with make ship\"",
+        ];
+        for text in &same[1..] {
+            assert_eq!(
+                content_hash(same[0]),
+                content_hash(text),
+                "{text:?} says the same thing as {:?}",
+                same[0]
+            );
+        }
+    }
+
+    #[test]
+    fn punctuation_inside_a_word_is_part_of_the_claim() {
+        // The line this normalisation must not cross. A blanket strip would make each of these
+        // pairs identical, and each pair is two different instructions.
+        assert_ne!(
+            content_hash("deploy to fly.io"),
+            content_hash("deploy to flyio")
+        );
+        assert_ne!(content_hash("run make-test"), content_hash("run make test"));
+        assert_ne!(content_hash("pass -v"), content_hash("pass v"));
+    }
+
+    #[test]
+    fn normalising_nothing_is_not_a_crash() {
+        assert_eq!(normalised("   "), "");
+        assert_eq!(normalised("..."), "");
+        assert_eq!(content_hash(""), content_hash("  ,  "));
     }
 }

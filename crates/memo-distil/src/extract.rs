@@ -161,20 +161,69 @@ fn recent_substance(before: &[Observation]) -> Vec<(String, Option<u64>)> {
     out
 }
 
+/// Words people put in front of a correction before getting to it.
+///
+/// Stripped as a leading run, never searched for. A turn that *contains* "but" in the middle is
+/// a sentence about something; a turn that opens "ok but no, ..." is somebody clearing their
+/// throat. Scanning anywhere would take "I would not say no, that is fine" as a correction.
+const THROAT: &[&str] = &[
+    "ok", "okay", "so", "um", "uh", "hmm", "well", "oh", "hey", "but", "and", "also", "right",
+    "yeah", "yep", "yes", "sorry", "please",
+];
+
+/// What marks the rest of a turn as replacing what just happened.
+const OPENERS: &[&str] = &[
+    "no, ",
+    "no — ",
+    "no - ",
+    "not ",
+    "actually, ",
+    "wrong, ",
+    "don't ",
+];
+
 /// A claim that replaces what just happened.
 ///
 /// The most information-dense turn in a coding session is the one that starts "no, ". It
-/// carries both a refutation and a replacement, and the replacement is what is worth keeping.
+/// carries both a refutation and a replacement, and the replacement is what is worth keeping —
+/// so the marker is removed rather than stored. "no, we use make" and "we use make" are one
+/// claim, and keeping the "no," would hash them apart and hand a model a sentence arguing with
+/// something it cannot see.
 #[must_use]
 pub fn correction(text: &str) -> Option<String> {
-    const OPENERS: &[&str] = &["no, ", "no — ", "not ", "actually, ", "wrong, ", "don't "];
-    let trimmed = text.trim_start();
+    let trimmed = past_throat(text.trim_start());
     let lower = trimmed.to_lowercase();
-    if !OPENERS.iter().any(|o| lower.starts_with(o)) {
-        return None;
-    }
-    let claim = first_sentence(trimmed);
+    let marker = OPENERS.iter().find(|o| lower.starts_with(*o))?;
+
+    // "not " is part of what it says — "not the staging box" is a claim about the staging box —
+    // where "no, " and "actually, " are only the speech act. Keeping the first and dropping the
+    // rest is the difference between a claim and a claim with a stutter in front of it.
+    let claim = if *marker == "not " {
+        first_sentence(trimmed)
+    } else {
+        first_sentence(trimmed[marker.len()..].trim_start())
+    };
     (claim.len() >= 8).then_some(claim)
+}
+
+/// The turn from its first real word, past any run of throat-clearing.
+fn past_throat(text: &str) -> &str {
+    let mut rest = text;
+    loop {
+        let word = rest
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches([',', '.', '!', '?', ';', ':']);
+        if word.is_empty() || !THROAT.contains(&word.to_lowercase().as_str()) {
+            return rest;
+        }
+        // Past the word, past its punctuation, past the space after it.
+        let Some(cut) = rest.find(word).map(|at| at + word.len()) else {
+            return rest;
+        };
+        rest = rest[cut..].trim_start_matches([',', '.', '!', '?', ';', ':', ' ', '\t']);
+    }
 }
 
 /// A call that failed and then succeeded is a habit worth keeping.
@@ -386,9 +435,47 @@ mod tests {
     fn a_correction_is_recognised_by_how_it_opens() {
         assert_eq!(
             correction("no, this project uses make").as_deref(),
-            Some("no, this project uses make")
+            Some("this project uses make"),
+            "the marker is the speech act, not the claim"
         );
         assert_eq!(correction("that looks right to me"), None);
+    }
+
+    #[test]
+    fn a_correction_still_counts_after_throat_clearing() {
+        // A person correcting an agent rarely leads with the correction. Anchoring at word zero
+        // missed every one of these, which is most of how corrections actually arrive.
+        for text in [
+            "ok but no, we deploy with fly.io",
+            "yeah no, we deploy with fly.io",
+            "hmm, actually, we deploy with fly.io",
+            "well no — we deploy with fly.io",
+        ] {
+            assert_eq!(
+                correction(text).as_deref(),
+                Some("we deploy with fly.io"),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_marker_in_the_middle_of_a_sentence_is_not_a_correction() {
+        // The cost of unanchoring, and the line it must not cross. Only a leading run of
+        // throat-clearing is skipped; a turn that merely contains one of these words is prose.
+        assert_eq!(correction("i would not say no, that is fine"), None);
+        assert_eq!(correction("the answer is no, apparently"), None);
+    }
+
+    #[test]
+    fn a_correction_hashes_the_same_as_the_plain_claim() {
+        // The point of dropping the marker. Before this, a claim corrected in one run and
+        // stated plainly in another were two claims, so neither corroborated the other.
+        let corrected = correction("no, we deploy with fly.io").expect("a correction");
+        assert_eq!(
+            memo_model::content_hash(&corrected),
+            memo_model::content_hash("we deploy with fly.io")
+        );
     }
 
     #[test]
