@@ -1,7 +1,7 @@
 #!/bin/sh
-# Commitment 1: aeon depends on no harness.
+# Commitment 1: memo depends on no harness.
 #
-# A harness is a Lua source adapter, not a Rust module. The moment aeon's Rust knows axon's
+# A harness is a Lua source adapter, not a Rust module. The moment memo's Rust knows axon's
 # Entry enum it is a component of axon wearing a socket, and "independent layer" becomes
 # marketing. config/ mentions axon constantly; that is the point, and Lua is not Rust.
 set -eu

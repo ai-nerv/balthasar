@@ -1,7 +1,7 @@
 *.exe
 *.test
 *.out
-/aeon
+/memo
 /coverage.out
 /bin
 /build

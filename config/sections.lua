@@ -5,7 +5,7 @@
 -- so a thin `identity` does not waste the room it was allotted.
 
 -- Who the person is. Small, stable, and worth the top of the context.
-aeon.section("identity", {
+memo.section("identity", {
   weight = 1, order = 10,
   tiers = { "fact" },
   where = { predicate = { "name", "pronouns", "timezone", "editor", "shell" } },
@@ -14,7 +14,7 @@ aeon.section("identity", {
 
 -- How this project is worked on. The largest share, because it is what a coding agent
 -- rediscovers most expensively.
-aeon.section("how-this-project-works", {
+memo.section("how-this-project-works", {
   weight = 4, order = 20,
   tiers = { "habit", "fact" },
   where = { scope = "project", importance = { "high", "critical" } },
@@ -24,7 +24,7 @@ aeon.section("how-this-project-works", {
 })
 
 -- What happened lately. Chronological: sorting episodes by salience reads as nonsense.
-aeon.section("recent", {
+memo.section("recent", {
   weight = 2, order = 30,
   tiers = { "episode" },
   limit = 5,
@@ -32,7 +32,7 @@ aeon.section("recent", {
 })
 
 -- Whatever the current turn is actually about.
-aeon.section("relevant", {
+memo.section("relevant", {
   weight = 3, order = 40,
   tiers = { "fact", "episode", "habit" },
   query = "turn",

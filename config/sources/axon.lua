@@ -1,22 +1,22 @@
 -- Reading axon's journals.
 --
--- This file is the whole of aeon's independence commitment. aeon defines the transcript shape;
--- a harness converts to it, here, in Lua. No Rust file in aeon names a harness, and a new one
+-- This file is the whole of memo's independence commitment. memo defines the transcript shape;
+-- a harness converts to it, here, in Lua. No Rust file in memo names a harness, and a new one
 -- is a file like this rather than a release.
 --
 -- axon's journals are JSONL: a `meta` record first, then one `entry` record per settled turn.
 
-aeon.source("axon", {
+memo.source("axon", {
   -- Where the journals are. A glob, because axon keeps them flat and names them by time.
   sessions = function()
-    return aeon.fs.glob(aeon.data_home .. "/axon/sessions/*.jsonl")
+    return memo.fs.glob(memo.data_home .. "/axon/sessions/*.jsonl")
   end,
 
   -- The first line names the session: its id, where it ran, and when it started.
   -- Answering nil means "this is not one of ours", which is how a glob that catches
   -- something else stays harmless.
   meta = function(first)
-    local m = aeon.json.decode(first)
+    local m = memo.json.decode(first)
     if not m or m.record ~= "meta" then return nil end
     return { id = m.session, cwd = m.cwd or "", opened = m.started or 0 }
   end,
@@ -27,7 +27,7 @@ aeon.source("axon", {
   -- not a wrapper. Getting this wrong reads every line as unrecognised and ingests an empty
   -- store without erroring, which is the worst way to be wrong.
   line = function(raw)
-    local r = aeon.json.decode(raw)
+    local r = memo.json.decode(raw)
     if not r or r.record ~= "entry" then return nil end
     local e = r.entry
     if not e then return nil end
@@ -52,7 +52,7 @@ aeon.source("axon", {
       -- `result` is absent while a call is in flight, and stays absent for one the daemon
       -- died during. Neither is an observation worth keeping.
       if not e.result then return nil end
-      local args = e.args and aeon.json.decode(e.args) or nil
+      local args = e.args and memo.json.decode(e.args) or nil
       return {
         cursor = r.cursor, role = "tool", kind = "tool_result",
         tool = e.name, args = args,

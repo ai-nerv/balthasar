@@ -16,13 +16,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: "aeon-linux-amd64"
+            artifact: "memo-linux-amd64"
           - os: ubuntu-24.04-arm
-            artifact: "aeon-linux-arm64"
+            artifact: "memo-linux-arm64"
           - os: macos-15-intel
-            artifact: "aeon-macos-amd64"
+            artifact: "memo-macos-amd64"
           - os: macos-14
-            artifact: "aeon-macos-arm64"
+            artifact: "memo-macos-arm64"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

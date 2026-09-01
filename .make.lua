@@ -1,4 +1,4 @@
--- aeon's build, as recipes. This replaced the Makefile; there is no other.
+-- memo's build, as recipes. This replaced the Makefile; there is no other.
 --
 --   make            the recipes, with what each of them says it does
 --   make build      the binary
@@ -17,7 +17,7 @@ local function project()
     local value = line:match("^%s*([^#%[%s]%S*)%s*$")
     if value then found[#found + 1] = value end
   end
-  return found[1] or "aeon", found[2] or "0.1.0"
+  return found[1] or "memo", found[2] or "0.1.0"
 end
 
 local NAME, VERSION = project()
@@ -121,8 +121,8 @@ make.alias("b", "build")
 
 make.recipe{
   name = "run",
-  desc = "run aeon: --args='recall \"make test\"'",
-  params = { { "--args", desc = "what to pass aeon", default = "" } },
+  desc = "run memo: --args='recall \"make test\"'",
+  params = { { "--args", desc = "what to pass memo", default = "" } },
   run = function(a)
     sh.cargo("run", "--quiet", "--bin", NAME, "--", table.unpack(oslo.text.split(a.args or "", " ")))
   end,
@@ -181,7 +181,7 @@ local GATES = {
   { "gate-independent",  "no Rust file names a harness" },
   { "gate-witnessed",    "every asserted memory answers for itself" },
   { "gate-untrusted",    "untrusted content cannot become durable instruction" },
-  { "gate-no-exec",      "aeon describes procedures and never runs them" },
+  { "gate-no-exec",      "memo describes procedures and never runs them" },
 }
 
 for _, gate in ipairs(GATES) do

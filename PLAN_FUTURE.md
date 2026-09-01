@@ -1,10 +1,10 @@
-| **F9** | built | `aeon eval --full` reports correctness, agent outcomes, efficiency and safety side by side; the experiment manifest with guardrails, where safety is untradeable and a win bought with context is not adopted || **F8** | built | skill descriptors whose parameters are data rather than templates, verification named or labelled absent, applicability shown rather than silently withheld, and `gate-no-exec` holding the execution boundary |
-| **F9** | not built | see §4 || **F7** | built, without a model | the boundary a learned policy would sit behind: four stages with no automatic promotion, proposals that cannot express a forbidden thing, presentation clamped so a model may only weaken it, a deterministic fallback, and `aeon dataset` — features and outcomes, no content. No model is trained or required. |
+| **F9** | built | `memo eval --full` reports correctness, agent outcomes, efficiency and safety side by side; the experiment manifest with guardrails, where safety is untradeable and a win bought with context is not adopted || **F8** | built | skill descriptors whose parameters are data rather than templates, verification named or labelled absent, applicability shown rather than silently withheld, and `gate-no-exec` holding the execution boundary |
+| **F9** | not built | see §4 || **F7** | built, without a model | the boundary a learned policy would sit behind: four stages with no automatic promotion, proposals that cannot express a forbidden thing, presentation clamped so a model may only weaken it, a deterministic fallback, and `memo dataset` — features and outcomes, no content. No model is trained or required. |
 | **F8–F9** | not built | see §4 for the order || **F6** | built | eight named policies chosen by query shape, degrading rather than swapping when vectors are absent; `--lexical-only` as the permanent control; every decision in `--explain`; bounded shadow comparison |
 | **F7–F9** | not built | see §4 for the order || **F5** | built | write channels and trust domains; confidence counts sources, not repetitions; the imperative downgrade; quarantine as a gate; ten deterministic attacks at a zero success rate; purge closure over every derived table, with adversarial recovery tests |
 | **F6–F9** | not built | see §4 for the order || **F4** | built | tier-aware decay so a fact outlasts an afternoon; habit standing, environment fingerprints and narrow negative procedures; staleness from validity rather than disuse |
-| **F5–F9** | not built | see §4 for the order || **F3** | built | `relation_view` with derived edges kept apart from asserted links; temporal, causal, entity and semantic derivations that need no model; query classification; bounded one-hop traversal; `aeon relate` |
-| **F4–F9** | not built | see §4 for the order |# aeon — Future Experimental Plan
+| **F5–F9** | not built | see §4 for the order || **F3** | built | `relation_view` with derived edges kept apart from asserted links; temporal, causal, entity and semantic derivations that need no model; query classification; bounded one-hop traversal; `memo relate` |
+| **F4–F9** | not built | see §4 for the order |# memo — Future Experimental Plan
 
 > A research and implementation roadmap for the work after the baseline in `PLAN.md`.
 >
@@ -23,18 +23,18 @@ boundary a learned policy would sit behind, deliberately built before any model 
 
 | Milestone | State | What landed |
 |---|---|---|
-| **F0** | built | `aeon eval --json` emits the full baseline; two seeded runs agree on every logical field; schema, revision and config fingerprint travel with every number |
-| **F1** | built | `recall_run` through `outcome`; the `used`, `outcome`, `trace` and `utility` verbs; `aeon trace` and `aeon utility`; the twelve refusals of §6.10 |
+| **F0** | built | `memo eval --json` emits the full baseline; two seeded runs agree on every logical field; schema, revision and config fingerprint travel with every number |
+| **F1** | built | `recall_run` through `outcome`; the `used`, `outcome`, `trace` and `utility` verbs; `memo trace` and `memo utility`; the twelve refusals of §6.10 |
 | **F2** | built | rule-based segmentation over ten signals, every boundary carrying its reason, and versioned `episode_segment` rows that rebuild from the transcript |
-| **F3** | built | `relation_view`, kept apart from asserted links; temporal, causal, entity and semantic derivations that need no model; query classification; bounded one-hop traversal; `aeon relate` |
+| **F3** | built | `relation_view`, kept apart from asserted links; temporal, causal, entity and semantic derivations that need no model; query classification; bounded one-hop traversal; `memo relate` |
 | **F4** | built | tier-aware decay so a fact outlasts an afternoon; habit standing, environment fingerprints and narrow negative procedures; staleness from validity rather than disuse |
 | **F5** | built | write channels and trust domains; confidence counts sources, not repetitions; the imperative downgrade; quarantine as a gate; ten deterministic attacks at a zero success rate; purge closure over every derived table |
 | **F6** | built | eight policies chosen by query shape, degrading rather than swapping without vectors; `--lexical-only` as the permanent control; every decision in `--explain` |
-| **F7** | boundary built, no model | four stages with no automatic promotion; proposals that cannot express a forbidden thing; presentation clamped so a model may only weaken it; a deterministic fallback; `aeon dataset` carrying features and outcomes and no content |
+| **F7** | boundary built, no model | four stages with no automatic promotion; proposals that cannot express a forbidden thing; presentation clamped so a model may only weaken it; a deterministic fallback; `memo dataset` carrying features and outcomes and no content |
 | **F8** | built | skill descriptors whose parameters are data rather than templates; verification named or labelled absent; applicability shown rather than silently withheld; `gate-no-exec` |
-| **F9** | built | `aeon eval --full` reports correctness, outcomes, efficiency and safety side by side; the experiment manifest, where safety is untradeable and a win bought with context is not adopted; the local suite extended to 33 probes across 22 categories; external adapters that skip cleanly when a dataset is absent |
+| **F9** | built | `memo eval --full` reports correctness, outcomes, efficiency and safety side by side; the experiment manifest, where safety is untradeable and a win bought with context is not adopted; the local suite extended to 33 probes across 22 categories; external adapters that skip cleanly when a dataset is absent |
 
-Aeon already has the difficult foundation:
+Memo already has the difficult foundation:
 
 - a separate process and store rather than a harness library;
 - fixed Scratch, Episode, Fact, Habit, and Archive tiers;
@@ -48,7 +48,7 @@ Aeon already has the difficult foundation:
 - Lua configuration, IPC, one-shot operation, and a coding-session benchmark;
 - durable transcript/scrollback work in progress in the current checkout.
 
-The next useful question is not whether Aeon can remember. It is whether Aeon can determine:
+The next useful question is not whether Memo can remember. It is whether Memo can determine:
 
 1. which experiences form meaningful events;
 2. which relationships make an old memory useful now;
@@ -84,7 +84,7 @@ The result should be explainable as four arguments, not one number.
 
 All experiments in this document inherit the commitments in `PLAN.md`:
 
-1. **No harness dependency.** New observations and outcomes enter through Aeon's transcript or
+1. **No harness dependency.** New observations and outcomes enter through Memo's transcript or
    protocol vocabulary. No harness crate enters the workspace graph.
 2. **No required model.** Rules provide the baseline. Model-produced boundaries, relations, or
    policies are optional proposals.
@@ -113,7 +113,7 @@ The five tiers also remain fixed. New ideas must fit the existing taxonomy:
 
 The project should pursue one distinctive claim:
 
-> **Aeon is a witnessed, outcome-aware, adversarially testable memory substrate for local
+> **Memo is a witnessed, outcome-aware, adversarially testable memory substrate for local
 > agents.**
 
 The complete evidence path is:
@@ -130,10 +130,10 @@ source
                               └─ utility evidence
 ```
 
-Existing memory systems generally optimize storage, summary quality, or retrieval. Aeon should
+Existing memory systems generally optimize storage, summary quality, or retrieval. Memo should
 make the entire path inspectable.
 
-That means `aeon why` eventually answers two different questions:
+That means `memo why` eventually answers two different questions:
 
 ```text
 Why do you believe this memory?
@@ -189,7 +189,7 @@ The future plan must not absorb or redesign it mid-implementation.
 
 ### 5.3 Baseline report
 
-`aeon eval` should emit machine-readable JSON in addition to the human report. At minimum:
+`memo eval` should emit machine-readable JSON in addition to the human report. At minimum:
 
 ```text
 run_id
@@ -216,13 +216,13 @@ must not silently write benchmark results into the project tree.
 
 ### 5.4 Likely modules
 
-- `crates/aeon-store/src/transcript.rs`
-- `crates/aeon-host/src/dispatch.rs`
-- `crates/aeon-host/src/verbs.rs`
-- `crates/aeon-cli/src/replay.rs`
-- `crates/aeon-cli/src/eval.rs`
-- `crates/aeon-testkit/src/run.rs`
-- `crates/aeon-testkit/src/scenario.rs`
+- `crates/memo-store/src/transcript.rs`
+- `crates/memo-host/src/dispatch.rs`
+- `crates/memo-host/src/verbs.rs`
+- `crates/memo-cli/src/replay.rs`
+- `crates/memo-cli/src/eval.rs`
+- `crates/memo-testkit/src/run.rs`
+- `crates/memo-testkit/src/scenario.rs`
 
 ### 5.5 Acceptance
 
@@ -311,7 +311,7 @@ outcome.
 
 ### 6.5 Attribution
 
-Outcome attribution is uncertain. Aeon must not claim that every injected memory caused every
+Outcome attribution is uncertain. Memo must not claim that every injected memory caused every
 later result.
 
 Support three strengths:
@@ -370,10 +370,10 @@ The protocol must accept callers that never report actions or outcomes.
 Lua should expose registration-style configuration:
 
 ```lua
-aeon.outcome.capture = true
-aeon.outcome.retention_days = 90
+memo.outcome.capture = true
+memo.outcome.retention_days = 90
 
-aeon.on.outcome(function(event)
+memo.on.outcome(function(event)
   -- Return a classification or nil.
 end)
 ```
@@ -383,25 +383,25 @@ No callback may be required for the deterministic default.
 ### 6.8 CLI surface
 
 ```text
-aeon trace <recall-or-injection-id>
-aeon utility <memory-id>
-aeon outcomes --session <name>
-aeon eval --with-utility
+memo trace <recall-or-injection-id>
+memo utility <memory-id>
+memo outcomes --session <name>
+memo eval --with-utility
 ```
 
-`aeon why <memory-id>` remains about truth evidence. It may link to utility traces but must not
+`memo why <memory-id>` remains about truth evidence. It may link to utility traces but must not
 mix the two explanations.
 
 ### 6.9 Likely modules
 
-- new focused modules under `crates/aeon-store/src/`, split before 800 lines;
-- `crates/aeon-store/src/schema.rs` for forward-only migrations;
-- `crates/aeon-store/src/read.rs` and `score.rs` for candidate traces;
-- `crates/aeon-recall/src/assemble.rs` for injection manifests;
-- `crates/aeon-host/src/verbs.rs` for bounded reporting verbs;
-- `crates/aeon-lua/lua/aeon.lua` for the shipped client;
-- `crates/aeon-testkit` for deterministic outcome scenarios;
-- `crates/aeon-cli/src/` for trace and utility rendering.
+- new focused modules under `crates/memo-store/src/`, split before 800 lines;
+- `crates/memo-store/src/schema.rs` for forward-only migrations;
+- `crates/memo-store/src/read.rs` and `score.rs` for candidate traces;
+- `crates/memo-recall/src/assemble.rs` for injection manifests;
+- `crates/memo-host/src/verbs.rs` for bounded reporting verbs;
+- `crates/memo-lua/lua/memo.lua` for the shipped client;
+- `crates/memo-testkit` for deterministic outcome scenarios;
+- `crates/memo-cli/src/` for trace and utility rendering.
 
 ### 6.10 Tests
 
@@ -478,7 +478,7 @@ episode_segment
   boundary_before, boundary_after, method, derivation_version
 ```
 
-If the segmentation algorithm changes, Aeon can recompute segments while retaining the old
+If the segmentation algorithm changes, Memo can recompute segments while retaining the old
 derived version long enough to compare them. Re-segmentation must not duplicate durable Facts
 or Habits.
 
@@ -524,11 +524,11 @@ The last metric prevents a segmenter that rewrites an entire session after every
 
 ### 7.7 Likely modules
 
-- new `crates/aeon-distil/src/segment.rs` and focused helpers;
-- `crates/aeon-distil/src/distil.rs` for optional refinement;
-- transcript cursor reads in `aeon-store`;
-- `aeon-model` only if Episode metadata cannot remain a store projection;
-- `aeon-testkit` for labeled session fixtures.
+- new `crates/memo-distil/src/segment.rs` and focused helpers;
+- `crates/memo-distil/src/distil.rs` for optional refinement;
+- transcript cursor reads in `memo-store`;
+- `memo-model` only if Episode metadata cannot remain a store projection;
+- `memo-testkit` for labeled session fixtures.
 
 ### 7.8 Acceptance
 
@@ -637,7 +637,7 @@ should use one hop. Multi-hop traversal must prove value separately.
 
 ### 8.8 Explainability
 
-`aeon recall --explain` should show paths such as:
+`memo recall --explain` should show paths such as:
 
 ```text
 matched entity `make`
@@ -651,7 +651,7 @@ Never print a causal label without its derivation source.
 ### 8.9 Acceptance
 
 - The feature uses SQLite tables and indexes only.
-- `AEON_NO_EMBED=1` retains temporal, causal-rule, and entity traversal.
+- `MEMO_NO_EMBED=1` retains temporal, causal-rule, and entity traversal.
 - Derived relations can be rebuilt without changing memories or witnesses.
 - Relationship candidates remain bounded under a dense synthetic store.
 - Per-query-type benchmark results are reported; an aggregate-only gain is insufficient.
@@ -748,7 +748,7 @@ harmful recall, and recovery after an environment change.
 - Habit statistics change only from attributable outcomes.
 - Negative Habits are narrow, evidenced, and scope-aware.
 - No lifecycle path issues SQL `DELETE` outside explicit purge.
-- `aeon why` and `aeon utility` show different evidence chains.
+- `memo why` and `memo utility` show different evidence chains.
 
 ---
 
@@ -759,7 +759,7 @@ harmful recall, and recovery after an environment change.
 Prevent a persistent store from turning untrusted text into durable instruction.
 
 Recent work on MemoryGraft and InjecMEM shows that successful-looking experiences and topical
-retrieval anchors can poison later agent behavior. Aeon's witness chain helps, but distinct
+retrieval anchors can poison later agent behavior. Memo's witness chain helps, but distinct
 sessions are not enough when all sessions consume the same compromised source.
 
 ### 10.2 Write-channel classification
@@ -812,7 +812,7 @@ External or inferred memories containing instruction-like language need special 
 
 - imperative language does not create an Imperative witness;
 - quoted commands remain data unless a verified procedure promotes them;
-- external content cannot alter Aeon policy or presentation mode;
+- external content cannot alter Memo policy or presentation mode;
 - topical repetition cannot manufacture trust diversity;
 - a retrieved memory is delimited and labeled by source and mode;
 - executable-looking content requires a procedural record and harness authorization.
@@ -822,7 +822,7 @@ alone is not a sufficient security boundary.
 
 ### 10.6 Security scenarios
 
-Add deterministic attacks to `aeon-testkit`:
+Add deterministic attacks to `memo-testkit`:
 
 1. One imported page repeats a false instruction across sessions.
 2. A successful task embeds an unsafe command that later matches a benign query.
@@ -959,7 +959,7 @@ This creates training and evaluation data without exposing users to experimental
 
 Test whether a learned policy improves memory management after deterministic traces exist.
 
-The learned component is not Aeon's foundation. It is a replaceable experiment that consumes
+The learned component is not Memo's foundation. It is a replaceable experiment that consumes
 exported traces and proposes bounded actions.
 
 ### 12.2 Learnable decisions
@@ -1001,7 +1001,7 @@ Export a privacy-minimized dataset containing:
 - no raw Secret content;
 - no credentials or unredacted tool payloads.
 
-Export is explicit. Aeon does not start training jobs.
+Export is explicit. Memo does not start training jobs.
 
 ### 12.5 Evaluation stages
 
@@ -1080,7 +1080,7 @@ The descriptor names tool operations. It is not a shell script and not an opaque
 
 ### 13.3 Ownership boundary
 
-Aeon:
+Memo:
 
 - stores and retrieves the descriptor;
 - explains its evidence and utility;
@@ -1093,7 +1093,7 @@ The harness:
 - checks permissions;
 - obtains approval where required;
 - executes actions;
-- reports outcomes back to Aeon.
+- reports outcomes back to Memo.
 
 ### 13.4 Promotion
 
@@ -1273,13 +1273,13 @@ branches behind.
 The future CLI should converge on four complementary views:
 
 ```text
-aeon why <memory>       truth: witnesses, contradictions, validity
-aeon recall --explain  relevance: candidate sources, paths, scores
-aeon utility <memory>  utility: attributed helpful/harmful outcomes
-aeon trust <memory>    trust: source domains, taint, presentation mode
+memo why <memory>       truth: witnesses, contradictions, validity
+memo recall --explain  relevance: candidate sources, paths, scores
+memo utility <memory>  utility: attributed helpful/harmful outcomes
+memo trust <memory>    trust: source domains, taint, presentation mode
 ```
 
-`aeon trace <id>` connects them for one recall or action. None replaces the others.
+`memo trace <id>` connects them for one recall or action. None replaces the others.
 
 ## 19. Suggested module boundaries
 
@@ -1288,17 +1288,17 @@ split only when a stable independent abstraction appears.
 
 | Concern | Owning crate |
 |---|---|
-| truth, trust, utility vocabulary | `aeon-model` |
-| ledger rows, derived relations, migrations | `aeon-store` |
-| segmentation and candidate extraction | `aeon-distil` |
-| query routing and final context assembly | `aeon-recall` |
-| configuration and hooks | `aeon-lua` |
-| verbs and peer ceilings | `aeon-host` |
-| framing only | `aeon-ipc` |
-| deterministic scenarios and metrics | `aeon-testkit` |
-| human rendering and explicit exports | `aeon-cli` |
+| truth, trust, utility vocabulary | `memo-model` |
+| ledger rows, derived relations, migrations | `memo-store` |
+| segmentation and candidate extraction | `memo-distil` |
+| query routing and final context assembly | `memo-recall` |
+| configuration and hooks | `memo-lua` |
+| verbs and peer ceilings | `memo-host` |
+| framing only | `memo-ipc` |
+| deterministic scenarios and metrics | `memo-testkit` |
+| human rendering and explicit exports | `memo-cli` |
 
-`aeon-ipc` should not learn memory policy. `aeon-model` should not learn SQLite. `aeon-store`
+`memo-ipc` should not learn memory policy. `memo-model` should not learn SQLite. `memo-store`
 should not execute distillers. The current crate boundaries remain sound.
 
 ## 20. Rejected shortcuts
@@ -1367,11 +1367,11 @@ The roadmap is grounded in these primary arXiv sources:
 - [Secure Forgetting](https://arxiv.org/abs/2604.00430)
 - [FSFM](https://arxiv.org/abs/2604.20300)
 
-The newest 2026 results are hypotheses to reproduce, not authority to redesign Aeon around.
+The newest 2026 results are hypotheses to reproduce, not authority to redesign Memo around.
 
 ## 22. Definition of success
 
-This plan succeeds when Aeon can demonstrate, with reproducible local evidence, that:
+This plan succeeds when Memo can demonstrate, with reproducible local evidence, that:
 
 1. meaningful event boundaries outperform arbitrary transcript windows;
 2. temporal and causal retrieval improves the questions that require it;
@@ -1380,7 +1380,7 @@ This plan succeeds when Aeon can demonstrate, with reproducible local evidence, 
 5. untrusted repetition cannot manufacture trusted instruction;
 6. explicit purge survives adversarial recovery attempts;
 7. learned policy can be evaluated without becoming a runtime dependency;
-8. procedural memory remains explainable and non-executable inside Aeon;
+8. procedural memory remains explainable and non-executable inside Memo;
 9. every improvement retains the no-model and no-embedding floor;
 10. the coding agent repeats fewer mistakes across sessions without receiving an ever-growing
     prompt.

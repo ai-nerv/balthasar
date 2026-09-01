@@ -3,7 +3,7 @@
 # from one the template changed. Commit it.
 
 template = "rust"
-name = "aeon"
+name = "memo"
 generated_at = "2026-08-30T19:28:24Z"
 
 [[files]]
