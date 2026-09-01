@@ -290,6 +290,40 @@ pub fn run(
                 render::dim(&format!("reached by {}", edge.explain()))
             );
         }
+        // §10.10: security labels appear in recall explanations. A result whose evidence is
+        // all external content looks exactly like one a person typed, unless the line says so.
+        if args.explain && !hit.memory.witnesses.is_empty() {
+            let ceiling = hit
+                .memory
+                .witnesses
+                .iter()
+                .map(|w| w.channel.ceiling())
+                .min()
+                .unwrap_or(aeon_model::Presentation::Asserted);
+            let sources: std::collections::BTreeSet<String> = hit
+                .memory
+                .witnesses
+                .iter()
+                .map(aeon_model::Witness::domain_of)
+                .collect();
+            let runs: std::collections::BTreeSet<&str> = hit
+                .memory
+                .witnesses
+                .iter()
+                .map(|w| w.session.as_str())
+                .collect();
+            if ceiling != aeon_model::Presentation::Asserted || sources.len() < runs.len() {
+                crate::say!(
+                    "     {}",
+                    render::dim(&format!(
+                        "trust {} · {} source(s) across {} run(s)",
+                        ceiling.as_str(),
+                        sources.len(),
+                        runs.len()
+                    ))
+                );
+            }
+        }
         if args.explain {
             crate::say!("     {}", render::dim(&breakdown(hit)));
             if let Some(why) = render::withheld(&hit.memory, floors.inject, at) {
