@@ -31,6 +31,14 @@ pub struct Args {
     #[arg(long)]
     json: bool,
 
+    /// Also run any external benchmark found in this directory.
+    ///
+    /// Nothing is downloaded and nothing is vendored. A dataset that is not there is reported
+    /// as skipped, because a suite that breaks on a missing optional file is a suite people
+    /// delete.
+    #[arg(long, value_name = "DIR")]
+    external: Option<PathBuf>,
+
     /// Report every metric group: correctness, outcomes, efficiency and safety.
     ///
     /// Each of them can be won at the expense of the others, so a claim about memory behaviour
@@ -75,6 +83,10 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
         std::fs::create_dir_all(into)?;
         std::fs::write(&path, serde_json::to_string_pretty(&baseline)?)?;
         eprintln!("{}", render::dim(&path.display().to_string()));
+    }
+
+    if let Some(at) = &args.external {
+        say_external(at);
     }
 
     if args.full {
@@ -235,4 +247,29 @@ fn say_full(held: &aeon_testkit::Full) {
             render::bold("something is not where it should be — see the groups above")
         );
     }
+}
+
+/// What each external benchmark had to say, and what it could not say.
+fn say_external(at: &std::path::Path) {
+    use aeon_testkit::Family;
+
+    crate::say!("{}", render::bold("external benchmarks"));
+    for family in [
+        Family::LongMemEval,
+        Family::LoCoMo,
+        Family::MemoryAgentBench,
+    ] {
+        let found = aeon_testkit::load(family, at);
+        crate::say!("  {}", render::dim(&found.describe()));
+    }
+    crate::say!();
+    crate::say!(
+        "{}",
+        render::dim(
+            "these ask whether a conversation can be recalled. None of them asks whether a \
+             procedure stopped working, or whether an untrusted page got through — the local \
+             suite is still the gate."
+        )
+    );
+    crate::say!();
 }

@@ -5,6 +5,7 @@
 //! is ours to invent, and it is the only number here that would make somebody change what they
 //! run.
 
+mod adapter;
 mod attack;
 mod baseline;
 mod experiment;
@@ -12,6 +13,7 @@ mod run;
 mod scenario;
 mod suite;
 
+pub use adapter::{Dataset, Family, Found, load};
 pub use attack::{ATTACKS, Attack, Report as AttackReport, Verdict as AttackVerdict, run_attacks};
 pub use baseline::Baseline;
 pub use experiment::{Decision, Full, Manifest, Metric, Moved, Outcome};

@@ -32,7 +32,7 @@ boundary a learned policy would sit behind, deliberately built before any model 
 | **F6** | built | eight policies chosen by query shape, degrading rather than swapping without vectors; `--lexical-only` as the permanent control; every decision in `--explain` |
 | **F7** | boundary built, no model | four stages with no automatic promotion; proposals that cannot express a forbidden thing; presentation clamped so a model may only weaken it; a deterministic fallback; `aeon dataset` carrying features and outcomes and no content |
 | **F8** | built | skill descriptors whose parameters are data rather than templates; verification named or labelled absent; applicability shown rather than silently withheld; `gate-no-exec` |
-| **F9** | built | `aeon eval --full` reports correctness, outcomes, efficiency and safety side by side; the experiment manifest, where safety is untradeable and a win bought with context is not adopted |
+| **F9** | built | `aeon eval --full` reports correctness, outcomes, efficiency and safety side by side; the experiment manifest, where safety is untradeable and a win bought with context is not adopted; the local suite extended to 33 probes across 22 categories; external adapters that skip cleanly when a dataset is absent |
 
 Aeon already has the difficult foundation:
 
