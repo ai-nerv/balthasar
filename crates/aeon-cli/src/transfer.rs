@@ -31,7 +31,12 @@ pub struct ImportArgs {
 }
 
 /// Every memory, one JSON object per line, oldest first.
-pub fn export(store_path: Option<&Path>, scope: &ScopeId, tool: &Which, args: &ExportArgs) -> anyhow::Result<()> {
+pub fn export(
+    store_path: Option<&Path>,
+    scope: &ScopeId,
+    tool: &Which,
+    args: &ExportArgs,
+) -> anyhow::Result<()> {
     let store = open(store_path, scope, tool)?;
     let everything = store.all()?;
 
@@ -55,7 +60,12 @@ pub fn export(store_path: Option<&Path>, scope: &ScopeId, tool: &Which, args: &E
 /// and it must land on the same ladder as everything else. Importing a store into itself
 /// therefore reinforces rather than duplicating, which is the property that makes an import
 /// safe to re-run.
-pub fn import(store_path: Option<&Path>, scope: &ScopeId, tool: &Which, args: &ImportArgs) -> anyhow::Result<()> {
+pub fn import(
+    store_path: Option<&Path>,
+    scope: &ScopeId,
+    tool: &Which,
+    args: &ImportArgs,
+) -> anyhow::Result<()> {
     let at = now();
     let source: Box<dyn BufRead> = match &args.file {
         Some(path) => Box::new(std::io::BufReader::new(std::fs::File::open(path)?)),

@@ -24,7 +24,12 @@ pub struct Args {
 }
 
 /// Rehearse or run a decay pass.
-pub fn run(store_path: Option<&Path>, scope: &ScopeId, tool: &Which, args: &Args) -> anyhow::Result<()> {
+pub fn run(
+    store_path: Option<&Path>,
+    scope: &ScopeId,
+    tool: &Which,
+    args: &Args,
+) -> anyhow::Result<()> {
     let at = now();
     let mut store = open(store_path, scope, tool)?;
     let report = if args.commit {

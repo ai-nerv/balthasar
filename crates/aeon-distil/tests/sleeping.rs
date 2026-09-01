@@ -157,8 +157,15 @@ fn a_dry_run_writes_nothing() {
     said(&mut store, "s2", "the database is postgres", MARCH + 86_400);
 
     let before = store.all().expect("export").len();
-    let report =
-        consolidate(&mut store, None, &Settings::default(), &scope(), AUGUST, true).expect("preview");
+    let report = consolidate(
+        &mut store,
+        None,
+        &Settings::default(),
+        &scope(),
+        AUGUST,
+        true,
+    )
+    .expect("preview");
     assert!(report.dry_run);
     assert_eq!(report.promoted.len(), 1, "it still says what it would do");
     assert_eq!(

@@ -16,6 +16,7 @@ mod extract;
 mod ingest;
 mod instruction;
 mod observation;
+mod segment;
 
 pub use candidate::{Candidate, Decided, Verdict, weigh};
 pub use consolidate::{Consolidated, DISTINCT_SESSIONS, consolidate};
@@ -24,6 +25,7 @@ pub use extract::{Extracted, extract};
 pub use ingest::{EXTRACTOR_VERSION, Ingest, Report, Source, ingest};
 pub use instruction::{Instruction, read as read_instruction};
 pub use observation::{Kind, Meta, Observation, Role};
+pub use segment::{Boundary, DERIVATION, METHOD, Rules as SegmentRules, Segment, Signal, segment};
 
 /// What went wrong while reading somebody else's transcripts.
 #[derive(Debug, thiserror::Error)]

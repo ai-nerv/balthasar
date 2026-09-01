@@ -69,6 +69,7 @@ pub fn run(
     ask.include_archived = args.archived;
     ask.remote = args.remote;
 
+    let started = std::time::Instant::now();
     let mut found = Vec::new();
     // Which tool each answer came from, so a result set spanning several can say so. Kept here
     // rather than on the memory: which store a memory is in is a fact about this search, not
@@ -88,6 +89,27 @@ pub fn run(
     }
     found.sort_by(|a, b| b.score.total_cmp(&a.score));
     found.truncate(args.limit);
+    let latency_us = started.elapsed().as_micros() as u64;
+
+    // After the answer, never before it. The ledger is instrumentation: it records that a
+    // search happened and what it weighed, and there is no path from here back into the result.
+    let traced = if loaded.settings().ledger().capture && store_path.is_none() {
+        let mut into = open(None, scope, tool)?;
+        Some(capture(
+            &mut into,
+            &Capturing {
+                scope,
+                ask: &ask,
+                found: &found,
+                at,
+                latency_us,
+                vectors: ask.embedding.is_some(),
+                fingerprint: loaded.settings().fingerprint(),
+            },
+        )?)
+    } else {
+        None
+    };
 
     // Evidence is fetched for the results that survived, not for every candidate: a search
     // over a thousand memories should not read four thousand witnesses nobody will see.
@@ -113,6 +135,12 @@ pub fn run(
             crate::say!("{}", serde_json::to_string(&hit.memory)?);
         }
         return Ok(());
+    }
+
+    // The handle that makes this search answerable later. Printed rather than logged, because
+    // an explanation id a caller has to reconstruct from a log file is one nobody uses.
+    if let Some(id) = &traced {
+        crate::say!("{}", render::dim(&format!("recall {id}")));
     }
 
     if found.is_empty() {
@@ -166,6 +194,73 @@ pub fn run(
     Ok(())
 }
 
+/// Record what this search did, when the configuration asked for it.
+///
+/// Off by default and after the fact by construction: the ledger is written once the answer is
+/// already decided, so it cannot change what a search returns. F1's acceptance is that recall
+/// behaves identically with capture disabled, and the shape of this function is the argument —
+/// there is no path from here back into the result.
+///
+/// The query is hashed. A ledger that held what people search for would be a different and much
+/// worse thing than one that holds that a search happened.
+struct Capturing<'a> {
+    scope: &'a ScopeId,
+    ask: &'a Recall,
+    found: &'a [Scored],
+    at: aeon_model::Timestamp,
+    latency_us: u64,
+    vectors: bool,
+    fingerprint: String,
+}
+
+fn capture(store: &mut Store, said: &Capturing<'_>) -> anyhow::Result<String> {
+    let Capturing {
+        scope,
+        ask,
+        found,
+        at,
+        latency_us,
+        vectors,
+        fingerprint,
+    } = said;
+    let (at, latency_us, vectors) = (*at, *latency_us, *vectors);
+    let id = format!("recall-{at}-{}", &aeon_model::content_hash(&ask.query)[..8]);
+    let candidates: Vec<aeon_store::Candidate> = found
+        .iter()
+        .enumerate()
+        .map(|(rank, hit)| aeon_store::Candidate {
+            memory: hit.memory.id.clone(),
+            rank,
+            selected: true,
+            score: hit.score,
+            signals: aeon_store::Signals {
+                semantic: hit.semantic.unwrap_or(0.0),
+                lexical: hit.lexical,
+                entity: hit.entity,
+                frecency: hit.frecency,
+                confidence: hit.confidence,
+                strength: hit.strength,
+                scope: f64::from(u8::from(hit.near)),
+            },
+        })
+        .collect();
+
+    store.note_recall(
+        &aeon_store::RecallRun {
+            id: id.clone(),
+            scope: (*scope).clone(),
+            session: None,
+            query_hash: aeon_model::content_hash(&ask.query)[..16].to_owned(),
+            requested_at: at,
+            config_fingerprint: fingerprint.clone(),
+            vector_available: vectors,
+            result_limit: ask.limit,
+            latency_us,
+        },
+        &candidates,
+    )?;
+    Ok(id)
+}
 /// Which stores answer a search: the scope asked for, and `global` underneath it unless it
 /// already is `global`.
 ///
@@ -178,7 +273,11 @@ fn stores(
     tool: &Which,
 ) -> anyhow::Result<Vec<(Store, bool, aeon_store::Tool)>> {
     if store_path.is_some() {
-        return Ok(vec![(open(store_path, scope, tool)?, true, tool.tool.clone())]);
+        return Ok(vec![(
+            open(store_path, scope, tool)?,
+            true,
+            tool.tool.clone(),
+        )]);
     }
     let mut out = Vec::new();
     for named in searched(scope, tool) {

@@ -17,21 +17,24 @@
 
 mod decay;
 mod entity;
+mod episode;
 mod ledger;
 mod mint;
 mod paths;
 mod purge;
 mod read;
 mod row;
-mod scratchpad;
 mod schema;
 mod score;
+mod scratchpad;
 mod session;
 mod transcript;
+mod usage;
 mod write;
 
 pub use decay::{Faded, Weakened};
 pub use entity::{Entity, Kind as EntityKind, extract as entities_in, rarity};
+pub use episode::Episode;
 pub use ledger::{Entry, State};
 pub use mint::mint;
 pub use paths::{
@@ -39,11 +42,13 @@ pub use paths::{
     session_dir_in, session_path, session_transcript_path, tools_in,
 };
 pub use purge::purge;
-pub use scratchpad::Scratchpad;
 pub use read::{Cluster, Recall};
+pub use schema::VERSION as SCHEMA_VERSION;
 pub use score::{Scored, Weights, cosine, coverage, frecency};
+pub use scratchpad::Scratchpad;
 pub use session::{Session, name_for};
 pub use transcript::{Run, Transcript, Turn, transcript_path};
+pub use usage::{Candidate, Injection, RecallRun, Signals, Trace, TracedAction, Use, Verdict};
 pub use write::Landing;
 
 use rusqlite::Connection;
@@ -68,6 +73,13 @@ pub enum StoreError {
     /// did not parse.
     #[error("this store holds a '{0}' that this build does not know")]
     Foreign(String),
+    /// A caller referred to something that is not in this store.
+    ///
+    /// Its own variant rather than a foreign-key failure reaching the surface: "no injection
+    /// called 'i-nope'" tells a caller what to fix, and "FOREIGN KEY constraint failed" tells
+    /// them to read someone else's schema.
+    #[error("no {0}")]
+    Unknown(String),
 }
 
 /// One scope's memories.
@@ -109,6 +121,19 @@ impl Store {
         })
     }
 
+    /// How many bytes this store occupies.
+    ///
+    /// Asked of SQLite rather than the filesystem, so it answers the same way for an in-memory
+    /// store as for a file — a benchmark runs in memory and still has to report what it cost.
+    pub fn bytes(&self) -> Result<u64, StoreError> {
+        let pages: i64 = self
+            .connection
+            .pragma_query_value(None, "page_count", |r| r.get(0))?;
+        let size: i64 = self
+            .connection
+            .pragma_query_value(None, "page_size", |r| r.get(0))?;
+        Ok((pages.max(0) as u64) * (size.max(0) as u64))
+    }
     /// Where this store lives.
     #[must_use]
     pub fn path(&self) -> &Path {

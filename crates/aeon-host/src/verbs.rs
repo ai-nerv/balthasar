@@ -30,6 +30,26 @@ pub const SURFACE: &[Verb] = &[
         about: "what a model would be told: (opts) -> { sections, text, tokens }",
     },
     Verb {
+        name: "used",
+        writes: true,
+        about: "a caller acted on what it was given: (injection, opts) -> { action }",
+    },
+    Verb {
+        name: "outcome",
+        writes: true,
+        about: "how an action went: (action, opts) -> { outcome, kind }",
+    },
+    Verb {
+        name: "trace",
+        writes: false,
+        about: "a recall, what it considered, and what followed: (recall) -> { .. }",
+    },
+    Verb {
+        name: "utility",
+        writes: false,
+        about: "attributed outcomes for a memory, beside how often it was retrieved: (id)",
+    },
+    Verb {
         name: "why",
         writes: false,
         about: "the evidence for a memory: (id) -> { confidence, witnesses }",

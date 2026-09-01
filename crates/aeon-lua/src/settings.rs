@@ -116,6 +116,28 @@ impl Default for Budget {
     }
 }
 
+/// Whether and how long the use-and-outcome ledger is kept.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ledger {
+    /// Whether searches, injections and outcomes are recorded at all.
+    ///
+    /// Off by default. The ledger is instrumentation: it costs writes on the recall path, and a
+    /// memory layer that silently starts recording what a person searches for because a new
+    /// version shipped is not one anybody should install.
+    pub capture: bool,
+    /// How long a ledger row lives before retention drops it.
+    pub retention_days: u32,
+}
+
+impl Default for Ledger {
+    fn default() -> Self {
+        Self {
+            capture: false,
+            retention_days: 90,
+        }
+    }
+}
+
 /// Everything a configuration decided, in the shapes aeon uses.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -125,6 +147,8 @@ pub struct Settings {
     pub decay: Decay,
     /// How retrieval ranks.
     pub weights: Weights,
+    /// Whether the use-and-outcome ledger records anything.
+    pub ledger: Ledger,
     /// What a recall may spend.
     pub budget: Budget,
     /// What each kind of evidence is worth.
@@ -228,16 +252,74 @@ impl Settings {
             hops: count(config, "budget", "hops", fallback.hops),
         };
 
+        let fallback_ledger = Ledger::default();
+
         Self {
             floors,
             decay,
             weights,
             budget,
+            ledger: Ledger {
+                capture: config
+                    .boolean("outcome_capture")
+                    .unwrap_or(fallback_ledger.capture),
+                retention_days: count(
+                    config,
+                    "outcome",
+                    "retention_days",
+                    fallback_ledger.retention_days as usize,
+                ) as u32,
+            },
             witness: witness_weights(config),
             tool: config.string("tool").map(str::to_owned),
             trusted: strings(config, "trusted"),
             imperatives: imperatives(config),
         }
+    }
+
+    /// A digest of every setting that changes what aeon does.
+    ///
+    /// Written out field by field rather than derived from a serialization, so that adding a
+    /// field to `Settings` cannot silently change every recorded fingerprint. When a new
+    /// setting starts mattering it is added here deliberately, and the fingerprint changing is
+    /// the point.
+    ///
+    /// Recorded beside every measurement and every ledger row: two numbers produced under
+    /// different weights are not the same experiment, and without this nothing would say so.
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        aeon_model::content_hash(&format!(
+            "floors:{:.4},{:.4},{:.4},{:.4}|weights:{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}|\
+             decay:{:.6},{:.6},{:.6},{:.6},{}|budget:{},{},{},{}|imperatives:{}",
+            self.floors.inject,
+            self.floors.live,
+            self.floors.promote,
+            self.floors.hold,
+            self.weights.semantic,
+            self.weights.lexical,
+            self.weights.entity,
+            self.weights.frecency,
+            self.weights.confidence,
+            self.weights.strength,
+            self.weights.scope,
+            self.decay.critical,
+            self.decay.high,
+            self.decay.normal,
+            self.decay.low,
+            self.decay.inertia,
+            self.budget.candidates,
+            self.budget.milliseconds,
+            self.budget.expansion_terms,
+            self.budget.hops,
+            self.imperatives.len(),
+        ))[..16]
+            .to_owned()
+    }
+
+    /// Whether the ledger records, and for how long.
+    #[must_use]
+    pub fn ledger(&self) -> &Ledger {
+        &self.ledger
     }
 
     /// Which tool this configuration names, if it names one.

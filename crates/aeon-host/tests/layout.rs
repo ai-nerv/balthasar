@@ -130,7 +130,11 @@ fn a_run_can_find_what_it_was_just_told() {
         ],
     );
     assert!(reply.ok, "{reply:?}");
-    assert_eq!(Held::found(&reply), 1, "its own scratch answered: {reply:?}");
+    assert_eq!(
+        Held::found(&reply),
+        1,
+        "its own scratch answered: {reply:?}"
+    );
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -173,7 +177,10 @@ fn deleting_one_run_is_deleting_one_directory() {
 
     assert_eq!(held.scratch.runs().len(), 1);
     assert!(!held.scratch.path_of(&one).exists());
-    assert!(held.scratch.path_of(&two).is_file(), "the neighbour survived");
+    assert!(
+        held.scratch.path_of(&two).is_file(),
+        "the neighbour survived"
+    );
     let _ = std::fs::remove_dir_all(&home);
 }
 

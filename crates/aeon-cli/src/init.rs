@@ -28,10 +28,9 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
         None => std::env::current_dir()?,
     };
     let home = at.join(aeon_store::HOME);
-    let existed = aeon_store::project_home(&aeon_model::ScopeId::new(
-        at.to_string_lossy().into_owned(),
-    ))
-    .is_some_and(|_| home.join(".store").is_file());
+    let existed =
+        aeon_store::project_home(&aeon_model::ScopeId::new(at.to_string_lossy().into_owned()))
+            .is_some_and(|_| home.join(".store").is_file());
     aeon_store::make_home(&home)?;
 
     if args.json {

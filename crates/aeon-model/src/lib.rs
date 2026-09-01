@@ -19,6 +19,7 @@ mod memory;
 mod strength;
 mod temporal;
 mod tier;
+mod utility;
 mod witness;
 
 pub use body::{Body, NoteKind, Outcome, Span};
@@ -30,6 +31,7 @@ pub use memory::{Link, LinkRelation, Memory, Provenance, Through};
 pub use strength::{Importance, Strength};
 pub use temporal::{Temporal, Timestamp};
 pub use tier::{Privacy, Tier};
+pub use utility::{Attribution, OutcomeKind, Presentation, Utility};
 pub use witness::{Witness, WitnessKind};
 
 /// Digest of a memory's content, for deduplication and the cheap half of clustering.

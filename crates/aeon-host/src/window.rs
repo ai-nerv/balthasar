@@ -40,7 +40,10 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
     // without opening every one of them; the run keeps its own row, so its scratch has
     // something to point at.
     let (scope, now) = (at.scope.clone(), at.now);
-    if let Err(why) = at.store.open_session(&session, &scope, &scope.to_string(), "peer", now) {
+    if let Err(why) = at
+        .store
+        .open_session(&session, &scope, &scope.to_string(), "peer", now)
+    {
         return Reply::refused(why.to_string());
     }
     match at.run(&session) {
@@ -137,10 +140,15 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
     // session has without asking a model to invent one.
     if entry.role == "user" && !text.is_empty() {
         let _ = at.store.title_session(&session, text);
-        let _ = at.run(&session).map(|run| run.title_session(&session, text));
+        let _ = at
+            .run(&session)
+            .map(|run| run.title_session(&session, text));
     }
 
-    match at.run(&session).and_then(|run| run.observe(&session, &entry)) {
+    match at
+        .run(&session)
+        .and_then(|run| run.observe(&session, &entry))
+    {
         Ok(()) => Reply::none(),
         Err(why) => Reply::refused(why.to_string()),
     }
@@ -186,12 +194,16 @@ pub fn plan(
     // The plan is recorded as it is handed over. A harness that applies it and then asks again
     // must not be told to mask what it has already masked.
     for masked in &plan.mask {
-        let _ = at.run(&session).map(|run| run.mark(&session, masked.cursor, State::Masked));
+        let _ = at
+            .run(&session)
+            .map(|run| run.mark(&session, masked.cursor, State::Masked));
     }
     if let Some(span) = plan.summarise {
         for cursor in &plan.drop {
             if *cursor >= span.from && *cursor <= span.to {
-                let _ = at.run(&session).map(|run| run.mark(&session, *cursor, State::Summarised));
+                let _ = at
+                    .run(&session)
+                    .map(|run| run.mark(&session, *cursor, State::Summarised));
             }
         }
         // TIDE. The moment a span leaves the window is the last moment anybody will look at

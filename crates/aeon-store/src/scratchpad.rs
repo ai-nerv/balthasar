@@ -347,7 +347,11 @@ mod tests {
         assert_eq!(store.uncrossed(&run).expect("uncrossed").len(), 1);
         Scratchpad::carry(&mut project, store, held, said_by(&run), NOW).expect("carry");
         assert!(
-            pad.of(&run).expect("open").uncrossed(&run).expect("uncrossed").is_empty(),
+            pad.of(&run)
+                .expect("open")
+                .uncrossed(&run)
+                .expect("uncrossed")
+                .is_empty(),
             "it crossed"
         );
         let _ = std::fs::remove_dir_all(&home);

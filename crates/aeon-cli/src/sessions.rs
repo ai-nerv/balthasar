@@ -26,7 +26,12 @@ pub struct Args {
 }
 
 /// Show the sessions.
-pub fn run(store_path: Option<&Path>, scope: &ScopeId, tool: &Which, args: &Args) -> anyhow::Result<()> {
+pub fn run(
+    store_path: Option<&Path>,
+    scope: &ScopeId,
+    tool: &Which,
+    args: &Args,
+) -> anyhow::Result<()> {
     let at = now();
     let store = open(store_path, scope, tool)?;
 

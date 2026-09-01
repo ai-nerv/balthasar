@@ -26,6 +26,16 @@ impl Door {
         matches!(self, Self::Owner)
     }
 
+    /// Whether this door may claim an evaluation came from the person.
+    ///
+    /// A peer may report how its own action went. It may not sign that report as the user's
+    /// judgment, because the two carry different weight in every policy that reads them and a
+    /// peer that could forge the stronger one could manufacture its own authority.
+    #[must_use]
+    pub fn may_evaluate_as_user(&self) -> bool {
+        matches!(self, Self::Owner)
+    }
+
     /// Whether this door may write to the global store.
     ///
     /// A wrong project fact contaminates one project; a wrong global one contaminates every

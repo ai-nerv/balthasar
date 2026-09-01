@@ -23,6 +23,7 @@ mod replay;
 mod serve;
 mod sessions;
 mod status;
+mod trace;
 mod transfer;
 
 use clap::{Parser, Subcommand};
@@ -103,6 +104,10 @@ enum What {
     Export(transfer::ExportArgs),
     /// Read back what `export` wrote.
     Import(transfer::ImportArgs),
+    /// Follow one search to whatever came of it.
+    Trace(trace::TraceArgs),
+    /// What using a memory has actually led to.
+    Utility(trace::UtilityArgs),
     /// Make this directory the root of its own memory.
     Init(init::Args),
     /// Install the shipped configuration into `$XDG_CONFIG_HOME/aeon`.
@@ -151,7 +156,9 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
 
     let outcome = match &cli.what {
         None => status::run(where_, &scope, &tool, floors, &loaded),
-        Some(What::Remember(args)) => remember::run(where_, &scope, &tool, args, floors, &mut loaded),
+        Some(What::Remember(args)) => {
+            remember::run(where_, &scope, &tool, args, floors, &mut loaded)
+        }
         Some(What::Recall(args)) => recall::run(where_, &scope, &tool, args, floors, &mut loaded),
         Some(What::Why(args)) => ask::run(where_, &scope, &tool, args, floors),
         Some(What::Promote(args)) => promote::run(where_, &scope, &tool, args, &mut loaded),
@@ -165,6 +172,8 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Some(What::Decay(args)) => decay::run(where_, &scope, &tool, args),
         Some(What::Export(args)) => transfer::export(where_, &scope, &tool, args),
         Some(What::Import(args)) => transfer::import(where_, &scope, &tool, args),
+        Some(What::Trace(args)) => trace::trace(where_, &scope, &tool, args),
+        Some(What::Utility(args)) => trace::utility(where_, &scope, &tool, args),
         Some(What::Init(args)) => init::run(args),
         Some(What::Configs(args)) => configs::run(args),
         Some(What::Serve(args)) => serve::serve(where_, &scope, &tool, args, floors, &mut loaded),

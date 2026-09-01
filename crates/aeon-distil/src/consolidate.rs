@@ -99,7 +99,12 @@ pub fn consolidate(
             if !dry_run {
                 report.decayed += pad.weaken_all(now)?;
             }
-            pad.recurring(scope.as_str(), DISTINCT_SESSIONS, now - HORIZON, RUNS_PER_PASS)?
+            pad.recurring(
+                scope.as_str(),
+                DISTINCT_SESSIONS,
+                now - HORIZON,
+                RUNS_PER_PASS,
+            )?
         }
         None => store.scratch_clusters(scope.as_str(), DISTINCT_SESSIONS)?,
     };

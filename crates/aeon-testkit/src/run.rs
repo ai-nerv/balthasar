@@ -63,15 +63,102 @@ impl Score {
     }
 }
 
+/// What a run cost and how well it retrieved, beside whether it succeeded.
+///
+/// Separate from [`Score`] because they answer different questions. `Score` is whether the
+/// agent stopped rediscovering things; this is what that took — how much was injected, how
+/// precise retrieval was, how long it took, how big the store got. A benchmark that reports
+/// only the first can be won by injecting everything.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Measured {
+    /// Memories that crossed the injection floor and were the lesson being asked about.
+    pub asserted_right: usize,
+    /// Memories that crossed the injection floor and were not.
+    pub asserted_wrong: usize,
+    /// Encounters where something relevant was findable, whether or not it was asserted.
+    pub relevant_found: usize,
+    /// Assertions naming the command that had already failed, without naming its replacement.
+    pub asserted_stale: usize,
+    /// Encounters in total.
+    pub encounters: usize,
+    /// Estimated tokens a harness would have been handed across the whole run.
+    pub injected_tokens: usize,
+    /// How long each recall took, in microseconds, in the order they happened.
+    pub recall_us: Vec<u64>,
+    /// What the store grew to.
+    pub store_bytes: u64,
+}
+
+impl Measured {
+    /// Of what was asserted, how much was right.
+    ///
+    /// Zero assertions is not perfect precision — it is no answer, and reported as zero so a
+    /// system that asserts nothing cannot win on this axis.
+    #[must_use]
+    pub fn recall_precision(&self) -> f64 {
+        let asserted = self.asserted_right + self.asserted_wrong;
+        if asserted == 0 {
+            return 0.0;
+        }
+        self.asserted_right as f64 / asserted as f64
+    }
+
+    /// How often anything relevant was findable at all, asserted or not.
+    ///
+    /// The gap between this and precision is the cost of the assertion floor: memories that
+    /// were there and were right, but had not earned the right to be stated.
+    #[must_use]
+    pub fn recall_relevance(&self) -> f64 {
+        if self.encounters == 0 {
+            return 0.0;
+        }
+        self.relevant_found as f64 / self.encounters as f64
+    }
+
+    /// Of what was asserted, how much was not superseded.
+    ///
+    /// Distinct from precision: a memory can be about the right subject and still name the
+    /// command that has since been corrected. That is the failure mode a memory layer adds.
+    #[must_use]
+    pub fn assertion_accuracy(&self) -> f64 {
+        let asserted = self.asserted_right + self.asserted_wrong;
+        if asserted == 0 {
+            return 1.0;
+        }
+        (asserted - self.asserted_stale) as f64 / asserted as f64
+    }
+
+    /// The nth percentile recall, in milliseconds.
+    #[must_use]
+    pub fn recall_ms(&self, percentile: f64) -> f64 {
+        if self.recall_us.is_empty() {
+            return 0.0;
+        }
+        let mut sorted = self.recall_us.clone();
+        sorted.sort_unstable();
+        let at = ((sorted.len() - 1) as f64 * percentile.clamp(0.0, 1.0)).round() as usize;
+        sorted[at] as f64 / 1000.0
+    }
+}
+
 /// Run a scenario against a store, consolidating between sessions.
 ///
 /// `with_memory` is the switch the whole thing turns on: with it off, nothing is written and
 /// every session starts blank, which is the baseline every harness ships today.
 pub fn run(scenario: &Scenario, with_memory: bool) -> Score {
+    measure(scenario, with_memory).0
+}
+
+/// The same run, with what it cost.
+///
+/// One implementation rather than two, so a measured run and a scored run can never disagree
+/// about what happened.
+pub fn measure(scenario: &Scenario, with_memory: bool) -> (Score, Measured) {
     let mut store = Store::ephemeral().expect("a store");
     let settings = Settings::default();
     let scope = ScopeId::new(&scenario.project);
     let mut score = Score::default();
+    let mut cost = Measured::default();
 
     for session in &scenario.sessions {
         let mut ran = Ran {
@@ -81,8 +168,13 @@ pub fn run(scenario: &Scenario, with_memory: bool) -> Score {
         };
 
         for lesson in &session.lessons {
-            let known = with_memory && already_knows(&store, &scope, lesson, session.at);
-            if known {
+            cost.encounters += 1;
+            let looked = if with_memory {
+                look(&store, &scope, lesson, session.at, &mut cost)
+            } else {
+                false
+            };
+            if looked {
                 ran.knew.push(lesson.intent.clone());
                 score.recalls += 1;
             } else {
@@ -94,41 +186,85 @@ pub fn run(scenario: &Scenario, with_memory: bool) -> Score {
                 // What the session did, as a harness would have streamed it. A lesson already
                 // known is still worked through — the agent uses the right command — and that
                 // is itself another session agreeing.
-                observe(&mut store, &scope, session, lesson, known);
+                observe(&mut store, &scope, session, lesson, looked);
             }
         }
 
         if with_memory {
             // Between sessions, not during. Free compute, and the point at which what
             // recurred in unrelated runs becomes the project's.
-            consolidate(&mut store, None, &settings, &scope, session.at + 3600, false)
-                .expect("consolidate");
+            consolidate(
+                &mut store,
+                None,
+                &settings,
+                &scope,
+                session.at + 3600,
+                false,
+            )
+            .expect("consolidate");
         }
         score.sessions.push(ran);
     }
-    score
+    cost.store_bytes = store.bytes().unwrap_or(0);
+    (score, cost)
 }
 
-/// Whether the project already holds something that would have saved this session the trouble.
+/// Whether the project already holds something that would have saved this session the trouble,
+/// and what asking cost.
 ///
 /// Asked the way a harness would ask it: what would be *asserted* for this turn. Not "is it in
 /// the store" — a memory below the injection floor is one the model is never told, and a
 /// benchmark that counted it would measure the store rather than the agent.
-fn already_knows(store: &Store, scope: &ScopeId, lesson: &Lesson, at: Timestamp) -> bool {
+///
+/// The findable set is read at the retrieval floor and the asserted set at the injection floor,
+/// from one query, because the gap between them is the thing the two floors exist to create.
+fn look(
+    store: &Store,
+    scope: &ScopeId,
+    lesson: &Lesson,
+    at: Timestamp,
+    cost: &mut Measured,
+) -> bool {
     let mut ask = aeon_store::Recall::of(&lesson.intent, at);
     ask.limit = 10;
-    ask.floor = floor::INJECT;
+    ask.floor = floor::LIVE;
     ask.near = true;
-    let Ok(found) = store.recall(&ask) else {
-        return false;
-    };
-    found.iter().any(|hit| {
-        hit.memory.is_assertable(floor::INJECT, at, false)
-            && hit.memory.text().contains(&lesson.right)
-            && hit.memory.scope == *scope
-    })
-}
 
+    let started = std::time::Instant::now();
+    let found = store.recall(&ask);
+    cost.recall_us.push(started.elapsed().as_micros() as u64);
+
+    let Ok(found) = found else { return false };
+    let mine: Vec<_> = found.iter().filter(|h| h.memory.scope == *scope).collect();
+
+    if mine.iter().any(|h| h.memory.text().contains(&lesson.right)) {
+        cost.relevant_found += 1;
+    }
+
+    let mut knew = false;
+    for hit in mine {
+        if !hit.memory.is_assertable(floor::INJECT, at, false) {
+            continue;
+        }
+        // What a harness would actually have been handed. Counted for everything asserted,
+        // right or wrong, because a wrong assertion costs the same tokens as a right one.
+        cost.injected_tokens += hit.memory.text().len().div_ceil(4);
+        if hit.memory.text().contains(&lesson.right) {
+            cost.asserted_right += 1;
+            knew = true;
+        } else {
+            cost.asserted_wrong += 1;
+        }
+        // The failure a memory layer adds: asserting the command that was corrected, with no
+        // mention of the correction. A repair names both — "`make test` rather than
+        // `cargo test`" is the memory working, not a stale one — so naming the old command is
+        // only stale when the new one is absent.
+        if hit.memory.text().contains(&lesson.wrong) && !hit.memory.text().contains(&lesson.right) {
+            cost.asserted_stale += 1;
+        }
+    }
+    knew
+}
 /// Record what a session did, as a harness streaming its turns would.
 fn observe(
     store: &mut Store,

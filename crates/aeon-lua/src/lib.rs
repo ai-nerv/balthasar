@@ -34,7 +34,7 @@ pub use engine::{PRIVILEGED, PRIVILEGED_SETTINGS, REGISTRARS, SPECS};
 pub use handler::{ASKED, TOLD};
 pub use helpers::glob_paths;
 pub use plugins::{Roots, Trust, runtimepath, vouched_for};
-pub use settings::{Budget, Decay, Floors, Settings, Weights};
+pub use settings::{Budget, Decay, Floors, Ledger, Settings, Weights};
 
 /// What went wrong while reading a configuration.
 ///

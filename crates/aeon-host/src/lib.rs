@@ -6,6 +6,7 @@
 
 mod ceiling;
 mod dispatch;
+mod outcome;
 mod verbs;
 mod window;
 

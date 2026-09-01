@@ -451,7 +451,10 @@ mod tests {
         std::fs::create_dir_all(package.join("src")).expect("mkdir");
         make_home(&package.join(HOME)).expect("make");
 
-        assert_eq!(scope_of(&package.join("src")).as_str(), package.to_string_lossy());
+        assert_eq!(
+            scope_of(&package.join("src")).as_str(),
+            package.to_string_lossy()
+        );
         assert_eq!(scope_of(&root).as_str(), root.to_string_lossy());
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -485,7 +488,11 @@ mod tests {
         std::fs::rename(&before, &after).expect("mv");
         let now = scope_path(&scope_of(&after), &Tool::default());
 
-        assert_eq!(now, after.join(relative), "the store moved with the project");
+        assert_eq!(
+            now,
+            after.join(relative),
+            "the store moved with the project"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -557,7 +564,10 @@ mod tests {
         let two = scope_path(&scope, &Tool::new("oslo").expect("valid"));
 
         assert_ne!(one, two);
-        assert_eq!(one.parent().and_then(Path::parent), two.parent().and_then(Path::parent));
+        assert_eq!(
+            one.parent().and_then(Path::parent),
+            two.parent().and_then(Path::parent)
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -601,7 +611,11 @@ mod tests {
 
         let found = tools_in(&scope_of(&root));
         let names: Vec<&str> = found.iter().map(Tool::as_str).collect();
-        assert_eq!(names, vec!["harness", "oslo"], "a directory with no store is not a tool");
+        assert_eq!(
+            names,
+            vec!["harness", "oslo"],
+            "a directory with no store is not a tool"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -612,11 +626,17 @@ mod tests {
         make_home(&home).expect("make");
         let body = std::fs::read_to_string(home.join(".gitignore")).expect("read");
         assert!(body.contains("*/*/"), "sessions are ignored");
-        assert!(body.contains("# !*/project.db"), "committing is offered, not chosen");
+        assert!(
+            body.contains("# !*/project.db"),
+            "committing is offered, not chosen"
+        );
 
         std::fs::write(home.join(".gitignore"), "mine\n").expect("write");
         make_home(&home).expect("again");
-        assert_eq!(std::fs::read_to_string(home.join(".gitignore")).expect("read"), "mine\n");
+        assert_eq!(
+            std::fs::read_to_string(home.join(".gitignore")).expect("read"),
+            "mine\n"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

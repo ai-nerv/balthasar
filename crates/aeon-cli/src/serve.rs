@@ -178,4 +178,3 @@ fn named_by_kernel(peer: &Peer) -> Option<aeon_store::Tool> {
         })
         .and_then(|name| aeon_store::Tool::from_program(&name))
 }
-

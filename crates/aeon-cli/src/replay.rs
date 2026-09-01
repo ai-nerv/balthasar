@@ -28,7 +28,12 @@ pub struct Args {
 }
 
 /// Replay, or list.
-pub fn run(store_path: Option<&Path>, scope: &ScopeId, tool: &Which, args: &Args) -> anyhow::Result<()> {
+pub fn run(
+    store_path: Option<&Path>,
+    scope: &ScopeId,
+    tool: &Which,
+    args: &Args,
+) -> anyhow::Result<()> {
     let held = scrollback(store_path, scope, tool)?;
 
     let Some(handle) = &args.session else {

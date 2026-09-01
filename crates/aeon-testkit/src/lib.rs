@@ -5,10 +5,12 @@
 //! is ours to invent, and it is the only number here that would make somebody change what they
 //! run.
 
+mod baseline;
 mod run;
 mod scenario;
 mod suite;
 
-pub use run::{Ran, Score, run};
+pub use baseline::Baseline;
+pub use run::{Measured, Ran, Score, measure, run};
 pub use scenario::{Lesson, Scenario, Session};
 pub use suite::{Act, Case, Category, Expect, Failure, Probe, Report, Verdict, corpus, run_suite};

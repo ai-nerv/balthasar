@@ -99,6 +99,10 @@ pub fn answer_with(
         "replay" => crate::window::replay(at, request),
         "resume" => crate::window::resume(at, request),
         "plan" => crate::window::plan(at, request, describe),
+        "used" => crate::outcome::used(at, door, request),
+        "outcome" => crate::outcome::outcome(at, door, request),
+        "trace" => crate::outcome::trace(at, request),
+        "utility" => crate::outcome::utility(at, request),
         "remember" => remember(at, door, request),
         "forget" => forget(at, door, request),
         // `context` needs the configuration's sections, which the caller assembles and hands
