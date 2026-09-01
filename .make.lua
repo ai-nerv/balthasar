@@ -112,19 +112,46 @@ make.recipe{
 
 ---------------------------------------------------------------------------- rust
 
-make.recipe{ name = "build", desc = "the binary",
+-- Everything that produces a binary produces the real one.
+--
+-- The debug build is 62 MB and the release build is 6.7 MB, and the difference is entirely
+-- symbols nobody reads. `[profile.release]` in Cargo.toml already does the work -- thin LTO and
+-- stripped symbols -- and the recipes simply never asked for it.
+--
+-- Deliberately NOT applied to `test`, `check` and `clippy`. Release turns off integer overflow
+-- panics and `debug_assert!`, so a suite that ran there would pass on an overflow the debug
+-- build catches -- and this is a project full of scores, decay curves and counters. It also
+-- costs a second full compile of everything. `test-release` exists for when the shipped code
+-- itself is what needs testing.
+local PROFILE = "--release"
+local BUILT = "target/release"
+
+make.recipe{ name = "build", desc = "the binary, optimized and stripped",
+             run = function()
+               sh.cargo("build", "--workspace", PROFILE)
+               report(BUILT .. "/" .. NAME)
+             end }
+make.alias("b", "build")
+
+make.recipe{ name = "build-debug", desc = "the binary, unoptimized and quick",
              run = function()
                sh.cargo("build", "--workspace")
                report("target/debug/" .. NAME)
              end }
-make.alias("b", "build")
 
 make.recipe{
   name = "run",
   desc = "run memo: --args='recall \"make test\"'",
   params = { { "--args", desc = "what to pass memo", default = "" } },
   run = function(a)
-    sh.cargo("run", "--quiet", "--bin", NAME, "--", table.unpack(oslo.text.split(a.args or "", " ")))
+    -- Split here rather than through oslo: `oslo.text` is not lent to a make script, and
+    -- reaching for it made `make run` fail with "could not index into a nil value" for anyone
+    -- who tried it.
+    local args = {}
+    for word in (a.args or ""):gmatch("%S+") do
+      args[#args + 1] = word
+    end
+    sh.cargo("run", "--quiet", PROFILE, "--bin", NAME, "--", table.unpack(args))
   end,
 }
 make.alias("r", "run")
@@ -135,6 +162,12 @@ make.alias("t", "test")
 
 make.recipe{ name = "test-all", desc = "the suite, with every feature on",
              run = function() sh.cargo("test", "--workspace", "--all-targets", "--all-features") end }
+
+-- What the binary actually does, rather than what the debug build does. Slower to compile and
+-- blind to overflow, so it is a separate recipe rather than the default -- run it before a
+-- release, not on every change.
+make.recipe{ name = "test-release", desc = "the suite against the optimized build",
+             run = function() sh.cargo("test", "--workspace", "--all-targets", PROFILE) end }
 
 make.recipe{ name = "check", desc = "type-check every target",
              run = function() sh.cargo("check", "--workspace", "--all-targets") end }
