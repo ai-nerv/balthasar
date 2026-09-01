@@ -344,6 +344,7 @@ dependencies = [
 name = "memo-distil"
 version = "0.1.0"
 dependencies = [
+ "memo-embed",
  "memo-lua",
  "memo-model",
  "memo-store",

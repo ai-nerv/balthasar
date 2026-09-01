@@ -246,3 +246,61 @@ fn what_crossed_is_asserted_and_what_did_not_is_merely_findable() {
 fn the_bar_is_two_runs() {
     assert_eq!(DISTINCT_SESSIONS, 2);
 }
+
+#[test]
+fn two_runs_wording_one_claim_differently_corroborate() {
+    // What CALLUS could not do before: corroboration was an exact digest, so a claim said two
+    // ways was two claims said once each — and neither reached the bar.
+    let mut store = Store::ephemeral().expect("store");
+    said(&mut store, "s1", "we use make test", MARCH);
+    said(&mut store, "s2", "run make test instead", MARCH + 86_400);
+
+    let report = run(&mut store, AUGUST);
+    assert_eq!(report.promoted.len(), 1, "{:?}", report.promoted);
+
+    // Both runs are witnesses, which is what makes the diversity real rather than asserted.
+    let kept = store.all().expect("all");
+    let fact = kept.iter().find(|m| m.tier == Tier::Fact).expect("a fact");
+    let why = store.witnesses_of(&fact.id).expect("witnesses");
+    assert_eq!(why.len(), 2);
+    assert!(why.iter().all(|w| w.kind == WitnessKind::Repetition));
+
+    // And the note says how it was matched. A rewording judged to be one claim is weaker
+    // evidence than a repeat, and `memo why` must not present them as the same thing.
+    assert!(
+        why.iter()
+            .any(|w| w.note.as_deref().is_some_and(|n| n.contains("reworded"))),
+        "the note admits it was a rewording: {:?}",
+        why.iter().map(|w| w.note.clone()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_claim_and_its_replacement_never_corroborate_each_other() {
+    // The failure that would make this whole change unsafe. These two runs disagree, and a
+    // store that read them as agreeing would assert a deploy target on the strength of a run
+    // that said the opposite.
+    let mut store = Store::ephemeral().expect("store");
+    said(&mut store, "s1", "we deploy with fly.io", MARCH);
+    said(&mut store, "s2", "we deploy with heroku", MARCH + 86_400);
+
+    let report = run(&mut store, AUGUST);
+    assert!(
+        report.promoted.is_empty(),
+        "neither is corroborated: {:?}",
+        report.promoted
+    );
+}
+
+#[test]
+fn one_run_saying_it_two_ways_is_still_one_run() {
+    // Merging must not manufacture the very diversity it is counted for. A person restating
+    // themselves is the case CALLUS exists to refuse.
+    let mut store = Store::ephemeral().expect("store");
+    said(&mut store, "s1", "we use make test", MARCH);
+    said(&mut store, "s1", "run make test instead", MARCH + 60);
+
+    let report = run(&mut store, AUGUST);
+    assert!(report.promoted.is_empty(), "{:?}", report.promoted);
+    assert_eq!(DISTINCT_SESSIONS, 2, "the bar is unchanged");
+}

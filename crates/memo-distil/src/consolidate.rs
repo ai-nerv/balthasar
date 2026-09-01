@@ -17,7 +17,7 @@ use memo_lua::Settings;
 use memo_model::{
     Body, Memory, NoteKind, ScopeId, SessionId, Tier, Timestamp, Witness, WitnessId, WitnessKind,
 };
-use memo_store::{Cluster, Landing, Store, mint};
+use memo_store::{Landing, Store, mint};
 
 /// How many distinct sessions must have seen something before it belongs to the project.
 ///
@@ -94,29 +94,35 @@ pub fn consolidate(
     // Where the scratch is. A host that keeps each run in its own file has to be asked across
     // all of them; one that keeps everything in the project's store answers from a query.
     let mut scratch = scratch;
-    let groups = match scratch.as_mut() {
+    // Every claim, not only the ones already repeated word for word. Two runs wording one thing
+    // differently are two clusters of one session each, and asking the store for corroborated
+    // clusters would drop both before anything could notice they agree.
+    let found = match scratch.as_mut() {
         Some(pad) => {
             if !dry_run {
                 report.decayed += pad.weaken_all(now)?;
             }
-            pad.recurring(
-                scope.as_str(),
-                DISTINCT_SESSIONS,
-                now - HORIZON,
-                RUNS_PER_PASS,
-            )?
+            pad.recurring(scope.as_str(), 1, now - HORIZON, RUNS_PER_PASS)?
         }
-        None => store.scratch_clusters(scope.as_str(), DISTINCT_SESSIONS)?,
+        None => store.scratch_clusters(scope.as_str(), 1)?,
     };
 
-    for group in groups {
+    // Fold the rewordings together, and only then ask which claims are corroborated. The bar is
+    // unchanged — what changed is that a claim gets to arrive at it in more than one wording.
+    let groups = crate::merge(found)
+        .into_iter()
+        .filter(|akin| akin.cluster.sessions.len() >= DISTINCT_SESSIONS);
+
+    for akin in groups {
         report.clusters += 1;
         if dry_run {
-            report.promoted.push(group.text);
+            report.promoted.push(akin.cluster.text);
             continue;
         }
-        match promote(store, settings, scope, &group, now)? {
-            Landing::Added(_) | Landing::Superseded { .. } => report.promoted.push(group.text),
+        match promote(store, settings, scope, &akin, now)? {
+            Landing::Added(_) | Landing::Superseded { .. } => {
+                report.promoted.push(akin.cluster.text);
+            }
             Landing::Reinforced(_) => report.reinforced += 1,
         }
     }
@@ -140,9 +146,10 @@ fn promote(
     store: &mut Store,
     settings: &Settings,
     scope: &ScopeId,
-    group: &Cluster,
+    akin: &crate::Akin,
     now: Timestamp,
 ) -> Result<Landing, DistilError> {
+    let group = &akin.cluster;
     let mut memory = Memory::new(
         mint(now),
         Tier::Fact,
@@ -159,7 +166,7 @@ fn promote(
         who: None,
     };
 
-    let first = witness_for(group, 0, scope, settings, now);
+    let first = witness_for(akin, 0, scope, settings, now);
     let landing = store.remember(memory, first, now)?;
 
     // Every other session that saw it is its own witness. Attaching them one at a time is what
@@ -167,7 +174,7 @@ fn promote(
     for (index, _) in group.sessions.iter().enumerate().skip(1) {
         store.attach(
             landing.id(),
-            witness_for(group, index, scope, settings, now),
+            witness_for(akin, index, scope, settings, now),
             now,
         )?;
     }
@@ -176,12 +183,13 @@ fn promote(
 
 /// One session's testimony for a recurring claim.
 fn witness_for(
-    group: &Cluster,
+    akin: &crate::Akin,
     index: usize,
     scope: &ScopeId,
     settings: &Settings,
     now: Timestamp,
 ) -> Witness {
+    let group = &akin.cluster;
     let session = group
         .sessions
         .get(index)
@@ -194,7 +202,14 @@ fn witness_for(
         scope.clone(),
         group.first_seen.min(now),
     )
-    .noted("recurred across sessions (rules, not a model)");
+    // Said in the note, because it is the part a person might disagree with. "Recurred" and
+    // "was said in different words and judged to be the same claim" are different strengths of
+    // evidence, and `memo why` has to be able to tell them apart.
+    .noted(if akin.near {
+        "recurred across sessions, reworded (rules, not a model)"
+    } else {
+        "recurred across sessions (rules, not a model)"
+    });
     witness.weight = settings.weight(WitnessKind::Repetition);
     witness
 }

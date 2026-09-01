@@ -9,6 +9,7 @@
 //! works with no key and no network. A distiller makes it better and its absence never makes
 //! it fail.
 
+mod akin;
 mod candidate;
 mod consolidate;
 mod derive;
@@ -21,6 +22,7 @@ mod observation;
 mod own;
 mod segment;
 
+pub use akin::{Akin, claim_overlap, merge, same_claim};
 pub use candidate::{Candidate, Decided, Verdict, weigh};
 pub use consolidate::{Consolidated, DISTINCT_SESSIONS, RUNS_PER_PASS, consolidate};
 pub use derive::{
