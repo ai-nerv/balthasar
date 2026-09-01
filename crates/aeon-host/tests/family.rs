@@ -34,6 +34,7 @@ impl Serving {
                 now: 1_756_000_000,
                 inject_floor: floor::INJECT,
                 live_floor: floor::LIVE,
+                capture: false,
             };
             let reply = aeon_host::answer(
                 &mut at,
@@ -57,6 +58,7 @@ impl Serving {
                     now: 1_756_000_000,
                     inject_floor: floor::INJECT,
                     live_floor: floor::LIVE,
+                    capture: false,
                 };
                 aeon_host::answer(&mut at, &Door::Socket(peer.clone()), &request)
             });

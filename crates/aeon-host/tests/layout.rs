@@ -42,6 +42,7 @@ impl Held {
             now: NOW,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
+            capture: false,
         };
         answer(
             &mut at,

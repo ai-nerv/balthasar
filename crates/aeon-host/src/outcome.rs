@@ -47,6 +47,21 @@ pub fn used(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         (held, _) => held,
     };
 
+    // What aeon can see for itself. A caller reporting "I ran `make test`" after being handed
+    // a memory that says to run `make test` is a structural match — and working it out here
+    // rather than asking is the difference between an observation and a claim.
+    let ran = text(said, "action").unwrap_or_default();
+    let matched = if memories.is_empty() && !ran.trim().is_empty() {
+        structural(at, injection, &ran)
+    } else {
+        Vec::new()
+    };
+    let (memories, attribution) = if matched.is_empty() {
+        (memories, attribution)
+    } else {
+        (matched, Attribution::Structural)
+    };
+
     let action = format!("use-{}-{}", at.now, short(injection));
     let held = Use {
         id: action.clone(),
@@ -56,8 +71,7 @@ pub fn used(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         tool: text(said, "tool"),
         // Hashed here rather than trusted from the caller, so the ledger cannot be used to
         // smuggle a command line into a table that promises not to hold one.
-        action_hash: aeon_model::content_hash(&text(said, "action").unwrap_or_default())[..16]
-            .to_owned(),
+        action_hash: aeon_model::content_hash(&ran)[..16].to_owned(),
         attribution,
         memories,
     };
@@ -188,4 +202,53 @@ fn text(said: Option<&serde_json::Value>, name: &str) -> Option<String> {
 /// Enough of an id to tell two apart in a generated name.
 fn short(id: &str) -> String {
     id.chars().take(12).collect()
+}
+
+/// Which injected memories an action visibly followed.
+///
+/// The cheap, honest half of attribution. A memory that names `make test` and an action that
+/// runs `make test` are related in a way aeon can check, so it checks rather than asking — which
+/// matters because a caller claiming a structural match is asserting an analysis it did not
+/// perform, and this is the analysis.
+///
+/// Deliberately strict. It looks for a distinctive run of the memory's own text inside the
+/// action, not for shared words: "run the tests" and "make test" share a word and mean different
+/// things, and a loose match here would attribute every outcome to everything.
+fn structural(at: &mut Answering<'_>, injection: &str, action: &str) -> Vec<MemoryId> {
+    let Ok(held) = at.store.injected_in(injection) else {
+        return Vec::new();
+    };
+    let lowered = action.to_lowercase();
+
+    held.into_iter()
+        .filter(|id| {
+            let Ok(Some(memory)) = at.store.get(id) else {
+                return false;
+            };
+            // Backticked commands first: a memory that quotes a command is naming it exactly,
+            // and that is the strongest signal available without a model.
+            quoted(&memory.text())
+                .iter()
+                .any(|command| lowered.contains(&command.to_lowercase()))
+        })
+        .collect()
+}
+
+/// The commands a memory quotes.
+fn quoted(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    let mut held = String::new();
+    for c in text.chars() {
+        if c == '`' {
+            if inside && held.trim().len() > 2 {
+                out.push(held.trim().to_owned());
+            }
+            held.clear();
+            inside = !inside;
+        } else if inside {
+            held.push(c);
+        }
+    }
+    out
 }

@@ -30,6 +30,7 @@ impl Held {
             now: NOW,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
+            capture: false,
         };
         answer(
             &mut at,
@@ -234,6 +235,7 @@ fn a_host_with_no_scrollback_says_so_rather_than_pretending() {
         now: NOW,
         inject_floor: floor::INJECT,
         live_floor: floor::LIVE,
+        capture: false,
     };
     for verb in ["replay", "resume", "amend"] {
         let reply = answer(

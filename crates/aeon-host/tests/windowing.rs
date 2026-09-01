@@ -28,6 +28,7 @@ impl Harness {
             now: NOW,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
+            capture: false,
         };
         answer(&mut at, &Door::Owner, request)
     }
@@ -46,6 +47,7 @@ impl Harness {
             now: NOW,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
+            capture: false,
         };
         let reply = answer_with(&mut at, &Door::Owner, &request, |entry| {
             entry

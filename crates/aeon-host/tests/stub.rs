@@ -29,6 +29,7 @@ fn serving(name: &str, seed: &[&str]) -> (std::path::PathBuf, std::thread::JoinH
             now: NOW,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
+            capture: false,
         };
         aeon_host::answer(
             &mut at,
@@ -50,6 +51,7 @@ fn serving(name: &str, seed: &[&str]) -> (std::path::PathBuf, std::thread::JoinH
                 now: NOW,
                 inject_floor: floor::INJECT,
                 live_floor: floor::LIVE,
+                capture: false,
             };
             aeon_host::answer(&mut at, &Door::Socket(peer.clone()), &request)
         });

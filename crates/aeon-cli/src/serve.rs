@@ -54,6 +54,9 @@ pub fn serve(
     let mut opened: std::collections::HashMap<aeon_store::Tool, Opened> =
         std::collections::HashMap::new();
     let fallback = tool.tool.clone();
+    // Read once at startup rather than per request: a configuration that changed mid-session
+    // would make half a run's ledger and half not, which is worse than either.
+    let capture = loaded.settings().ledger().capture;
 
     listener.serve(|peer: &Peer, request: Request| {
         let named = named_by_kernel(peer).unwrap_or_else(|| fallback.clone());
@@ -90,6 +93,7 @@ pub fn serve(
             now: now(),
             inject_floor: floors.inject,
             live_floor: floors.live,
+            capture,
         };
         aeon_host::answer_with(&mut at, &Door::Socket(peer.clone()), &request, |entry| {
             loaded.mask(entry)
@@ -127,6 +131,7 @@ pub fn api(
         args: parsed,
     };
 
+    let capture = loaded.settings().ledger().capture;
     let reply = match open(store_path, scope, tool).and_then(|store| {
         crate::scrollback(store_path, scope, tool).map(|scrollback| (store, scrollback))
     }) {
@@ -139,6 +144,7 @@ pub fn api(
                 now: now(),
                 inject_floor: floors.inject,
                 live_floor: floors.live,
+                capture,
             };
             // One-shot is the owner's own door: it is this process, started by whoever ran it,
             // with no socket in between and nobody else to attribute it to.

@@ -33,6 +33,12 @@ pub struct Answering<'a> {
     pub inject_floor: f64,
     /// Where keeping begins.
     pub live_floor: f64,
+    /// Whether the use-and-outcome ledger records anything.
+    ///
+    /// Off unless a configuration asked. Recording costs writes on the recall path, and a
+    /// memory layer that started keeping a trail of what a caller searched for because a new
+    /// version shipped is not one anybody should install.
+    pub capture: bool,
 }
 
 impl Answering<'_> {
@@ -178,12 +184,115 @@ fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
     // ask a second question to find out which run it means, and "which session" is one of the
     // two questions every answer here has to be able to settle.
     let names = session_names(at);
-    Reply::one(serde_json::json!(
-        found
-            .into_iter()
-            .map(|hit| describe(&hit.memory, at.inject_floor, at.now, &names))
-            .collect::<Vec<_>>()
-    ))
+    let described: Vec<serde_json::Value> = found
+        .iter()
+        .map(|hit| describe(&hit.memory, at.inject_floor, at.now, &names))
+        .collect();
+
+    // Handing memories to a caller that is about to put them in a model's context *is* an
+    // injection, and pretending otherwise would mean the ledger only ever saw the injections
+    // somebody remembered to declare. The id goes back with the results so the caller can say
+    // what it then did — which is the only way an outcome ever becomes attributable.
+    let injection = if at.capture {
+        match note_served(at, &found, opts) {
+            Ok(id) => Some(id),
+            Err(why) => return Reply::refused(why.to_string()),
+        }
+    } else {
+        None
+    };
+
+    match injection {
+        None => Reply::one(serde_json::json!(described)),
+        Some(id) => Reply::one(serde_json::json!({
+            "injection": id,
+            "memories": described,
+        })),
+    }
+}
+
+/// Record that a search happened and that its results were handed over.
+///
+/// After the answer is decided, never before it: the ledger is instrumentation, and there is no
+/// path from here back into what was returned.
+fn note_served(
+    at: &mut Answering<'_>,
+    found: &[aeon_store::Scored],
+    opts: Option<&serde_json::Value>,
+) -> Result<String, aeon_store::StoreError> {
+    let session = opts
+        .and_then(|o| o.get("session"))
+        .and_then(serde_json::Value::as_str)
+        .map(SessionId::new);
+    let query_hash = aeon_model::content_hash(
+        opts.and_then(|o| o.get("query"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default(),
+    )[..16]
+        .to_owned();
+    let stamp = format!("{}-{}", at.now, &query_hash[..8]);
+
+    at.store.note_recall(
+        &aeon_store::RecallRun {
+            id: format!("recall-{stamp}"),
+            scope: at.scope.clone(),
+            session: session.clone(),
+            query_hash,
+            requested_at: at.now,
+            config_fingerprint: String::new(),
+            vector_available: false,
+            result_limit: found.len(),
+            latency_us: 0,
+        },
+        &found
+            .iter()
+            .enumerate()
+            .map(|(rank, hit)| aeon_store::Candidate {
+                memory: hit.memory.id.clone(),
+                rank,
+                selected: true,
+                score: hit.score,
+                signals: aeon_store::Signals {
+                    semantic: hit.semantic.unwrap_or(0.0),
+                    lexical: hit.lexical,
+                    entity: hit.entity,
+                    frecency: hit.frecency,
+                    confidence: hit.confidence,
+                    strength: hit.strength,
+                    scope: f64::from(u8::from(hit.near)),
+                },
+            })
+            .collect::<Vec<_>>(),
+    )?;
+
+    let injection = format!("inject-{stamp}");
+    let tokens: usize = found
+        .iter()
+        .map(|h| h.memory.text().len().div_ceil(4))
+        .sum();
+    at.store.note_injection(
+        &aeon_store::Injection {
+            id: injection.clone(),
+            recall: Some(format!("recall-{stamp}")),
+            session,
+            created_at: at.now,
+            token_count: tokens,
+            remote: true,
+            policy: "balanced".to_owned(),
+        },
+        &found
+            .iter()
+            .map(|hit| {
+                let mode = if hit.memory.is_assertable(at.inject_floor, at.now, true) {
+                    aeon_model::Presentation::Asserted
+                } else {
+                    aeon_model::Presentation::Evidence
+                };
+                (hit.memory.id.clone(), mode)
+            })
+            .collect::<Vec<_>>(),
+    )?;
+    Ok(injection)
 }
 
 /// The evidence for one memory.

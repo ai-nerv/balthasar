@@ -463,6 +463,21 @@ impl Store {
         }))
     }
 
+    /// Which memories one injection carried, in the order they were placed.
+    ///
+    /// What structural attribution starts from: an action can only have followed something it
+    /// was actually given.
+    pub fn injected_in(&self, injection: &str) -> Result<Vec<MemoryId>, StoreError> {
+        let mut statement = self.db().prepare(
+            "SELECT memory_id FROM injection_memory WHERE injection_id = ?1 ORDER BY position",
+        )?;
+        let rows = statement
+            .query_map(params![injection], |r| {
+                Ok(MemoryId::new(r.get::<_, String>(0)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
     /// One action, as the ledger recorded it.
     pub fn use_of(&self, action: &str) -> Result<Option<Use>, StoreError> {
         let held = self
