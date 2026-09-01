@@ -402,6 +402,7 @@ fn witness_weights(config: &Config) -> Vec<(WitnessKind, f64)> {
         WitnessKind::Repetition,
         WitnessKind::Distillation,
         WitnessKind::Consolidation,
+        WitnessKind::Inferred,
         WitnessKind::Manual,
     ];
     KINDS

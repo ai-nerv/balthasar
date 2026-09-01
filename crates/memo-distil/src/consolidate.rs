@@ -97,15 +97,17 @@ pub fn consolidate(
     // Every claim, not only the ones already repeated word for word. Two runs wording one thing
     // differently are two clusters of one session each, and asking the store for corroborated
     // clusters would drop both before anything could notice they agree.
-    let found = match scratch.as_mut() {
-        Some(pad) => {
-            if !dry_run {
-                report.decayed += pad.weaken_all(now)?;
-            }
-            pad.recurring(scope.as_str(), 1, now - HORIZON, RUNS_PER_PASS)?
+    // Both places scratch lives, always. A run's own file holds what it observed; the project
+    // store holds what a pass *held* — a claim one witness short of the floor, waiting for the
+    // second. Reading only the run files made everything held invisible to the thing whose job
+    // is to corroborate it.
+    let mut found = store.scratch_clusters(scope.as_str(), 1)?;
+    if let Some(pad) = scratch.as_mut() {
+        if !dry_run {
+            report.decayed += pad.weaken_all(now)?;
         }
-        None => store.scratch_clusters(scope.as_str(), 1)?,
-    };
+        found.extend(pad.recurring(scope.as_str(), 1, now - HORIZON, RUNS_PER_PASS)?);
+    }
 
     // Fold the rewordings together, and only then ask which claims are corroborated. The bar is
     // unchanged — what changed is that a claim gets to arrive at it in more than one wording.

@@ -16,6 +16,7 @@ mod derive;
 mod distil;
 mod episode;
 mod extract;
+mod infer;
 pub(crate) mod ingest;
 mod instruction;
 mod observation;
@@ -31,6 +32,7 @@ pub use derive::{
 pub use distil::{Budget, Distil, DistilFailure, Spawned, backends, first_answer};
 pub use episode::{Told, avoidance, tell};
 pub use extract::{Extracted, extract};
+pub use infer::propose;
 pub use ingest::{EXTRACTOR_VERSION, Ingest, Provenance, Report, Source, ingest};
 pub use instruction::{Instruction, read as read_instruction};
 pub use observation::{Kind, Meta, Observation, Role};

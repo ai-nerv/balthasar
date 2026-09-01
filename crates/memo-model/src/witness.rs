@@ -27,6 +27,13 @@ pub enum WitnessKind {
     Distillation,
     /// A sleep pass produced it. Never crosses alone.
     Consolidation,
+    /// A model read the session and proposed it. Never crosses alone.
+    ///
+    /// The only witness memo did not work out for itself, and it is deliberately worth less
+    /// than any of them. A model is good at reading what a person meant and has no way to know
+    /// whether it is true — so what it produces is a candidate that must find corroboration,
+    /// never a fact. Every one records which backend said it, so `memo why` can name it.
+    Inferred,
     /// Typed at the CLI, or written by a peer. Proposes; does not assert.
     Manual,
 }
@@ -42,6 +49,7 @@ impl WitnessKind {
             Self::Repetition => 0.25,
             Self::Distillation => 0.3,
             Self::Consolidation => 0.2,
+            Self::Inferred => 0.35,
             Self::Manual => 0.4,
         }
     }
@@ -71,6 +79,7 @@ impl WitnessKind {
             Self::Repetition => "repetition",
             Self::Distillation => "distillation",
             Self::Consolidation => "consolidation",
+            Self::Inferred => "inferred",
             Self::Manual => "manual",
         }
     }
@@ -221,6 +230,7 @@ impl FromStr for WitnessKind {
             "repetition" => Ok(Self::Repetition),
             "distillation" => Ok(Self::Distillation),
             "consolidation" => Ok(Self::Consolidation),
+            "inferred" => Ok(Self::Inferred),
             "manual" => Ok(Self::Manual),
             other => Err(UnknownKind(other.to_owned())),
         }
@@ -309,5 +319,47 @@ mod tests {
         ] {
             assert_eq!(kind.as_str().parse(), Ok(kind));
         }
+    }
+}
+
+#[cfg(test)]
+mod inferred_tests {
+    use super::*;
+
+    #[test]
+    fn a_model_may_propose_and_may_not_decide() {
+        // The whole shape of the optional model path. An inferred claim has to find a second
+        // witness, which means the thing that decides is still the evidence and not the model.
+        assert!(!WitnessKind::Inferred.crosses_alone(crate::floor::PROMOTE));
+        assert!(
+            WitnessKind::Inferred.weight() >= crate::floor::HOLD,
+            "but it waits in scratch rather than dying with the session"
+        );
+        assert!(!WitnessKind::Inferred.pins());
+    }
+
+    #[test]
+    fn a_model_is_worth_less_than_the_person_it_read() {
+        // If this ever inverts, a model's reading of what somebody said outweighs what they
+        // actually typed, and the ladder has stopped meaning anything.
+        for louder in [
+            WitnessKind::Imperative,
+            WitnessKind::Correction,
+            WitnessKind::Cost,
+            WitnessKind::Manual,
+        ] {
+            assert!(
+                louder.weight() > WitnessKind::Inferred.weight(),
+                "{louder} must outweigh a model's guess"
+            );
+        }
+    }
+
+    #[test]
+    fn an_inferred_witness_survives_the_round_trip() {
+        assert_eq!(
+            WitnessKind::Inferred.as_str().parse(),
+            Ok(WitnessKind::Inferred)
+        );
     }
 }

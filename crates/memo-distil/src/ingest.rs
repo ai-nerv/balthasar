@@ -76,6 +76,10 @@ pub struct Report {
     pub observations: usize,
     /// Candidates the extractors proposed.
     pub proposed: usize,
+    /// How many of those a model proposed rather than a rule.
+    pub inferred: usize,
+    /// Which backend read the session, when one did.
+    pub by: Option<String>,
     /// Candidates that crossed the gate.
     pub promoted: usize,
     /// Candidates that reinforced something already held.
@@ -239,7 +243,12 @@ pub(crate) fn land(
 
         match verdict {
             Verdict::Refuse { reason } => report.refused.push((candidate.text(), reason)),
-            Verdict::Hold => report.held += 1,
+            Verdict::Hold => {
+                report.held += 1;
+                if !from.dry_run {
+                    hold(store, from, candidate)?;
+                }
+            }
             Verdict::Promote { importance, pinned } => {
                 if from.dry_run {
                     report.promoted += 1;
@@ -306,6 +315,61 @@ fn decide(engine: &mut Engine, settings: &Settings, candidate: &Candidate, score
     verdict
 }
 
+/// Keep a candidate that did not earn a place, with the evidence it did earn.
+///
+/// "Not yet" is the whole reason there are three verdicts rather than two, and until now it did
+/// nothing — a held candidate was counted and dropped, so a claim one witness short of the floor
+/// died with the pass that found it and the second witness had nothing to land on.
+///
+/// It lands as scratch, which is the tier that means *this session's own*: findable, decaying,
+/// and below anything that gets asserted. What makes it worth writing is that consolidation
+/// reads scratch, so the next run to say the same thing corroborates it.
+fn hold(store: &mut Store, from: &Provenance, candidate: &Candidate) -> Result<(), DistilError> {
+    let mut memory = Memory::new(
+        mint(from.now),
+        memo_model::Tier::Scratch,
+        from.scope.clone(),
+        candidate.body.clone(),
+        from.now,
+    );
+    memory.temporal = memo_model::Temporal::recalled(from.now, from.happened);
+    memory.session = Some(from.session.clone());
+    memory.provenance = memo_model::Provenance {
+        through: from.through,
+        who: Some(from.who.clone()),
+    };
+    store.remember(memory, witness_for(from, candidate), from.now)?;
+    Ok(())
+}
+
+/// The evidence one candidate carries, whichever verdict it got.
+fn witness_for(from: &Provenance, candidate: &Candidate) -> Witness {
+    let witness = Witness::new(
+        WitnessId::new(format!(
+            "{}:{}:{}",
+            candidate.from,
+            candidate.cursor.unwrap_or(0),
+            &memo_model::content_hash(&candidate.text())[..8]
+        )),
+        candidate.witness,
+        from.session.clone(),
+        from.scope.clone(),
+        from.happened,
+    )
+    // What produced it, in its own terms. A model-proposed claim already says which backend
+    // read it, and appending "rules, not a model" to that would make `memo why` state the
+    // opposite of the truth about the one witness kind where it matters most.
+    .noted(if candidate.witness == memo_model::WitnessKind::Inferred {
+        candidate.from.clone()
+    } else {
+        format!("{} (rules, not a model)", candidate.from)
+    });
+    match candidate.cursor {
+        Some(cursor) => witness.at_cursor(cursor),
+        None => witness,
+    }
+}
+
 /// Write one candidate, with the evidence that earned it.
 fn write(
     store: &mut Store,
@@ -334,23 +398,7 @@ fn write(
         who: Some(from.who.clone()),
     };
 
-    let witness = Witness::new(
-        WitnessId::new(format!(
-            "{}:{}:{}",
-            candidate.from,
-            candidate.cursor.unwrap_or(0),
-            &memory.content_hash[..8]
-        )),
-        candidate.witness,
-        session,
-        from.scope.clone(),
-        happened,
-    )
-    .noted(format!("{} (rules, not a model)", candidate.from));
-    let witness = match candidate.cursor {
-        Some(cursor) => witness.at_cursor(cursor),
-        None => witness,
-    };
+    let witness = witness_for(from, candidate);
 
     Ok(store.remember(memory, witness, from.now)?)
 }

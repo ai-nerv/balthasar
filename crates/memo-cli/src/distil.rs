@@ -70,6 +70,8 @@ pub fn run(
                 "runs": total.sessions,
                 "turns": total.observations,
                 "proposed": total.proposed,
+                "inferred": total.inferred,
+                "by": total.by,
                 "promoted": total.promoted,
                 "reinforced": total.reinforced,
                 "superseded": total.superseded,
@@ -118,6 +120,8 @@ pub(crate) fn pass(
         total.reinforced += one.reinforced;
         total.superseded += one.superseded;
         total.held += one.held;
+        total.inferred += one.inferred;
+        total.by = total.by.or(one.by);
         total.refused.extend(one.refused);
     }
     Ok(total)
@@ -153,6 +157,17 @@ fn say(report: &memo_distil::Report, waiting: usize, explain: bool) {
             report.sessions, report.observations, report.proposed
         ))
     );
+    // Named, because it is the one part of this a person did not get for free and the one part
+    // they might want to switch off.
+    if let Some(by) = &report.by {
+        crate::say!(
+            "{}",
+            render::dim(&format!(
+                "{} of them read out of the prose by {by} — each needs a second witness",
+                report.inferred
+            ))
+        );
+    }
     crate::say!();
 
     if report.promoted > 0 {

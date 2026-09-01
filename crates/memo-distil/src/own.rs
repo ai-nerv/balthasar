@@ -55,7 +55,18 @@ pub fn distil_run(
     // and a file that matters is one read three times — neither is visible one turn at a time,
     // which is why this is a pass over a finished run rather than a hook on `observe`.
     let seen: Vec<Observation> = turns.iter().map(observation).collect();
-    let found = extract(&seen, &settings.imperatives);
+    let mut found = extract(&seen, &settings.imperatives);
+
+    // Then, if a model is configured and reachable, what the rules could not read. Added to the
+    // same list rather than handled apart: an inferred claim goes through the same floors, the
+    // same configuration gate and the same store as everything else, and the only thing that
+    // makes it weaker is its weight.
+    let (backends, _) = crate::backends(engine.config().get("distiller"));
+    let (guessed, by) = crate::propose(&backends, &seen, crate::Budget::default());
+    report.inferred = guessed.len();
+    report.by = by;
+    found.candidates.extend(guessed);
+
     report.proposed = found.candidates.len();
 
     let from = Provenance {
