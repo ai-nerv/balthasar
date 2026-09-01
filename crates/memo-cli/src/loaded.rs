@@ -199,7 +199,7 @@ impl Loaded {
     /// Keyed on the tool, because only its author knows what a useful stub is: "`make test` —
     /// exit 1, 41 failures" is worth sending and "[output omitted]" is not. `None` leaves the
     /// turn alone, which is right when nobody has said.
-    pub fn mask(&mut self, entry: &memo_store::Entry) -> Option<String> {
+    pub fn mask(&mut self, entry: &memo_store::Turn) -> Option<String> {
         let tool = entry.tool.as_deref()?;
         let item = serde_json::json!({
             "cursor": entry.cursor,

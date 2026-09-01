@@ -169,29 +169,6 @@ CREATE TABLE stamp (
   PRIMARY KEY (source, ref, extractor)
 ) STRICT;
 
--- What is in a session's context window, and what it costs.
---
--- Its own table rather than columns on `memory`, because the two answer different questions and
--- change at different rates. A memory is a claim that may outlive every session; a ledger row is
--- one turn's place in one window, and it is rewritten every time a plan masks or summarises
--- something. Keeping them apart is what lets the window be replanned without touching a single
--- durable record.
-CREATE TABLE ledger (
-  session  TEXT NOT NULL,
-  cursor   INTEGER NOT NULL,
-  memory   TEXT REFERENCES memory(id),
-  role     TEXT NOT NULL,
-  kind     TEXT NOT NULL,
-  tool     TEXT,
-  tokens   INTEGER NOT NULL,
-  state    TEXT NOT NULL DEFAULT 'live',
-  pinned   INTEGER NOT NULL DEFAULT 0,
-  at       INTEGER NOT NULL,
-  PRIMARY KEY (session, cursor)
-) STRICT;
-
-CREATE INDEX ledger_live ON ledger(session, state, cursor);
-
 -- What a memory is about. A store that knows only words cannot tell `deployment` from
 -- `we deploy with fly`.
 CREATE TABLE entity (
@@ -458,25 +435,6 @@ mod tests {
                 .is_err(),
             "the store must still refuse to say both"
         );
-    }
-
-    #[test]
-    fn a_turn_occupies_one_place_in_one_window() {
-        // Keyed on (session, cursor): a harness that re-sends a turn is correcting what it
-        // said about it, not adding a second copy of it to the window.
-        let connection = migrated();
-        let insert = "INSERT OR REPLACE INTO ledger \
-             (session, cursor, role, kind, tokens, at) VALUES ('s', 7, 'tool', ?, 100, 0)";
-        connection
-            .execute(insert, rusqlite::params!["tool_result"])
-            .expect("first");
-        connection
-            .execute(insert, rusqlite::params!["prose"])
-            .expect("again");
-        let rows: i64 = connection
-            .query_row("SELECT count(*) FROM ledger", [], |r| r.get(0))
-            .expect("count");
-        assert_eq!(rows, 1);
     }
 
     #[test]

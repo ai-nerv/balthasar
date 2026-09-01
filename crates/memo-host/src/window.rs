@@ -8,13 +8,14 @@ use crate::Answering;
 use memo_buffer::{Plan, Window};
 use memo_ipc::{Reply, Request};
 use memo_model::{Body, Memory, NoteKind, SessionId, Tier};
-use memo_store::{Entry, State, mint};
+use memo_store::{State, mint};
 
 /// Record one turn.
 ///
-/// The text goes into scratch, which is the session's own; the ledger row is its place in the
-/// window. Two records because they answer different questions and change at different rates —
-/// the claim may outlive every session, the row is rewritten on every plan.
+/// The turn goes to the scrollback, which is the only record of the conversation: what a
+/// harness sends, what a plan reshapes, and what a replay hands back all read the same rows.
+/// A scratch memory is kept alongside it, and that is a different thing — a claim that may
+/// outlive every session, where the turn is one moment in one run.
 pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("observe needs a session");
@@ -87,15 +88,6 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
 
-    // The harness's own count when it has one. It billed the request; we estimated.
-    let tokens = turn
-        .get("tokens")
-        .and_then(serde_json::Value::as_u64)
-        .map_or_else(
-            || u32::try_from(text.len().div_ceil(4)).unwrap_or(u32::MAX),
-            |n| u32::try_from(n).unwrap_or(u32::MAX),
-        );
-
     // Scratch, not fact. What a session says is the session's until something on the ladder
     // carries it across, and observing is not that something.
     let memory = if text.is_empty() {
@@ -121,35 +113,57 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
         }
     };
 
-    let entry = Entry {
-        cursor,
-        memory,
-        role,
-        kind,
-        tool,
-        tokens,
-        state: State::Live,
-        pinned: turn
-            .get("pinned")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
-        at: at.now,
-    };
-
     // The first thing asked is what the run was for, which is the closest thing to a name a
     // session has without asking a model to invent one.
-    if entry.role == "user" && !text.is_empty() {
+    if role == "user" && !text.is_empty() {
         let _ = at.store.title_session(&session, text);
         let _ = at
             .run(&session)
             .map(|run| run.title_session(&session, text));
     }
 
-    match at
-        .run(&session)
-        .and_then(|run| run.observe(&session, &entry))
-    {
-        Ok(()) => Reply::none(),
+    let _ = (cursor, kind, tool, memory);
+    Reply::none()
+}
+
+/// Say what model this run talks to, and how much it holds.
+///
+/// Told once, at the start of a run. memo does the compacting, which means memo has to know the
+/// size of the thing it is compacting for — and it cannot be guessed from the turns, because a
+/// conversation that fits comfortably in a million tokens overflowed an eight-thousand-token
+/// model twenty turns ago.
+pub fn model(at: &mut Answering<'_>, request: &Request) -> Reply {
+    let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
+        return Reply::refused("model needs a session");
+    };
+    let session = SessionId::new(session);
+    let Some(scrollback) = at.scrollback.as_mut() else {
+        return Reply::refused("this memo keeps no scrollback");
+    };
+
+    let said = request.args.get(1);
+    let Some(name) = said
+        .and_then(|s| s.get("model"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        // Asking rather than telling. A harness restoring a run needs to know what it was
+        // planning against before it plans again.
+        return match scrollback.model_of(&session) {
+            Ok(Some((name, context))) => {
+                Reply::one(serde_json::json!({ "model": name, "context": context }))
+            }
+            Ok(None) => Reply::one(serde_json::json!({ "model": null, "context": null })),
+            Err(why) => Reply::refused(why.to_string()),
+        };
+    };
+    let context = said
+        .and_then(|s| s.get("context"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .unwrap_or(Window::default().size);
+
+    match scrollback.note_model(&session, name, context) {
+        Ok(()) => Reply::one(serde_json::json!({ "model": name, "context": context })),
         Err(why) => Reply::refused(why.to_string()),
     }
 }
@@ -162,7 +176,7 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
 pub fn plan(
     at: &mut Answering<'_>,
     request: &Request,
-    describe: impl FnMut(&Entry) -> Option<String>,
+    describe: impl FnMut(&memo_store::Turn) -> Option<String>,
 ) -> Reply {
     let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("plan needs a session");
@@ -170,9 +184,21 @@ pub fn plan(
     let session = SessionId::new(session);
     let said = request.args.get(1);
 
+    let Some(scrollback) = at.scrollback.as_mut() else {
+        return Reply::refused("planning needs a scrollback to plan over");
+    };
+
+    // What the harness said, else what the run recorded, else the shipped guess. The size is
+    // the one number that decides whether a prompt is accepted, and a run that said which model
+    // it talks to should not have to repeat it on every plan.
     let fallback = Window::default();
+    let noted = scrollback.model_of(&session).ok().flatten();
     let window = Window {
-        size: number(said, "window", u32::from(fallback.size > 0) * fallback.size),
+        size: number(
+            said,
+            "window",
+            noted.as_ref().map_or(fallback.size, |(_, size)| *size),
+        ),
         reserve: number(said, "reserve", fallback.reserve),
         inject: number(said, "inject", fallback.inject),
         mask_over: number(said, "mask_over", fallback.mask_over),
@@ -180,7 +206,7 @@ pub fn plan(
         masked_cost: fallback.masked_cost,
     };
 
-    let entries = match at.run(&session).and_then(|run| run.ledger(&session)) {
+    let entries = match scrollback.in_window(&session) {
         Ok(entries) => entries,
         Err(why) => return Reply::refused(why.to_string()),
     };
@@ -194,16 +220,12 @@ pub fn plan(
     // The plan is recorded as it is handed over. A harness that applies it and then asks again
     // must not be told to mask what it has already masked.
     for masked in &plan.mask {
-        let _ = at
-            .run(&session)
-            .map(|run| run.mark(&session, masked.cursor, State::Masked));
+        let _ = scrollback.mark(&session, masked.cursor, State::Masked);
     }
     if let Some(span) = plan.summarise {
         for cursor in &plan.drop {
             if *cursor >= span.from && *cursor <= span.to {
-                let _ = at
-                    .run(&session)
-                    .map(|run| run.mark(&session, *cursor, State::Summarised));
+                let _ = scrollback.mark(&session, *cursor, State::Summarised);
             }
         }
         // TIDE. The moment a span leaves the window is the last moment anybody will look at
@@ -235,10 +257,22 @@ fn turn_of(
     memo_store::Turn {
         // Which message this block belongs to, when the harness splits one into several. Absent
         // for a turn that is its own message, which is what a plain user turn is.
+        pinned: turn
+            .get("pinned")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        state: State::default(),
         entry: turn
             .get("entry")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
+        // What the harness was charged, when it says. It has the provider's number and memo
+        // only has an estimate, so a budget spent against the estimate drifts from what the
+        // model will actually refuse. Absent is not zero: a reader falls back to estimating.
+        tokens: turn
+            .get("tokens")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok()),
         cursor: turn
             .get("cursor")
             .and_then(serde_json::Value::as_u64)
@@ -420,7 +454,7 @@ pub fn resume(at: &mut Answering<'_>, request: &Request) -> Reply {
 fn distil(
     at: &mut Answering<'_>,
     session: &SessionId,
-    entries: &[Entry],
+    entries: &[memo_store::Turn],
     span: memo_buffer::Span,
 ) -> Result<usize, memo_store::StoreError> {
     let mut carried = 0;
@@ -428,7 +462,10 @@ fn distil(
         if entry.cursor < span.from || entry.cursor > span.to {
             continue;
         }
-        let Some(id) = &entry.memory else { continue };
+        let scope = at.scope.clone();
+        let Some(id) = at.run(session)?.scratch_for(&scope, session, &entry.text)? else {
+            continue;
+        };
         let witness = memo_model::Witness::new(
             memo_model::WitnessId::new(format!("tide-{}-{}", session, entry.cursor)),
             memo_model::WitnessKind::Distillation,
@@ -441,7 +478,7 @@ fn distil(
         // In the run's own store, which is where the memory a summary stands in for lives.
         // Attaching in the project's would be evidence for a memory that is not there.
         let now = at.now;
-        at.run(session)?.attach(id, witness, now)?;
+        at.run(session)?.attach(&id, witness, now)?;
         carried += 1;
     }
     Ok(carried)

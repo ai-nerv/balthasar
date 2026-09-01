@@ -71,7 +71,7 @@ pub fn answer_with(
     at: &mut Answering<'_>,
     door: &Door,
     request: &Request,
-    describe: impl FnMut(&memo_store::Entry) -> Option<String>,
+    describe: impl FnMut(&memo_store::Turn) -> Option<String>,
 ) -> Reply {
     let Some(verb) = verbs::known(&request.call) else {
         // Naming what is available beats "unknown verb": the usual cause is a sibling built
@@ -105,6 +105,7 @@ pub fn answer_with(
         "replay" => crate::window::replay(at, request),
         "scroll" => crate::window::scroll(at, request),
         "resume" => crate::window::resume(at, request),
+        "model" => crate::window::model(at, request),
         "plan" => crate::window::plan(at, request, describe),
         "used" => crate::outcome::used(at, door, request),
         "outcome" => crate::outcome::outcome(at, door, request),

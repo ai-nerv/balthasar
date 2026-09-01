@@ -19,7 +19,6 @@ mod decay;
 mod entity;
 mod episode;
 mod export;
-mod ledger;
 mod mint;
 mod paths;
 mod purge;
@@ -39,13 +38,12 @@ pub use decay::{Faded, Weakened};
 pub use entity::{Entity, Kind as EntityKind, extract as entities_in, rarity};
 pub use episode::Episode;
 pub use export::Row as TrainingRow;
-pub use ledger::{Entry, State};
 pub use mint::mint;
 pub use paths::{
     HOME, Tool, data_dir, home_of, make_home, project_home, scope_of, scope_path, session_dir,
     session_dir_in, session_path, session_transcript_path, tools_in,
 };
-pub use purge::{Closure, closure_of, purge, purge_domain, purge_session};
+pub use purge::{Closure, closure_of, purge, purge_domain, purge_run, purge_session};
 pub use read::{Cluster, Recall};
 pub use relate::Reach;
 pub use schema::VERSION as SCHEMA_VERSION;
@@ -53,7 +51,7 @@ pub use score::{Scored, Weights, cosine, coverage, frecency};
 pub use scratchpad::Scratchpad;
 pub use scroll::{Budget, Read, Want, tokens_of};
 pub use session::{Session, name_for};
-pub use transcript::{Run, Transcript, Turn, transcript_path};
+pub use transcript::{Run, State, Transcript, Turn, transcript_path};
 pub use usage::{Candidate, Injection, RecallRun, Signals, Trace, TracedAction, Use, Verdict};
 pub use write::Landing;
 

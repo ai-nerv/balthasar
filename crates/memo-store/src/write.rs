@@ -422,6 +422,37 @@ impl Store {
         self.insert_unwitnessed(memory, now)
     }
 
+    /// The scratch memory a session holds for this text, if any.
+    ///
+    /// How a turn finds its own memory. The transcript holds no memory id — it is a separate
+    /// file and a reference across the two could dangle — so the text is the join, which is
+    /// also what `keep_scratch` deduplicates on.
+    pub fn scratch_for(
+        &self,
+        scope: &memo_model::ScopeId,
+        session: &memo_model::SessionId,
+        text: &str,
+    ) -> Result<Option<MemoryId>, StoreError> {
+        let probe = Memory::new(
+            MemoryId::new("probe"),
+            memo_model::Tier::Scratch,
+            scope.clone(),
+            memo_model::Body::note(text, memo_model::NoteKind::Observation),
+            0,
+        );
+        let found: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT id FROM memory \
+                 WHERE scope = ?1 AND session = ?2 AND content_hash = ?3 AND tier = 'scratch' \
+                 LIMIT 1",
+                params![scope.as_str(), session.as_str(), probe.content_hash],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(found.map(MemoryId::new))
+    }
+
     /// The scratch memory this session already has for this text, if any.
     fn scratch_saying(&self, memory: &Memory) -> Result<Option<MemoryId>, StoreError> {
         let Some(session) = &memory.session else {

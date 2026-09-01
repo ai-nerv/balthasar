@@ -35,6 +35,11 @@ pub const SURFACE: &[Verb] = &[
         about: "part of a scrollback, within a budget: (session, opts) -> { turns, next }",
     },
     Verb {
+        name: "model",
+        writes: true,
+        about: "what a run talks to: (session, opts) -> { model, context }",
+    },
+    Verb {
         name: "used",
         writes: true,
         about: "a caller acted on what it was given: (injection, opts) -> { action }",

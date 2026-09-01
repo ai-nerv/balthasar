@@ -1,6 +1,6 @@
 //! How much room there is, and how much of it is spoken for.
 
-use memo_store::Entry;
+use memo_store::Turn;
 
 /// What a harness said about its window.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -76,7 +76,7 @@ pub struct Shape {
 impl Shape {
     /// Measure a ledger.
     #[must_use]
-    pub fn of(entries: &[Entry], masked_cost: u32) -> Self {
+    pub fn of(entries: &[Turn], masked_cost: u32) -> Self {
         let mut shape = Self::default();
         for entry in entries {
             let cost = entry.cost(masked_cost);
@@ -109,17 +109,16 @@ mod tests {
     use super::*;
     use memo_store::State;
 
-    fn turn(cursor: u64, role: &str, tokens: u32) -> Entry {
-        Entry {
+    fn turn(cursor: u64, role: &str, tokens: u32) -> Turn {
+        Turn {
             cursor,
-            memory: None,
             role: role.into(),
             kind: "prose".into(),
             tool: None,
-            tokens,
+            tokens: Some(tokens),
             state: State::Live,
-            pinned: false,
             at: 0,
+            ..Turn::default()
         }
     }
 

@@ -70,6 +70,26 @@ pub fn closure_of(store: &Store, id: &MemoryId) -> Result<Closure, StoreError> {
     })
 }
 
+/// Remove one run's turns from the scrollback, permanently.
+///
+/// The other half of forgetting a run. The scrollback is a separate file, so `purge_session`
+/// cannot reach it and a caller answering "forget that session" has to do both — the memories
+/// it owned and the conversation it held.
+pub fn purge_run(
+    scrollback: &crate::Transcript,
+    session: &memo_model::SessionId,
+) -> Result<usize, StoreError> {
+    let gone = scrollback.db().execute(
+        "DELETE FROM turn WHERE session = ?1",
+        params![session.as_str()],
+    )?;
+    scrollback.db().execute(
+        "DELETE FROM run WHERE session = ?1",
+        params![session.as_str()],
+    )?;
+    Ok(gone)
+}
+
 /// Remove a memory and everything that points at it, permanently.
 ///
 /// Answers how many memories went. The caller is responsible for having asked a person first;
@@ -158,10 +178,6 @@ pub fn purge_session(
     let tx = store.db_mut().transaction()?;
     tx.execute(
         "DELETE FROM witness WHERE session = ?1",
-        params![session.as_str()],
-    )?;
-    tx.execute(
-        "DELETE FROM ledger WHERE session = ?1",
         params![session.as_str()],
     )?;
     tx.execute(

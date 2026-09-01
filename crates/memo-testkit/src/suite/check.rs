@@ -82,8 +82,11 @@ fn run_case(case: &Case, report: &mut Report) {
     let settings = Settings::default();
     let scope = ScopeId::new(case.project);
 
+    // What each run has already tried. The store no longer keeps a window ledger to read this
+    // back out of, and it never should have: a scenario's own history is the scenario's.
+    let mut ran: Vec<Ran> = Vec::new();
     for act in &case.script {
-        perform(&mut store, &settings, &scope, act);
+        perform(&mut store, &settings, &scope, act, &mut ran);
     }
 
     for probe in &case.probes {
@@ -110,8 +113,23 @@ fn run_case(case: &Case, report: &mut Report) {
     }
 }
 
+/// One command a scenario has already run.
+struct Ran {
+    session: String,
+    command: String,
+    ok: bool,
+}
+
+/// What a scenario is running against: the store, its settings, and the history so far.
+struct Running<'a> {
+    store: &'a mut Store,
+    settings: &'a Settings,
+    scope: &'a ScopeId,
+    ran: &'a mut Vec<Ran>,
+}
+
 /// Do one thing, through the real pipeline.
-fn perform(store: &mut Store, settings: &Settings, scope: &ScopeId, act: &Act) {
+fn perform(store: &mut Store, settings: &Settings, scope: &ScopeId, act: &Act, ran: &mut Vec<Ran>) {
     match act {
         Act::Said { session, at, text } => {
             said(store, settings, scope, session, *at, text);
@@ -130,7 +148,18 @@ fn perform(store: &mut Store, settings: &Settings, scope: &ScopeId, act: &Act) {
             command,
             ok,
         } => {
-            tool(store, settings, scope, session, *at, command, *ok);
+            tool(
+                Running {
+                    store,
+                    settings,
+                    scope,
+                    ran,
+                },
+                session,
+                *at,
+                command,
+                *ok,
+            );
         }
         Act::Consolidate { at } => {
             consolidate(store, None, settings, scope, *at, false).expect("consolidate");
@@ -201,15 +230,13 @@ fn said(
 }
 
 /// A tool running, and whatever the ladder makes of it.
-fn tool(
-    store: &mut Store,
-    settings: &Settings,
-    scope: &ScopeId,
-    session: &str,
-    at: Timestamp,
-    command: &str,
-    ok: bool,
-) {
+fn tool(on: Running<'_>, session: &str, at: Timestamp, command: &str, ok: bool) {
+    let Running {
+        store,
+        settings,
+        scope,
+        ran,
+    } = on;
     let id = SessionId::new(session);
     store
         .open_session(&id, scope, &scope.to_string(), "suite", at)
@@ -217,13 +244,13 @@ fn tool(
 
     // The repair path needs the failure that came before it, so the whole run is replayed.
     let mut turns = Vec::new();
-    for entry in store.ledger(&id).expect("ledger") {
+    for (index, past) in ran.iter().filter(|r| r.session == session).enumerate() {
         turns.push(Observation {
-            cursor: Some(entry.cursor),
+            cursor: Some(index as u64 + 1),
             role: Role::Tool,
-            tool: entry.tool.clone(),
-            args: Some(serde_json::json!({ "command": entry.role })),
-            ok: Some(entry.state.is_live()),
+            tool: Some("shell".to_owned()),
+            args: Some(serde_json::json!({ "command": past.command })),
+            ok: Some(past.ok),
             ..Observation::default()
         });
     }
@@ -239,27 +266,11 @@ fn tool(
         ..Observation::default()
     });
 
-    // The ledger doubles as the record of what this run has already tried.
-    store
-        .observe(
-            &id,
-            &memo_store::Entry {
-                cursor,
-                memory: None,
-                role: command.to_owned(),
-                kind: "tool_result".to_owned(),
-                tool: Some("shell".to_owned()),
-                tokens: 10,
-                state: if ok {
-                    memo_store::State::Live
-                } else {
-                    memo_store::State::Dropped
-                },
-                pinned: false,
-                at,
-            },
-        )
-        .expect("observe");
+    ran.push(Ran {
+        session: session.to_owned(),
+        command: command.to_owned(),
+        ok,
+    });
 
     land(store, settings, scope, &id, at, &turns);
 }

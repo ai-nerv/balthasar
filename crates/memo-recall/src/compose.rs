@@ -18,7 +18,7 @@ use memo_model::SessionId;
 use memo_store::{Budget, Store, Transcript, Turn, Want};
 
 /// How a budget is divided between what was just said and what is known.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Split {
     /// The whole allowance.
     pub tokens: usize,
@@ -30,6 +30,8 @@ pub struct Split {
     pub memory_floor: f64,
     /// The most the scrollback may take before memory's floor bites.
     pub scrollback_ceiling: f64,
+    /// What the reply and a compaction call need kept clear.
+    pub reserve: usize,
 }
 
 impl Default for Split {
@@ -38,6 +40,7 @@ impl Default for Split {
             tokens: 8_000,
             memory_floor: 0.25,
             scrollback_ceiling: 0.75,
+            reserve: 2_000,
         }
     }
 }
@@ -62,8 +65,56 @@ impl Split {
     }
 }
 
+/// How full the window is, and how long that can last.
+///
+/// The number a caller needs before a request, not after it: whether this fits, and whether the
+/// next one will. A harness that finds out by being refused has already lost the turn.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pressure {
+    /// What the prompt costs.
+    pub used: usize,
+    /// What the model will take, less what the reply and a compaction need.
+    ///
+    /// Not the raw context size. Compacting costs a request of its own and that request needs
+    /// room, so a plan that filled the window to the brim would leave the summarisation itself
+    /// as the thing that overflows.
+    pub usable: usize,
+}
+
+impl Pressure {
+    /// The share of the usable window this prompt takes.
+    #[must_use]
+    pub fn share(&self) -> f64 {
+        if self.usable == 0 {
+            return 1.0;
+        }
+        self.used as f64 / self.usable as f64
+    }
+
+    /// What is left.
+    #[must_use]
+    pub fn headroom(&self) -> usize {
+        self.usable.saturating_sub(self.used)
+    }
+
+    /// Whether this prompt still fits.
+    #[must_use]
+    pub fn fits(&self) -> bool {
+        self.used <= self.usable
+    }
+
+    /// Whether it is time to compact.
+    ///
+    /// Before the window is full, not at it. Compaction needs a request of its own, and a
+    /// harness that waits until nothing fits has nowhere to run it.
+    #[must_use]
+    pub fn should_compact(&self) -> bool {
+        self.share() >= 0.8
+    }
+}
+
 /// A prompt: recent turns, and what memory has to add about them.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Prompt {
     /// The window into the scrollback, oldest first.
     pub turns: Vec<Turn>,
@@ -75,6 +126,21 @@ pub struct Prompt {
     pub memory: Context,
     /// The whole thing.
     pub tokens: usize,
+    /// How full this leaves the window.
+    pub pressure: Pressure,
+}
+
+impl Default for Prompt {
+    fn default() -> Self {
+        Self {
+            turns: Vec::new(),
+            scrollback_tokens: 0,
+            omitted: 0,
+            memory: Context::default(),
+            tokens: 0,
+            pressure: Pressure { used: 0, usable: 0 },
+        }
+    }
 }
 
 impl Prompt {
@@ -112,6 +178,17 @@ pub fn compose(
     split: &Split,
     redact: impl FnMut(&str, &memo_model::Memory) -> Option<String>,
 ) -> Result<Prompt, memo_store::StoreError> {
+    // The run's own model when it said which one, and the caller's split otherwise. A budget
+    // set from a default is a guess about the one number that decides whether a prompt is
+    // accepted, and the run already knows the answer.
+    let split = &match scrollback.model_of(session) {
+        Ok(Some((_, context))) => Split {
+            tokens: context as usize,
+            ..split.clone()
+        },
+        _ => split.clone(),
+    };
+
     let read = scrollback.read(
         session,
         &Want::Tail,
@@ -131,12 +208,17 @@ pub fn compose(
         redact,
     )?;
 
+    let used = read.tokens + memory.tokens;
     Ok(Prompt {
-        tokens: read.tokens + memory.tokens,
+        tokens: used,
         scrollback_tokens: read.tokens,
         omitted: read.omitted,
         turns: read.turns,
         memory,
+        pressure: Pressure {
+            used,
+            usable: split.tokens.saturating_sub(split.reserve),
+        },
     })
 }
 

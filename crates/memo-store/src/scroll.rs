@@ -139,9 +139,16 @@ fn on_a_boundary(turns: &mut Vec<Turn>, all: &[Turn]) {
 }
 
 /// What a turn costs.
+///
+/// The harness's own count when it has one — it billed the request and memo guessed at it. Four
+/// characters to a token is right about the order and wrong about the number, and a budget spent
+/// against the guess drifts further the longer the window gets.
 #[must_use]
 pub fn tokens_of(turn: &Turn) -> usize {
-    turn.text.len().div_ceil(CHARS_PER_TOKEN)
+    match turn.tokens {
+        Some(counted) => counted as usize,
+        None => turn.text.len().div_ceil(CHARS_PER_TOKEN),
+    }
 }
 
 impl Transcript {
@@ -326,7 +333,7 @@ impl Transcript {
     /// Every turn in a cursor range, in order.
     fn range(&self, session: &SessionId, from: u64, to: u64) -> Result<Vec<Turn>, StoreError> {
         let mut statement = self.db().prepare(
-            "SELECT cursor, at, role, kind, text, tool, raw, entry, revisions FROM turn \
+            "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, revisions FROM turn \
              WHERE session = ?1 AND cursor >= ?2 AND cursor <= ?3 ORDER BY cursor",
         )?;
         // Clamped, because SQLite has no unsigned integer and `u64::MAX as i64` is -1 — which
@@ -345,7 +352,10 @@ impl Transcript {
                     tool: r.get(5)?,
                     raw: r.get(6)?,
                     entry: r.get(7)?,
-                    revisions: r.get::<_, i64>(8)? as u32,
+                    tokens: r.get::<_, Option<i64>>(8)?.map(|n| n.max(0) as u32),
+                    state: r.get::<_, String>(9)?.parse().unwrap_or_default(),
+                    pinned: r.get::<_, i64>(10)? != 0,
+                    revisions: r.get::<_, i64>(11)? as u32,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

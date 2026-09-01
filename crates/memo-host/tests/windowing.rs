@@ -10,19 +10,21 @@ const SESSION: &str = "01HZ";
 
 struct Harness {
     store: Store,
+    scrollback: memo_store::Transcript,
 }
 
 impl Harness {
     fn new() -> Self {
         Self {
             store: Store::ephemeral().expect("store"),
+            scrollback: memo_store::Transcript::ephemeral().expect("scrollback"),
         }
     }
 
     fn ask(&mut self, request: &Request) -> Reply {
         let mut at = Answering {
             store: &mut self.store,
-            scrollback: None,
+            scrollback: Some(&mut self.scrollback),
             scratch: None,
             scope: ScopeId::new("/w/thing"),
             now: NOW,
@@ -41,7 +43,7 @@ impl Harness {
         };
         let mut at = Answering {
             store: &mut self.store,
-            scrollback: None,
+            scrollback: Some(&mut self.scrollback),
             scratch: None,
             scope: ScopeId::new("/w/thing"),
             now: NOW,
@@ -285,4 +287,84 @@ fn what_a_session_said_is_its_own_and_not_the_projects() {
         .map(|(_, n)| n)
         .unwrap_or(0);
     assert_eq!(facts, 0, "and none of them became the project's");
+}
+
+#[test]
+fn the_run_says_what_model_it_talks_to_and_the_plan_believes_it() {
+    // memo does the compacting, so memo has to know the size of the thing it compacts for. A
+    // harness says this once; every plan after it is made against the real number rather than
+    // a shipped guess.
+    let mut harness = Harness::new();
+    harness.observe(0, "user", 40, "carry on");
+
+    let told = harness.ask(&Request {
+        call: "model".into(),
+        args: vec![
+            serde_json::json!(SESSION),
+            serde_json::json!({ "model": "small-8k", "context": 8_000 }),
+        ],
+    });
+    assert!(told.ok, "{:?}", told.error);
+
+    let asked = harness.ask(&Request {
+        call: "model".into(),
+        args: vec![serde_json::json!(SESSION)],
+    });
+    let back = asked
+        .result
+        .and_then(|r| r.into_iter().next())
+        .expect("a model");
+    assert_eq!(back["model"], "small-8k");
+    assert_eq!(back["context"], 8_000);
+
+    // The plan is asked without a window, so the only size it can be using is the run's.
+    let plan = harness.plan(serde_json::json!({ "mask_over": 500, "keep": 8 }));
+    let target = plan["budget"]["window"].as_u64().expect("a target");
+    assert!(
+        target < 8_000,
+        "the run's own context, less its reserve, not the 200k default: {target}"
+    );
+}
+
+#[test]
+fn planning_does_not_read_what_it_cannot_use() {
+    // A scrollback has no upper bound — it is the only copy of the conversation, and nothing
+    // prunes it. A masked turn keeps its words so that masking can be undone, and the planner
+    // needs none of them: it has a stub already. Reading them anyway would have every request
+    // carry every byte the run ever produced.
+    let mut harness = Harness::new();
+    for n in 0..40 {
+        turn(&mut harness, n);
+        harness.plan(window());
+    }
+
+    let session = memo_model::SessionId::new(SESSION);
+    let all = harness.scrollback.replay(&session).expect("replay").len();
+    let live = harness
+        .scrollback
+        .in_window(&session)
+        .expect("window")
+        .len();
+    assert!(all > 100, "the whole run is still there: {all}");
+    assert_eq!(live, all, "and none of it has been summarised away yet");
+
+    let window = harness.scrollback.in_window(&session).expect("window");
+    let masked: Vec<_> = window.iter().filter(|t| !t.state.is_live()).collect();
+    assert!(!masked.is_empty(), "masking happened");
+    assert!(
+        masked.iter().all(|t| t.text.is_empty()),
+        "a masked turn's words stay in the file"
+    );
+    assert!(
+        masked.iter().all(|t| t.weight() > 0),
+        "but what it would have cost still comes back"
+    );
+
+    let full = harness.scrollback.replay(&session).expect("replay");
+    let carried: usize = window.iter().map(|t| t.text.len()).sum();
+    let whole: usize = full.iter().map(|t| t.text.len()).sum();
+    assert!(
+        carried * 4 < whole,
+        "planning carries {carried} bytes of the run\'s {whole}"
+    );
 }

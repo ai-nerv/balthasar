@@ -1,7 +1,7 @@
 //! The instruction set a harness applies.
 
 use crate::{Shape, Window};
-use memo_store::Entry;
+use memo_store::Turn;
 
 /// A turn replaced by a description of itself.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -55,9 +55,9 @@ pub struct Plan {
 /// sending and "[output omitted]" is not.
 #[must_use]
 pub fn plan(
-    entries: &[Entry],
+    entries: &[Turn],
     window: &Window,
-    mut describe: impl FnMut(&Entry) -> Option<String>,
+    mut describe: impl FnMut(&Turn) -> Option<String>,
 ) -> Plan {
     let before = Shape::of(entries, window.masked_cost);
     let target = window.target();
@@ -100,18 +100,18 @@ pub fn plan(
         if untouchable.contains(&entry.cursor) || entry.pinned || !entry.state.is_live() {
             continue;
         }
-        if entry.role != "tool" || entry.tokens < window.mask_over {
+        if entry.role != "tool" || entry.weight() < window.mask_over {
             continue;
         }
         let Some(text) = describe(entry) else {
             continue;
         };
-        let cost = tokens_of(&text).min(entry.tokens);
-        used = used.saturating_sub(entry.tokens).saturating_add(cost);
+        let cost = tokens_of(&text).min(entry.weight());
+        used = used.saturating_sub(entry.weight()).saturating_add(cost);
         plan.mask.push(Masked {
             cursor: entry.cursor,
             r#as: text,
-            was: entry.tokens,
+            was: entry.weight(),
         });
     }
 
@@ -149,7 +149,7 @@ pub fn plan(
 }
 
 /// The cursors a plan may not touch: the recent tail, and anything pinned.
-fn untouchable(entries: &[Entry], keep: usize) -> Vec<u64> {
+fn untouchable(entries: &[Turn], keep: usize) -> Vec<u64> {
     let mut out: Vec<u64> = entries.iter().rev().take(keep).map(|e| e.cursor).collect();
     out.extend(entries.iter().filter(|e| e.pinned).map(|e| e.cursor));
     out
@@ -179,7 +179,7 @@ fn pays_for_itself(freed: u32, window: &Window) -> bool {
 /// replacing. Stops as soon as it has freed enough: summarising more than is needed throws
 /// away detail for nothing.
 fn summarisable(
-    entries: &[Entry],
+    entries: &[Turn],
     untouchable: &[u64],
     masked: &[u64],
     window: &Window,
@@ -194,7 +194,7 @@ fn summarisable(
             break;
         }
         let cost = if masked.contains(&entry.cursor) {
-            window.masked_cost.min(entry.tokens)
+            window.masked_cost.min(entry.weight())
         } else {
             entry.cost(window.masked_cost)
         };
@@ -248,10 +248,9 @@ mod tests {
     use super::*;
     use memo_store::State;
 
-    fn turn(cursor: u64, role: &str, tokens: u32) -> Entry {
-        Entry {
+    fn turn(cursor: u64, role: &str, tokens: u32) -> Turn {
+        Turn {
             cursor,
-            memory: None,
             role: role.into(),
             kind: if role == "tool" {
                 "tool_result"
@@ -260,14 +259,14 @@ mod tests {
             }
             .into(),
             tool: (role == "tool").then(|| "shell".to_owned()),
-            tokens,
+            tokens: Some(tokens),
             state: State::Live,
-            pinned: false,
             at: 0,
+            ..Turn::default()
         }
     }
 
-    fn stub(_entry: &Entry) -> Option<String> {
+    fn stub(_entry: &Turn) -> Option<String> {
         Some("`make test` — ok, 41 lines".to_owned())
     }
 
@@ -366,7 +365,7 @@ mod tests {
         // A mask that made a turn bigger and was counted as having shrunk it would let a plan
         // claim room it does not have, and the overflow would arrive at the provider.
         let entries = vec![turn(1, "tool", 60), turn(2, "user", 60), turn(3, "user", 5)];
-        let long = |_: &Entry| Some("x".repeat(4000));
+        let long = |_: &Turn| Some("x".repeat(4000));
         let window = Window {
             size: 200,
             reserve: 50,

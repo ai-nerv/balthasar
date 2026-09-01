@@ -21,8 +21,66 @@ use memo_model::{SessionId, Timestamp};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 
+/// What has become of one turn in the window.
+///
+/// A turn is never removed to make room. The text stays and the state says what is sent, which
+/// is what makes compaction reversible: a masked turn can be unmasked, and a summarised span
+/// can be read back in full long after the summary replaced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum State {
+    /// Sent as it was written.
+    #[default]
+    Live,
+    /// Sent as a short description of itself.
+    Masked,
+    /// Not sent. Covered by a summary, or simply too old to matter.
+    Dropped,
+    /// Part of the span a summary stands in for.
+    Summarised,
+}
+
+impl State {
+    /// The column spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Masked => "masked",
+            Self::Dropped => "dropped",
+            Self::Summarised => "summarised",
+        }
+    }
+
+    /// Whether a turn in this state still costs its full length.
+    #[must_use]
+    pub fn is_live(self) -> bool {
+        matches!(self, Self::Live)
+    }
+}
+
+impl std::str::FromStr for State {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "live" => Ok(Self::Live),
+            "masked" => Ok(Self::Masked),
+            "dropped" => Ok(Self::Dropped),
+            "summarised" => Ok(Self::Summarised),
+            other => Err(other.to_owned()),
+        }
+    }
+}
+
+impl std::fmt::Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One turn, as it was written.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Turn {
     /// Where in the session. The harness's own numbering, never memo's.
     pub cursor: u64,
@@ -48,6 +106,22 @@ pub struct Turn {
     /// `None` means the turn is its own message, which is what a plain user turn is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
+    /// What this cost, when the harness knows.
+    ///
+    /// It billed the request and memo estimated one; four characters to a token is right about
+    /// the order and wrong about the number, and being wrong compounds across a long window.
+    /// Kept here rather than derived so a budget is spent against what was actually charged.
+    ///
+    /// `None` is the ordinary case for a turn nobody counted, and callers fall back to the
+    /// estimate — a missing count must never read as a free turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u32>,
+    /// What is sent for this turn right now.
+    #[serde(default)]
+    pub state: State,
+    /// Whether a plan may not touch it.
+    #[serde(default)]
+    pub pinned: bool,
     /// The harness's own record, verbatim.
     ///
     /// Opaque. memo stores it, hands it back, and never looks inside — which is what lets a
@@ -61,6 +135,32 @@ pub struct Turn {
     /// write is the one that matters.
     #[serde(default)]
     pub revisions: u32,
+}
+
+impl Turn {
+    /// What this turn actually costs to send, given its state.
+    ///
+    /// A masked turn costs what its replacement costs rather than nothing: the stub still
+    /// occupies room, and a planner that counted it as free would keep masking things that
+    /// were already masked.
+    #[must_use]
+    pub fn cost(&self, masked_cost: u32) -> u32 {
+        match self.state {
+            State::Live => self.weight(),
+            State::Masked => masked_cost.min(self.weight()),
+            State::Dropped | State::Summarised => 0,
+        }
+    }
+
+    /// What sending this turn in full would cost, whatever state it is in.
+    ///
+    /// The harness's own count when it has one, and an estimate otherwise. What a planner needs
+    /// to know before deciding whether masking a turn is worth it — a masked turn's saving is
+    /// measured against what it would cost live, not against what it costs now.
+    #[must_use]
+    pub fn weight(&self) -> u32 {
+        u32::try_from(crate::tokens_of(self)).unwrap_or(u32::MAX)
+    }
 }
 
 /// One run, as the scrollback records it.
@@ -181,10 +281,11 @@ impl Transcript {
     pub fn write(&mut self, session: &SessionId, turn: &Turn) -> Result<(), StoreError> {
         self.connection.execute(
             "INSERT INTO turn \
-             (session, cursor, at, role, kind, text, tool, raw, entry, revisions) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0) \
+             (session, cursor, at, role, kind, text, tool, raw, entry, tokens, pinned, revisions) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0) \
              ON CONFLICT(session, cursor) DO UPDATE SET \
                at = ?3, role = ?4, kind = ?5, text = ?6, tool = ?7, raw = ?8, entry = ?9, \
+               tokens = ?10, pinned = ?11, \
                revisions = revisions + 1",
             params![
                 session.as_str(),
@@ -196,6 +297,8 @@ impl Transcript {
                 turn.tool,
                 turn.raw,
                 turn.entry,
+                turn.tokens,
+                i64::from(turn.pinned),
             ],
         )?;
         Ok(())
@@ -207,7 +310,7 @@ impl Transcript {
     /// first written — a tool call comes back with its result.
     pub fn replay(&self, session: &SessionId) -> Result<Vec<Turn>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT cursor, at, role, kind, text, tool, raw, entry, revisions \
+            "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, revisions \
              FROM turn WHERE session = ?1 ORDER BY cursor",
         )?;
         let found = statement
@@ -223,7 +326,7 @@ impl Transcript {
         let found = self
             .connection
             .query_row(
-                "SELECT cursor, at, role, kind, text, tool, raw, entry, revisions \
+                "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, revisions \
                  FROM turn WHERE session = ?1 AND cursor = ?2",
                 params![session.as_str(), cursor as i64],
                 |r| Ok(read(r)),
@@ -268,6 +371,84 @@ impl Transcript {
         Ok(found)
     }
 
+    /// Say what model a run talks to, and how much it holds.
+    ///
+    /// Told once per run rather than repeated on every plan. A harness that never says this
+    /// gets the shipped default, which is a guess — and a guess about the one number that
+    /// decides whether a prompt is accepted or refused.
+    pub fn note_model(
+        &self,
+        session: &SessionId,
+        model: &str,
+        context: u32,
+    ) -> Result<(), StoreError> {
+        self.connection.execute(
+            "UPDATE run SET model = ?2, context = ?3 WHERE session = ?1",
+            params![session.as_str(), model, context],
+        )?;
+        Ok(())
+    }
+
+    /// What model a run talks to, and how much it holds.
+    pub fn model_of(&self, session: &SessionId) -> Result<Option<(String, u32)>, StoreError> {
+        let found = self
+            .connection
+            .query_row(
+                "SELECT model, context FROM run WHERE session = ?1",
+                params![session.as_str()],
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()?;
+        Ok(match found {
+            Some((Some(model), Some(context))) => {
+                Some((model, u32::try_from(context).unwrap_or(u32::MAX)))
+            }
+            _ => None,
+        })
+    }
+
+    /// The turns a plan still has anything to say about, without their text.
+    ///
+    /// Not the whole run. A scrollback has no upper bound — it is the only copy of the
+    /// conversation and nothing prunes it — so a plan that read every turn would cost more the
+    /// longer a session ran, which is exactly backwards. Two bounds, and both are needed:
+    ///
+    /// A dropped or summarised turn costs nothing to send and cannot be masked again. Because a
+    /// summary is always taken from the front, those are always a prefix, and skipping them is
+    /// the sliding window — the floor rises and never falls.
+    ///
+    /// A masked turn keeps its words, which is the whole point of masking being reversible, and
+    /// the planner needs none of them: it has a stub already, and what the turn would have cost
+    /// is a number. So the text stays in the file and the count comes back instead. Without
+    /// this a window holding twenty thousand masked turns reads every byte any of them ever
+    /// said, on every request.
+    pub fn in_window(&self, session: &SessionId) -> Result<Vec<Turn>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT cursor, at, role, kind, \
+                    CASE state WHEN 'live' THEN text ELSE '' END, \
+                    tool, raw, entry, \
+                    COALESCE(tokens, (LENGTH(text) + 3) / 4), \
+                    state, pinned, revisions \
+             FROM turn WHERE session = ?1 AND state IN ('live', 'masked') ORDER BY cursor",
+        )?;
+        let found = statement
+            .query_map(params![session.as_str()], |r| Ok(read(r)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        found.into_iter().collect()
+    }
+
+    /// Record what a plan did to a turn.
+    ///
+    /// The text is untouched. Compaction decides what is sent, never what was said, so every
+    /// masked or summarised turn can still be read back in full.
+    pub fn mark(&self, session: &SessionId, cursor: u64, state: State) -> Result<(), StoreError> {
+        self.connection.execute(
+            "UPDATE turn SET state = ?3 WHERE session = ?1 AND cursor = ?2",
+            params![session.as_str(), cursor as i64, state.as_str()],
+        )?;
+        Ok(())
+    }
+
     /// How many turns are held, across every run.
     pub fn census(&self) -> Result<(u64, u64), StoreError> {
         let turns: i64 = self
@@ -291,7 +472,10 @@ fn read(row: &rusqlite::Row<'_>) -> Result<Turn, StoreError> {
         tool: row.get(5)?,
         raw: row.get(6)?,
         entry: row.get(7)?,
-        revisions: row.get::<_, i64>(8)?.max(0) as u32,
+        tokens: row.get::<_, Option<i64>>(8)?.map(|n| n.max(0) as u32),
+        state: row.get::<_, String>(9)?.parse().unwrap_or_default(),
+        pinned: row.get::<_, i64>(10)? != 0,
+        revisions: row.get::<_, i64>(11)?.max(0) as u32,
     })
 }
 
@@ -306,7 +490,13 @@ CREATE TABLE IF NOT EXISTS run (
   cwd      TEXT NOT NULL,
   harness  TEXT NOT NULL,
   opened   INTEGER NOT NULL,
-  closed   INTEGER
+  closed   INTEGER,
+  -- What model this run talks to, and how much it will take. memo does the compacting, so memo
+  -- has to know the size of the thing it is compacting for: a plan made against 200k defaults
+  -- when the model holds 8k has already overflowed, and one made against 8k when the model
+  -- holds a million throws away context nobody needed to lose.
+  model    TEXT,
+  context  INTEGER
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS turn (
@@ -322,16 +512,37 @@ CREATE TABLE IF NOT EXISTS turn (
   -- Which message a block belongs to. Blocks of one assistant message share it, so a bounded
   -- read can stop on a message boundary rather than in the middle of one.
   entry      TEXT,
+  -- What the harness was charged, when it says. NULL means nobody counted and a reader
+  -- estimates -- never that the turn was free.
+  tokens     INTEGER,
+  -- What is sent for this turn, and whether a plan may touch it. Compaction changes these and
+  -- never the text, which is what makes it reversible: a masked turn still has its words here.
+  state      TEXT NOT NULL DEFAULT 'live',
+  pinned     INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session, cursor)
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS turn_of ON turn(session, cursor);
+CREATE INDEX IF NOT EXISTS turn_live ON turn(session, state, cursor);
 CREATE INDEX IF NOT EXISTS turn_entry ON turn(session, entry) WHERE entry IS NOT NULL;
 "#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_turn_occupies_one_place_in_one_run() {
+        // Keyed on (session, cursor): a harness that re-sends a turn is correcting what it
+        // said about it, not adding a second copy of it to the window.
+        let mut held = Transcript::ephemeral().expect("a transcript");
+        let session = SessionId::new("s");
+        held.write(&session, &turn(7, "first")).expect("first");
+        held.write(&session, &turn(7, "corrected")).expect("again");
+        let back = held.replay(&session).expect("replay");
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].text, "corrected");
+    }
 
     fn turn(cursor: u64, text: &str) -> Turn {
         Turn {
@@ -342,6 +553,9 @@ mod tests {
             text: text.to_owned(),
             tool: None,
             entry: None,
+            tokens: None,
+            state: State::default(),
+            pinned: false,
             raw: Some(format!(r#"{{"type":"user","text":{text:?}}}"#)),
             revisions: 0,
         }

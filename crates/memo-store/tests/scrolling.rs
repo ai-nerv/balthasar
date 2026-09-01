@@ -29,6 +29,7 @@ fn turn(cursor: u64, text: &str) -> Turn {
         entry: None,
         raw: None,
         revisions: 0,
+        ..Turn::default()
     }
 }
 
@@ -365,6 +366,7 @@ fn a_message_of_blocks(held: &mut Transcript, from: u64, entry: &str) {
                 entry: Some(entry.to_owned()),
                 raw: (n == 0).then(|| format!("{{\"entry\":\"{entry}\"}}")),
                 revisions: 0,
+                ..Turn::default()
             },
         )
         .expect("write");
