@@ -49,20 +49,92 @@ pub fn same_claim_different_value(before: &str, after: &str) -> bool {
     a[shared..] != b[shared..]
 }
 
-/// A claim's words, lowercased, with punctuation that is not part of a token removed.
+/// Words that open a turn without being part of the claim it carries.
+///
+/// A person correcting themselves says *"no, we deploy with fly.io now"*. The claim is the same
+/// claim; the opening word is about the speech act. Without stripping these the shared-prefix
+/// rule starts comparing at word zero, finds nothing in common, and treats a correction as a
+/// second fact — which is how the suite found aeon asserting both answers at once.
+const OPENERS: &[&str] = &[
+    "no",
+    "nope",
+    "actually",
+    "wait",
+    "sorry",
+    "correction",
+    "remember",
+    "note",
+    "fyi",
+    "also",
+    "and",
+    "but",
+    "well",
+    "hmm",
+    "oh",
+    "hey",
+];
+
+/// A claim's words, lowercased, with punctuation and opening markers removed.
 fn words(text: &str) -> Vec<String> {
-    text.split_whitespace()
+    let mut held: Vec<String> = text
+        .split_whitespace()
         .map(|word| {
             word.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '.' && c != '_')
                 .to_lowercase()
         })
         .filter(|word| !word.is_empty())
-        .collect()
+        .collect();
+
+    // Only from the front, and only while they keep coming. A claim that *contains* one of
+    // these words in the middle is a claim about that word.
+    while held.first().is_some_and(|w| OPENERS.contains(&w.as_str())) {
+        held.remove(0);
+    }
+    held
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_correction_that_opens_with_no_still_revises() {
+        // Found by the extended suite: a person correcting themselves says "no, we deploy with
+        // fly.io now". The shared-prefix rule started at word zero, found nothing in common,
+        // and treated it as a second fact — so both answers were asserted at once.
+        assert!(same_claim_different_value(
+            "remember: we deploy with heroku",
+            "no, we deploy with fly.io now"
+        ));
+        assert!(same_claim_different_value(
+            "we deploy with heroku",
+            "actually we deploy with fly.io"
+        ));
+    }
+
+    #[test]
+    fn a_marker_in_the_middle_of_a_claim_is_part_of_it() {
+        // Only the opening is stripped. "the no-cache header is required" is a claim about a
+        // header, and eating its first word would make it match anything.
+        assert_eq!(
+            words("the no cache header"),
+            vec!["the", "no", "cache", "header"]
+        );
+        assert_eq!(
+            words("no, the cache header"),
+            vec!["the", "cache", "header"]
+        );
+    }
+
+    #[test]
+    fn stripping_markers_does_not_merge_unrelated_claims() {
+        // The half rule still applies afterwards, so two different subjects stay apart even
+        // when both open with a marker.
+        assert!(!same_claim_different_value(
+            "no, the staging box is at 10.0.0.7",
+            "actually the production box is at 10.0.0.8"
+        ));
+    }
 
     #[test]
     fn the_same_claim_with_a_new_value_is_a_revision() {

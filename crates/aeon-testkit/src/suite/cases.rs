@@ -31,6 +31,24 @@ pub enum Category {
     Cardinality,
     /// One project's memory does not leak into another's.
     Isolation,
+    /// The same failure met and fixed again, in a later run.
+    RepeatedRepair,
+    /// A project procedure and a global one that disagree.
+    ScopeConflict,
+    /// What worked on one machine, asked about on another.
+    EnvironmentShift,
+    /// A person correcting the agent mid-run.
+    Correction,
+    /// A fact nobody contradicted and nobody has re-seen in a year.
+    Staleness,
+    /// A memory that shares words with the question and answers nothing.
+    LexicalTrap,
+    /// Content that arrived from outside, repeated until it looks corroborated.
+    Poisoning,
+    /// A question whose premise is false.
+    FalsePremise,
+    /// Something explicitly removed, and every route back to it.
+    Purge,
 }
 
 impl Category {
@@ -51,6 +69,15 @@ impl Category {
             Self::Entity => "entity",
             Self::Cardinality => "cardinality",
             Self::Isolation => "isolation",
+            Self::RepeatedRepair => "repeated-repair",
+            Self::ScopeConflict => "scope-conflict",
+            Self::EnvironmentShift => "environment-shift",
+            Self::Correction => "correction",
+            Self::Staleness => "staleness",
+            Self::LexicalTrap => "lexical-trap",
+            Self::Poisoning => "poisoning",
+            Self::FalsePremise => "false-premise",
+            Self::Purge => "purge",
         }
     }
 
@@ -71,6 +98,15 @@ impl Category {
             Self::Entity,
             Self::Cardinality,
             Self::Isolation,
+            Self::RepeatedRepair,
+            Self::ScopeConflict,
+            Self::EnvironmentShift,
+            Self::Correction,
+            Self::Staleness,
+            Self::LexicalTrap,
+            Self::Poisoning,
+            Self::FalsePremise,
+            Self::Purge,
         ]
     }
 }
@@ -114,6 +150,27 @@ pub enum Act {
         at: Timestamp,
         /// What it looked for.
         query: &'static str,
+    },
+    /// Something arrived from outside — a page, a document, an import.
+    ///
+    /// Carries an origin, so several arrivals of the same material are one source rather than
+    /// several confirmations. This is what a poisoning scenario is built out of.
+    Read {
+        /// Which run read it.
+        session: &'static str,
+        /// When.
+        at: Timestamp,
+        /// Where it came from.
+        origin: &'static str,
+        /// What it said.
+        text: &'static str,
+    },
+    /// Somebody asked for something to be removed.
+    Purged {
+        /// When.
+        at: Timestamp,
+        /// Enough of the text to find it by.
+        matching: &'static str,
     },
     /// Work happened in a different project.
     Elsewhere {

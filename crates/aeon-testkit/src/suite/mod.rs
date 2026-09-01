@@ -16,6 +16,18 @@
 
 mod cases;
 mod check;
+mod harder;
 
-pub use cases::{Act, Case, Category, Expect, Probe, corpus};
+pub use cases::{Act, Case, Category, Expect, Probe};
+
+/// Every scenario the suite runs: the original corpus and the harder additions.
+///
+/// One function rather than two exported lists, so nothing can run half the suite and report a
+/// rate. A scenario that exists but is not run is worse than one that does not exist.
+#[must_use]
+pub fn corpus() -> Vec<Case> {
+    let mut all = cases::corpus();
+    all.extend(harder::harder());
+    all
+}
 pub use check::{Failure, Report, Verdict, run_suite};

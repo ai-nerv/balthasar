@@ -138,6 +138,17 @@ fn perform(store: &mut Store, settings: &Settings, scope: &ScopeId, act: &Act) {
         Act::Decay { at } => {
             store.decay(*at).expect("decay");
         }
+        Act::Read {
+            session,
+            at,
+            origin,
+            text,
+        } => {
+            read(store, scope, session, *at, origin, text);
+        }
+        Act::Purged { at, matching } => {
+            purge_matching(store, scope, *at, matching);
+        }
         Act::Used { at, query } => {
             // Reaching for something is what resists decay. Done through recall so the test
             // exercises the path a harness would, rather than touching a row directly.
@@ -358,4 +369,71 @@ fn check(store: &Store, scope: &ScopeId, probe: &Probe) -> (Verdict, String) {
         },
         got,
     )
+}
+
+/// Something arriving from outside.
+///
+/// The channel is what makes this different from a person saying it, and the domain is what
+/// makes several arrivals of the same material one source. Both go on the witness, because the
+/// defence lives in the arithmetic rather than in a filter.
+fn read(
+    store: &mut Store,
+    scope: &ScopeId,
+    session: &str,
+    at: Timestamp,
+    origin: &str,
+    text: &str,
+) {
+    let id = SessionId::new(session);
+    store
+        .open_session(&id, scope, &scope.to_string(), "suite", at)
+        .expect("open");
+
+    let mut held = Memory::new(
+        mint(at),
+        Tier::Fact,
+        scope.clone(),
+        aeon_model::Body::note(text, aeon_model::NoteKind::Claim),
+        at,
+    );
+    held.session = Some(id.clone());
+    held.temporal = aeon_model::Temporal::recalled(at, at);
+    held.strength.pinned = false;
+
+    // What a document claims to be does not decide what it mints. A page phrased as an
+    // instruction produces a distillation, because phrasing is what an attacker controls.
+    let kind = aeon_model::witness_for(
+        aeon_model::Channel::ExternalContent,
+        aeon_model::WitnessKind::Imperative,
+    );
+    let witness = Witness::new(
+        aeon_model::WitnessId::new(format!("read-{session}-{at}")),
+        kind,
+        id,
+        scope.clone(),
+        at,
+    )
+    .through(
+        aeon_model::Channel::ExternalContent,
+        Some(aeon_model::Domain::external(origin)),
+    );
+    store.remember(held, witness, at).expect("read");
+}
+
+/// Removing whatever matches, the way `aeon forget --purge` would.
+fn purge_matching(store: &mut Store, scope: &ScopeId, at: Timestamp, matching: &str) {
+    let mut ask = Recall::of(matching, at);
+    ask.floor = 0.0;
+    ask.limit = 50;
+    ask.include_archived = true;
+    ask.scope_name = scope.to_string();
+    let found = store.recall(&ask).expect("recall");
+    let doomed: Vec<_> = found
+        .into_iter()
+        .filter(|hit| hit.memory.text().contains(matching))
+        .map(|hit| hit.memory.id)
+        .collect();
+    for id in doomed {
+        aeon_store::purge(store, &id).expect("purge");
+    }
 }
