@@ -121,3 +121,44 @@ end)
 -- command to run or an endpoint to send text to.
 --
 -- aeon.trusted = { "/home/you/work" }
+
+-- ------------------------------------------------- the use-and-outcome ledger
+
+-- Whether aeon records what it retrieved, what was injected, what a caller then did, and how
+-- it went. OFF BY DEFAULT, and deliberately so: this costs writes on the recall path, and a
+-- memory layer that silently started recording what you search for because a new version
+-- shipped is not one anybody should install.
+--
+-- Turning it on is what makes `aeon trace`, `aeon utility` and `aeon outcomes` answer. Nothing
+-- in it can touch confidence — truth and utility are separate judgments, and there is a test
+-- holding the store to that.
+--
+-- Queries are stored as digests and actions as digests. The ledger records that something
+-- happened and where in the transcript to look, never a copy of what was said.
+--
+-- aeon.outcome = {
+--   capture = true,
+--   retention_days = 90,
+-- }
+
+-- Classify an outcome yourself. Called with what aeon observed; return one of
+-- `succeeded`, `failed`, `corrected`, `reverted`, `abstained`, `ignored`, or nil to leave it
+-- unknown. Returning nil is a real answer: an action nobody evaluated must never drift into
+-- being a failed one.
+--
+-- No handler is needed. The deterministic default is what a caller reports, and this exists for
+-- the harness that knows more than it can say through the protocol.
+--
+-- aeon.on.outcome(function(event)
+--   if event.tool == "shell" and event.exit_code == 0 then
+--     return "succeeded"
+--   end
+--   return nil
+-- end)
+
+-- Told, not asked: aeon mentioning that a caller acted on something it was given. Side-effect
+-- only — whatever this returns is ignored.
+--
+-- aeon.did.used(function(action)
+--   -- log it, count it, ignore it
+-- end)

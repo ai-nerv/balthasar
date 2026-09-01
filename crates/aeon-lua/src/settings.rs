@@ -260,8 +260,13 @@ impl Settings {
             weights,
             budget,
             ledger: Ledger {
+                // One table, `aeon.outcome`, rather than a flat flag beside a nested number.
+                // Two shapes for one concern is how a configuration surface becomes a thing
+                // people have to look up.
                 capture: config
-                    .boolean("outcome_capture")
+                    .get("outcome")
+                    .and_then(|held| held.get("capture"))
+                    .and_then(serde_json::Value::as_bool)
                     .unwrap_or(fallback_ledger.capture),
                 retention_days: count(
                     config,
