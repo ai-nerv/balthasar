@@ -54,6 +54,32 @@ impl Held {
         )
     }
 
+    /// The same call, through the socket a harness comes in on.
+    fn peer_asks(&mut self, name: &str, args: Vec<serde_json::Value>) -> Reply {
+        let mut at = Answering {
+            store: &mut self.store,
+            scrollback: Some(&mut self.scrollback),
+            scratch: Some(&mut self.scratch),
+            scope: ScopeId::new("/w/thing"),
+            now: NOW,
+            inject_floor: floor::INJECT,
+            live_floor: floor::LIVE,
+            capture: false,
+        };
+        answer(
+            &mut at,
+            &Door::Socket(memo_ipc::Peer {
+                pid: 4242,
+                uid: 1000,
+                program: Some("/usr/bin/some-harness".to_owned()),
+            }),
+            &Request {
+                call: name.to_owned(),
+                args,
+            },
+        )
+    }
+
     /// How many memories a reply actually carries.
     ///
     /// `Reply::n` counts result values, and a recall returns one value that is an array — so
@@ -196,5 +222,98 @@ fn a_durable_memory_still_goes_to_the_project() {
     assert!(reply.ok, "{reply:?}");
     assert_eq!(held.store.all().expect("all").len(), 1);
     assert!(held.scratch.runs().is_empty(), "no run owns it");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// What a reply says about one field.
+fn field<'a>(reply: &'a Reply, name: &str) -> &'a serde_json::Value {
+    reply
+        .result
+        .as_ref()
+        .and_then(|values| values.first())
+        .and_then(|v| v.get(name))
+        .unwrap_or(&serde_json::Value::Null)
+}
+
+#[test]
+fn a_peer_may_archive_the_run_it_is_in_but_not_remove_it() {
+    // The ceiling that has existed since the socket did, used for the first time. A peer that
+    // could remove rows could empty a project one run at a time, and unlike a bad write there
+    // is no ladder to catch it afterwards.
+    let home = scratch("peer-forget");
+    let mut held = Held::under(&home);
+    held.said("01RUN", "the deploy target is fly.io");
+    let run = SessionId::new("01RUN");
+
+    let refused = held.peer_asks(
+        "forget",
+        vec![
+            serde_json::json!("01RUN"),
+            serde_json::json!({ "session": true, "purge": true }),
+        ],
+    );
+    assert!(!refused.ok, "a peer may not remove a run");
+    assert!(held.scratch.path_of(&run).is_file(), "and nothing went");
+
+    let archived = held.peer_asks(
+        "forget",
+        vec![
+            serde_json::json!("01RUN"),
+            serde_json::json!({ "session": true }),
+        ],
+    );
+    assert!(archived.ok, "{archived:?}");
+    assert_eq!(field(&archived, "archived"), 1, "its own scratch stopped");
+    assert!(
+        held.scratch.path_of(&run).is_file(),
+        "archiving keeps every word of it"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn the_owner_removing_a_run_reaches_all_three_of_its_files() {
+    let home = scratch("owner-forget");
+    let mut held = Held::under(&home);
+    held.said("01RUN", "the deploy token is hunter2-nevershare");
+    held.said("01SAFE", "something a neighbour knows");
+    let run = SessionId::new("01RUN");
+    let neighbour = SessionId::new("01SAFE");
+
+    let gone = held.ask(
+        "forget",
+        vec![
+            serde_json::json!("01RUN"),
+            serde_json::json!({ "session": true, "purge": true }),
+        ],
+    );
+    assert!(gone.ok, "{gone:?}");
+    assert_eq!(field(&gone, "scratch"), true, "its own file went");
+    assert!(!held.scratch.path_of(&run).exists());
+    assert!(
+        held.scratch.path_of(&neighbour).is_file(),
+        "and the neighbour kept everything of its own"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn forgetting_a_run_nobody_has_heard_of_is_refused() {
+    // A typo must not answer as a successful purge of nothing: the caller's next move is to
+    // stop looking for the run it meant.
+    let home = scratch("no-such-run");
+    let mut held = Held::under(&home);
+    let reply = held.ask(
+        "forget",
+        vec![
+            serde_json::json!("01NOPE"),
+            serde_json::json!({ "session": true, "purge": true }),
+        ],
+    );
+    assert!(!reply.ok);
+    assert!(
+        reply.error.unwrap_or_default().contains("no run called"),
+        "and said why"
+    );
     let _ = std::fs::remove_dir_all(&home);
 }

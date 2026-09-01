@@ -119,15 +119,25 @@ fn run_session(
     });
 
     if !args.purge {
-        // Archiving keeps everything, so the run's turns and its scratch are left alone. What
-        // stops is the asserting.
+        // Both files. Archiving keeps every word, so the turns stay — but a run's scratch is
+        // as much a thing it learned as what it promoted, and archiving one and not the other
+        // would leave half the run still asserting itself.
+        let mut archived = 0;
         for id in &owned {
             store.archive(id, at)?;
+            archived += 1;
+        }
+        let mut pad = memo_store::Scratchpad::at(crate::runs_under(store_path, scope, tool));
+        if let Some(own) = pad.peek(&session)? {
+            for id in own.owned_by(&session)? {
+                own.archive(&id, at)?;
+                archived += 1;
+            }
         }
         loaded.tell("forget", &[described, serde_json::json!("archived")]);
         crate::say!(
             "archived {} from {}",
-            render::bold(&format!("{} memor(y/ies)", owned.len())),
+            render::bold(&format!("{archived} memor(y/ies)")),
             render::dim(&render::short(session.as_str()))
         );
         crate::say!(

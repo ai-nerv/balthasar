@@ -460,11 +460,20 @@ fn remember(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
     }
 }
 
-/// Stop asserting something.
+/// Stop asserting something, or a whole run of them.
 fn forget(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
     let Some(id) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("forget needs an id");
     };
+    let said = request.args.get(1);
+    let asked = |name: &str| {
+        said.and_then(|s| s.get(name))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    };
+    if asked("session") {
+        return forget_run(at, door, id, asked("purge"));
+    }
     let id = MemoryId::new(id);
 
     let held = match at.store.get(&id) {
@@ -488,6 +497,115 @@ fn forget(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         Ok(()) => Reply::one(serde_json::json!({ "archived": id.to_string() })),
         Err(why) => Reply::refused(why.to_string()),
     }
+}
+
+/// Stop asserting a whole run, or remove it.
+///
+/// A run is in three files — what it promoted into the project, what it said, and the scratch it
+/// never promoted — and the two kinds of forgetting reach different numbers of them. Archiving
+/// keeps everything and stops asserting it, so it touches memories alone; purging is the answer
+/// to "delete the key I pasted", so it has to reach all three or the answer is untrue.
+fn forget_run(at: &mut Answering<'_>, door: &Door, handle: &str, purge: bool) -> Reply {
+    let session = match at.store.session(handle) {
+        Ok(Some(found)) => found.id,
+        Ok(None) => SessionId::new(handle),
+        Err(why) => return Reply::refused(why.to_string()),
+    };
+
+    let turns = match at.scrollback.as_ref() {
+        Some(held) => held.replay(&session).map(|t| t.len()).unwrap_or(0),
+        None => 0,
+    };
+    let promoted = match at.store.owned_by(&session) {
+        Ok(ids) => ids,
+        Err(why) => return Reply::refused(why.to_string()),
+    };
+    // A handle naming no run is a typo, and a typo must not answer as a successful purge of
+    // nothing — the caller's next move is to stop looking for the run it meant.
+    let known = turns > 0
+        || !promoted.is_empty()
+        || at
+            .scratch
+            .as_mut()
+            .is_some_and(|pad| pad.path_of(&session).is_file());
+    if !known {
+        return Reply::refused(format!("no run called '{handle}'"));
+    }
+
+    if !purge {
+        return archive_run(at, door, &session, &promoted);
+    }
+    // The existing ceiling, used for the first time. A peer that could remove rows could empty
+    // a project one run at a time, and unlike a bad write there is no ladder to catch it.
+    if !door.may_purge() {
+        return Reply::refused("removing a run is the owner's — a peer may archive it");
+    }
+
+    let memories = match memo_store::purge_session(at.store, &session) {
+        Ok(n) => n,
+        Err(why) => return Reply::refused(why.to_string()),
+    };
+    let gone = match at.scrollback.as_ref() {
+        Some(held) => match memo_store::purge_run(held, &session) {
+            Ok(n) => n,
+            Err(why) => return Reply::refused(why.to_string()),
+        },
+        None => 0,
+    };
+    let scratch = match at.scratch.as_mut() {
+        Some(pad) => memo_store::purge_scratch(pad, &session).unwrap_or(false),
+        None => false,
+    };
+
+    Reply::one(serde_json::json!({
+        "purged": session.to_string(),
+        "memories": memories,
+        "turns": gone,
+        "scratch": scratch,
+    }))
+}
+
+/// Stop asserting what a run learned, keeping every word of it.
+///
+/// A peer reaches only the run's own scratch. Anything the run promoted belongs to the project
+/// now, and a peer that could archive a project's memories by naming the run that found them
+/// could empty it as surely as by deleting them — which is the same reason a peer may not
+/// archive somebody else's memory one at a time.
+fn archive_run(
+    at: &mut Answering<'_>,
+    door: &Door,
+    session: &SessionId,
+    promoted: &[MemoryId],
+) -> Reply {
+    let now = at.now;
+    let mut archived = 0;
+    let mut left = 0;
+
+    if let Some(Ok(Some(own))) = at.scratch.as_mut().map(|pad| pad.peek(session)) {
+        for id in own.owned_by(session).unwrap_or_default() {
+            if own.archive(&id, now).is_ok() {
+                archived += 1;
+            }
+        }
+    }
+
+    for id in promoted {
+        if !matches!(door, Door::Owner) {
+            left += 1;
+            continue;
+        }
+        if at.store.archive(id, now).is_ok() {
+            archived += 1;
+        }
+    }
+
+    Reply::one(serde_json::json!({
+        "archived": archived,
+        "session": session.to_string(),
+        // Named rather than silent: a peer told "archived 4" while three of the run's findings
+        // are still being asserted has been told something untrue by omission.
+        "left_to_the_owner": left,
+    }))
 }
 
 /// One memory, as a peer receives it.

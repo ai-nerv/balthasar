@@ -102,7 +102,7 @@ pub const SURFACE: &[Verb] = &[
     Verb {
         name: "forget",
         writes: true,
-        about: "stop asserting something: (id, why) -> ok",
+        about: "stop asserting something, or a run: (id, opts) -> ok",
     },
 ];
 
