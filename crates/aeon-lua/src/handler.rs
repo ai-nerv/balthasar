@@ -12,7 +12,20 @@ use luna::{Callback, CallbackReturn, Table, Value};
 ///
 /// Enumerated rather than open, so reading this list tells you every decision a config can
 /// take part in. A surface you have to run something to learn is one nobody audits.
-pub const ASKED: &[&str] = &["scope", "admit", "promote", "importance", "redact"];
+/// Handlers that are asked a question and whose answer is used.
+///
+/// `outcome` is here rather than in [`TOLD`] because §6.7 has it *returning* a classification:
+/// a configuration may look at an action and say how it went. The two namespaces stay disjoint,
+/// which is what keeps "aeon asked and used the answer" distinguishable from "aeon mentioned it
+/// happened" — a test holds them apart.
+pub const ASKED: &[&str] = &[
+    "scope",
+    "admit",
+    "promote",
+    "importance",
+    "redact",
+    "outcome",
+];
 
 /// Events `aeon.did.<name>` may be registered against.
 pub const TOLD: &[&str] = &[
@@ -23,6 +36,7 @@ pub const TOLD: &[&str] = &[
     "forget",
     "consolidate",
     "compact",
+    "used",
 ];
 
 /// Where asked-handlers live inside the VM.

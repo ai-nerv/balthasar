@@ -26,6 +26,7 @@ mod sessions;
 mod status;
 mod trace;
 mod transfer;
+mod trust;
 
 use clap::{Parser, Subcommand};
 use loaded::Loaded;
@@ -111,6 +112,10 @@ enum What {
     Relate(relate::Args),
     /// Follow one search to whatever came of it.
     Trace(trace::TraceArgs),
+    /// What a session reported, and how it went.
+    Outcomes(trace::OutcomesArgs),
+    /// Where a memory's evidence came from, and what that permits.
+    Trust(trust::Args),
     /// What using a memory has actually led to.
     Utility(trace::UtilityArgs),
     /// Make this directory the root of its own memory.
@@ -181,6 +186,8 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Some(What::Relate(args)) => relate::run(where_, &scope, &tool, args),
         Some(What::Trace(args)) => trace::trace(where_, &scope, &tool, args),
         Some(What::Utility(args)) => trace::utility(where_, &scope, &tool, args),
+        Some(What::Trust(args)) => trust::run(where_, &scope, &tool, args),
+        Some(What::Outcomes(args)) => trace::outcomes(where_, &scope, &tool, args),
         Some(What::Init(args)) => init::run(args),
         Some(What::Configs(args)) => configs::run(args),
         Some(What::Serve(args)) => serve::serve(where_, &scope, &tool, args, floors, &mut loaded),

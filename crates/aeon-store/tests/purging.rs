@@ -166,3 +166,164 @@ fn purging_twice_is_not_an_error() {
     assert_eq!(aeon_store::purge(&mut store, &secret).expect("first"), 1);
     assert_eq!(aeon_store::purge(&mut store, &secret).expect("again"), 0);
 }
+
+#[test]
+fn forgetting_a_run_takes_what_it_owned_and_leaves_what_it_only_saw() {
+    // §10.8's trajectory scope. A fact three runs agree on does not belong to any of them, and
+    // taking it with one would be a different and much worse operation than the one asked for.
+    let mut store = Store::ephemeral().expect("store");
+    let doomed = SessionId::new("01DOOMED");
+    let other = SessionId::new("01OTHER");
+
+    // Owned by the run: scratch it created.
+    let mut mine = Memory::new(
+        mint(NOW),
+        Tier::Scratch,
+        scope(),
+        Body::note("what that run was trying", NoteKind::Observation),
+        NOW,
+    );
+    mine.session = Some(doomed.clone());
+    let mine_id = mine.id.clone();
+    store
+        .remember(
+            mine,
+            Witness::new(
+                WitnessId::new("w-mine"),
+                WitnessKind::Imperative,
+                doomed.clone(),
+                scope(),
+                NOW,
+            ),
+            NOW,
+        )
+        .expect("remember");
+
+    // Shared: a project fact two runs witnessed, one of them the doomed one.
+    let shared = Memory::new(
+        mint(NOW + 1),
+        Tier::Fact,
+        scope(),
+        Body::note("the deploy target is fly.io", NoteKind::Claim),
+        NOW,
+    );
+    let shared_id = shared.id.clone();
+    store
+        .remember(
+            shared,
+            Witness::new(
+                WitnessId::new("w-a"),
+                WitnessKind::Imperative,
+                doomed.clone(),
+                scope(),
+                NOW,
+            ),
+            NOW,
+        )
+        .expect("remember");
+    store
+        .attach(
+            &shared_id,
+            Witness::new(
+                WitnessId::new("w-b"),
+                WitnessKind::Imperative,
+                other,
+                scope(),
+                NOW,
+            ),
+            NOW,
+        )
+        .expect("attach");
+
+    aeon_store::purge_session(&mut store, &doomed).expect("purge session");
+
+    assert!(
+        store.get(&mine_id).expect("get").is_none(),
+        "what it owned went"
+    );
+    let kept = store
+        .get(&shared_id)
+        .expect("get")
+        .expect("what it saw stayed");
+    assert_eq!(kept.text(), "the deploy target is fly.io");
+    let left = store.witnesses_of(&shared_id).expect("witnesses");
+    assert_eq!(left.len(), 1, "and only the doomed run's evidence went");
+    assert_eq!(left[0].session, SessionId::new("01OTHER"));
+}
+
+#[test]
+fn forgetting_a_source_does_not_take_honest_memories_with_it() {
+    // §10.8's environment scope. One poisoned page must not become a way to delete everything
+    // it happened to agree with — that is the denial-of-service version of this operation.
+    let mut store = Store::ephemeral().expect("store");
+    let bad = aeon_model::Domain::external("https://untrusted.test/guide");
+
+    let only_theirs = Memory::new(
+        mint(NOW),
+        Tier::Fact,
+        scope(),
+        Body::note("something only that page said", NoteKind::Claim),
+        NOW,
+    );
+    let theirs_id = only_theirs.id.clone();
+    store
+        .remember(
+            only_theirs,
+            Witness::new(
+                WitnessId::new("w-ext"),
+                WitnessKind::Distillation,
+                SessionId::new("01RUN"),
+                scope(),
+                NOW,
+            )
+            .through(aeon_model::Channel::ExternalContent, Some(bad.clone())),
+            NOW,
+        )
+        .expect("remember");
+
+    let also_ours = Memory::new(
+        mint(NOW + 1),
+        Tier::Fact,
+        scope(),
+        Body::note("something we knew anyway", NoteKind::Claim),
+        NOW,
+    );
+    let ours_id = also_ours.id.clone();
+    store
+        .remember(
+            also_ours,
+            Witness::new(
+                WitnessId::new("w-ext2"),
+                WitnessKind::Distillation,
+                SessionId::new("01RUN"),
+                scope(),
+                NOW,
+            )
+            .through(aeon_model::Channel::ExternalContent, Some(bad.clone())),
+            NOW,
+        )
+        .expect("remember");
+    store
+        .attach(
+            &ours_id,
+            Witness::new(
+                WitnessId::new("w-said"),
+                WitnessKind::Imperative,
+                SessionId::new("01ME"),
+                scope(),
+                NOW,
+            ),
+            NOW,
+        )
+        .expect("attach");
+
+    let gone = aeon_store::purge_domain(&mut store, &bad).expect("purge domain");
+
+    assert_eq!(gone, 1, "only what stood on that source alone");
+    assert!(store.get(&theirs_id).expect("get").is_none());
+    let kept = store.get(&ours_id).expect("get").expect("still there");
+    assert_eq!(kept.text(), "something we knew anyway");
+    let left = store.witnesses_of(&ours_id).expect("witnesses");
+    assert_eq!(left.len(), 1, "with the tainted evidence removed");
+    assert_eq!(left[0].session, SessionId::new("01ME"));
+}

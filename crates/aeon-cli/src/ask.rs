@@ -137,6 +137,13 @@ pub fn run(
         );
     }
 
+    // A pointer, not a merge. Whether this is credible and whether it is safe to place in a
+    // context are different questions, and answering both here would let a memory look true
+    // because its evidence came from somewhere trusted.
+    if let Some(said) = crate::trust::one_line(&memory.witnesses) {
+        crate::say!("  {}", render::dim(&said));
+    }
+
     let about = store.entities_of(&memory.id)?;
     if !about.is_empty() {
         crate::say!();

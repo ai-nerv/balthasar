@@ -261,3 +261,109 @@ pub fn dataset(
     }
     Ok(())
 }
+
+/// What a session reported, and how it went.
+#[derive(Debug, Parser)]
+pub struct OutcomesArgs {
+    /// Which run, by name or id.
+    #[arg(long)]
+    session: Option<String>,
+
+    /// How many.
+    #[arg(long, default_value_t = 20)]
+    limit: usize,
+
+    /// Answer as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+/// Print the actions a run reported and what came of them.
+pub fn outcomes(
+    store_path: Option<&Path>,
+    scope: &ScopeId,
+    tool: &Which,
+    args: &OutcomesArgs,
+) -> anyhow::Result<()> {
+    let store = open(store_path, scope, tool)?;
+
+    // Named or most recent. A person asking "how did that go" almost always means the run they
+    // just finished, and making them find its id first is a papercut with no upside.
+    let session = match &args.session {
+        Some(handle) => store
+            .session(handle)?
+            .ok_or_else(|| anyhow::anyhow!("no session called '{handle}'"))?,
+        None => store
+            .sessions(1)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no sessions yet"))?,
+    };
+
+    let uses = store.uses_in(&session.id, args.limit)?;
+    let mut rows = Vec::with_capacity(uses.len());
+    for used in &uses {
+        let verdict = store.outcome_of(&used.id)?;
+        rows.push((used, verdict));
+    }
+
+    if args.json {
+        crate::say!(
+            "{}",
+            serde_json::json!({
+                "session": session.id.to_string(),
+                "name": session.name,
+                "actions": rows.iter().map(|(used, verdict)| serde_json::json!({
+                    "action": used.id,
+                    "tool": used.tool,
+                    "attribution": used.attribution.as_str(),
+                    "memories": used.memories.len(),
+                    "outcome": verdict.as_ref().map(|v| v.kind.as_str()),
+                    "evaluator": verdict.as_ref().map(|v| v.evaluator.clone()),
+                })).collect::<Vec<_>>(),
+            })
+        );
+        return Ok(());
+    }
+
+    crate::say!("{}", render::bold(session.label()));
+    if rows.is_empty() {
+        crate::say!();
+        crate::say!(
+            "{}",
+            render::dim("nothing was reported — which is the ordinary case, not a failure")
+        );
+        return Ok(());
+    }
+
+    crate::say!();
+    for (used, verdict) in &rows {
+        let kind = verdict.as_ref().map_or("unknown", |v| v.kind.as_str());
+        crate::say!(
+            "  {:<10}  {}",
+            render::bold(kind),
+            render::dim(&format!(
+                "{} memor{} · {} attribution{}",
+                used.memories.len(),
+                if used.memories.len() == 1 { "y" } else { "ies" },
+                used.attribution,
+                used.tool
+                    .as_ref()
+                    .map(|t| format!(" · {t}"))
+                    .unwrap_or_default()
+            ))
+        );
+    }
+
+    let unknown = rows.iter().filter(|(_, v)| v.is_none()).count();
+    if unknown > 0 {
+        crate::say!();
+        crate::say!(
+            "{}",
+            render::dim(&format!(
+                "{unknown} unreported — unknown is a real state and never becomes a failure"
+            ))
+        );
+    }
+    Ok(())
+}

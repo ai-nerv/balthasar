@@ -122,3 +122,106 @@ pub fn purge(store: &mut Store, id: &MemoryId) -> Result<usize, StoreError> {
     tx.commit()?;
     Ok(gone)
 }
+
+/// Everything one run left behind.
+///
+/// §10.8's trajectory scope. A person who says "forget that session" means the whole of it —
+/// what it observed, what it distilled, and the evidence it filed — not one memory they can
+/// name. Returns how many memories went.
+///
+/// Memories a run merely *witnessed* are not removed. A fact three runs agree on does not
+/// belong to any of them, and taking it with one would be a different and much worse operation
+/// than the one somebody asked for; its witness from this run goes, and the fact stays with the
+/// evidence that remains.
+pub fn purge_session(
+    store: &mut Store,
+    session: &aeon_model::SessionId,
+) -> Result<usize, StoreError> {
+    let owned: Vec<MemoryId> = {
+        let mut statement = store
+            .db()
+            .prepare("SELECT id FROM memory WHERE session = ?1")?;
+        statement
+            .query_map(params![session.as_str()], |r| {
+                Ok(MemoryId::new(r.get::<_, String>(0)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let mut gone = 0;
+    for id in &owned {
+        gone += purge(store, id)?;
+    }
+
+    // The run's own evidence for things it did not own, and its bookkeeping. Neither can
+    // reconstruct a memory, and leaving them would keep the run's shape after the run is gone.
+    let tx = store.db_mut().transaction()?;
+    tx.execute(
+        "DELETE FROM witness WHERE session = ?1",
+        params![session.as_str()],
+    )?;
+    tx.execute(
+        "DELETE FROM ledger WHERE session = ?1",
+        params![session.as_str()],
+    )?;
+    tx.execute(
+        "DELETE FROM episode_segment WHERE session = ?1",
+        params![session.as_str()],
+    )?;
+    tx.execute(
+        "DELETE FROM session WHERE id = ?1",
+        params![session.as_str()],
+    )?;
+    tx.commit()?;
+    Ok(gone)
+}
+
+/// Everything that came from one source.
+///
+/// §10.8's environment scope, and the one an incident actually needs: a page turned out to be
+/// hostile, and the question is what it touched. Removes every memory whose evidence comes only
+/// from that domain.
+///
+/// A memory with evidence from elsewhere as well is kept, with the tainted witness removed —
+/// because it stands on what remains, and deleting it would let one poisoned source take honest
+/// memories with it. That is the denial-of-service version of this operation and it is worth
+/// refusing.
+pub fn purge_domain(store: &mut Store, domain: &aeon_model::Domain) -> Result<usize, StoreError> {
+    let touched: Vec<MemoryId> = {
+        let mut statement = store
+            .db()
+            .prepare("SELECT DISTINCT memory FROM witness WHERE domain = ?1")?;
+        statement
+            .query_map(params![domain.as_str()], |r| {
+                Ok(MemoryId::new(r.get::<_, String>(0)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let mut gone = 0;
+    for id in &touched {
+        let total: i64 = store.db().query_row(
+            "SELECT count(*) FROM witness WHERE memory = ?1",
+            params![id.as_str()],
+            |r| r.get(0),
+        )?;
+        let tainted: i64 = store.db().query_row(
+            "SELECT count(*) FROM witness WHERE memory = ?1 AND domain = ?2",
+            params![id.as_str(), domain.as_str()],
+            |r| r.get(0),
+        )?;
+
+        if tainted >= total {
+            gone += purge(store, id)?;
+        } else {
+            store.db().execute(
+                "DELETE FROM witness WHERE memory = ?1 AND domain = ?2",
+                params![id.as_str(), domain.as_str()],
+            )?;
+            // Confidence is derived, so it has to be recomputed now that the evidence changed.
+            // Leaving it would state a number the remaining witnesses do not support.
+            store.rescore(id, aeon_model::Timestamp::default())?;
+        }
+    }
+    Ok(gone)
+}

@@ -31,6 +31,13 @@ pub struct Args {
     #[arg(long)]
     json: bool,
 
+    /// Report whether the store can tell a popular memory from a useful one.
+    ///
+    /// The distinction the ledger exists for. Runs the scenario twice — once crediting every
+    /// retrieval, once crediting only attributed outcomes — and reports whether they disagree.
+    #[arg(long = "with-utility")]
+    with_utility: bool,
+
     /// Also run any external benchmark found in this directory.
     ///
     /// Nothing is downloaded and nothing is vendored. A dataset that is not there is reported
@@ -83,6 +90,10 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
         std::fs::create_dir_all(into)?;
         std::fs::write(&path, serde_json::to_string_pretty(&baseline)?)?;
         eprintln!("{}", render::dim(&path.display().to_string()));
+    }
+
+    if args.with_utility {
+        say_utility_split();
     }
 
     if let Some(at) = &args.external {
@@ -271,5 +282,150 @@ fn say_external(at: &std::path::Path) {
              suite is still the gate."
         )
     );
+    crate::say!();
+}
+
+/// Whether retrieval count and attributed utility can actually diverge.
+///
+/// Not a benchmark of aeon against something else — a demonstration that the two numbers are
+/// separable at all. A store that could not tell them apart would report identical figures here
+/// however much ledger machinery it carried.
+fn say_utility_split() {
+    use aeon_model::{
+        Attribution, Body, Memory, NoteKind, OutcomeKind, Presentation, ScopeId, SessionId, Tier,
+        Witness, WitnessId, WitnessKind,
+    };
+    use aeon_store::{Candidate, Injection, RecallRun, Signals, Store, Use, Verdict, mint};
+
+    let at = START;
+    let scope = ScopeId::new("/w/bench");
+    let run = SessionId::new("01BENCH");
+    let mut store = Store::ephemeral().expect("store");
+
+    let mut kept = |text: &str, n: usize| {
+        let held = Memory::new(
+            mint(at + n as i64),
+            Tier::Fact,
+            scope.clone(),
+            Body::note(text, NoteKind::Claim),
+            at,
+        );
+        let id = held.id.clone();
+        store
+            .remember(
+                held,
+                Witness::new(
+                    WitnessId::new(format!("w{n}")),
+                    WitnessKind::Imperative,
+                    run.clone(),
+                    scope.clone(),
+                    at,
+                ),
+                at,
+            )
+            .expect("remember");
+        id
+    };
+    let popular = kept("a memory every query happens to match", 0);
+    let useful = kept("the memory somebody actually followed", 1);
+
+    // Twenty retrievals for one, a single attributed success for the other.
+    for n in 0..20 {
+        store
+            .note_recall(
+                &RecallRun {
+                    id: format!("r{n}"),
+                    scope: scope.clone(),
+                    session: Some(run.clone()),
+                    query_hash: "hash".to_owned(),
+                    requested_at: at + n,
+                    config_fingerprint: "cfg".to_owned(),
+                    vector_available: false,
+                    result_limit: 10,
+                    latency_us: 100,
+                },
+                &[Candidate {
+                    memory: popular.clone(),
+                    rank: 0,
+                    selected: true,
+                    score: 0.9,
+                    signals: Signals::default(),
+                }],
+            )
+            .expect("recall");
+    }
+    store
+        .note_injection(
+            &Injection {
+                id: "i1".to_owned(),
+                recall: None,
+                session: Some(run.clone()),
+                created_at: at,
+                token_count: 10,
+                remote: false,
+                policy: "balanced".to_owned(),
+            },
+            &[(useful.clone(), Presentation::Asserted)],
+        )
+        .expect("inject");
+    store
+        .note_use(&Use {
+            id: "a1".to_owned(),
+            injection: Some("i1".to_owned()),
+            session: Some(run),
+            reported_at: at,
+            tool: Some("shell".to_owned()),
+            action_hash: "h".to_owned(),
+            attribution: Attribution::Explicit,
+            memories: vec![useful.clone()],
+        })
+        .expect("use");
+    store
+        .note_outcome(&Verdict {
+            id: "o1".to_owned(),
+            action: "a1".to_owned(),
+            observed_at: at,
+            kind: OutcomeKind::Succeeded,
+            score: None,
+            evidence_cursor: None,
+            evaluator: "caller".to_owned(),
+            note: None,
+        })
+        .expect("outcome");
+
+    let (seen_popular, _) = store.times_retrieved(&popular).unwrap_or((0, 0));
+    let (seen_useful, _) = store.times_retrieved(&useful).unwrap_or((0, 0));
+    let up = store.utility_of(&popular).expect("utility");
+    let uu = store.utility_of(&useful).expect("utility");
+
+    crate::say!("{}", render::bold("popularity against usefulness"));
+    crate::say!();
+    crate::say!(
+        "  {:<24}  {:>3} retrieved   {:>2} verified helpful",
+        render::dim("matched everything"),
+        seen_popular,
+        up.verified_helpful
+    );
+    crate::say!(
+        "  {:<24}  {:>3} retrieved   {:>2} verified helpful",
+        render::dim("actually followed"),
+        seen_useful,
+        uu.verified_helpful
+    );
+    crate::say!();
+    if up.is_verified() || !uu.is_verified() {
+        crate::say!(
+            "{}",
+            render::bold("the two are not separable — the ledger is not doing its job")
+        );
+    } else {
+        crate::say!(
+            "{}",
+            render::dim(
+                "twenty retrievals bought no evidence; one attributed outcome did. Access count \
+                 is not utility."
+            )
+        );
+    }
     crate::say!();
 }
