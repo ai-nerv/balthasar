@@ -18,6 +18,7 @@
 mod decay;
 mod entity;
 mod episode;
+mod export;
 mod ledger;
 mod mint;
 mod paths;
@@ -36,6 +37,7 @@ mod write;
 pub use decay::{Faded, Weakened};
 pub use entity::{Entity, Kind as EntityKind, extract as entities_in, rarity};
 pub use episode::Episode;
+pub use export::Row as TrainingRow;
 pub use ledger::{Entry, State};
 pub use mint::mint;
 pub use paths::{

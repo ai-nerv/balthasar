@@ -5,12 +5,14 @@
 //! conflating them is how a context ends up full of the most similar things rather than the
 //! most useful ones.
 
+mod advisor;
 mod assemble;
 mod budget;
 mod classify;
 mod policy;
 mod section;
 
+pub use advisor::{Advisory, Forbidden, Proposal, Stage};
 pub use assemble::{Ask, Bound, Context, Rendered, assemble, stores_for};
 pub use budget::{CHARS_PER_TOKEN, fit, near_duplicate, share, tokens};
 pub use classify::{Shape, shape_of};

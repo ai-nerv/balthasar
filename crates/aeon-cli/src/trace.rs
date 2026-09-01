@@ -9,6 +9,7 @@ use crate::{Which, now, open, render};
 use aeon_model::{MemoryId, ScopeId};
 use clap::Parser;
 use std::path::Path;
+use std::path::PathBuf;
 
 /// Follow one search to whatever came of it.
 #[derive(Debug, Parser)]
@@ -206,5 +207,57 @@ fn say_utility(
             "`aeon why` answers whether this is true. This answers whether using it helped."
         )
     );
+    Ok(())
+}
+
+/// Export the ledger as training rows.
+#[derive(Debug, Parser)]
+pub struct DatasetArgs {
+    /// How many rows at most.
+    #[arg(long, default_value_t = 10_000)]
+    limit: usize,
+
+    /// Write here instead of to standard output.
+    #[arg(long, value_name = "FILE")]
+    into: Option<PathBuf>,
+}
+
+/// Write what a policy could be trained on.
+///
+/// Explicit, and never automatic. aeon starts no training jobs, accumulates no dataset in the
+/// background, and sends nothing anywhere — this runs when somebody asks and writes where they
+/// say. The rows carry features and outcomes and no content at all.
+pub fn dataset(
+    store_path: Option<&Path>,
+    scope: &ScopeId,
+    tool: &Which,
+    args: &DatasetArgs,
+) -> anyhow::Result<()> {
+    let store = open(store_path, scope, tool)?;
+    let rows = store.training_rows(args.limit)?;
+
+    let mut out = String::new();
+    for row in &rows {
+        out.push_str(&serde_json::to_string(row)?);
+        out.push('\n');
+    }
+
+    match &args.into {
+        Some(path) => {
+            std::fs::write(path, &out)?;
+            crate::say!(
+                "{} {}",
+                render::bold(&rows.len().to_string()),
+                render::dim(&format!("row(s) → {}", path.display()))
+            );
+            crate::say!(
+                "{}",
+                render::dim(
+                    "features and outcomes only — no queries, no memory text, no arguments"
+                )
+            );
+        }
+        None => print!("{out}"),
+    }
     Ok(())
 }
