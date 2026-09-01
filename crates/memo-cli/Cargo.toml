@@ -6,6 +6,12 @@ license.workspace = true
 publish.workspace = true
 description = "memo's command line"
 
+[features]
+# Forwarded so `cargo build --features dense` reaches the embedder. Off by default: the shipped
+# binary is 7 MB and needs no weights, and that is the build almost everybody wants.
+default = []
+dense = ["memo-embed/dense"]
+
 [dependencies]
 memo-model.workspace = true
 memo-recall.workspace = true

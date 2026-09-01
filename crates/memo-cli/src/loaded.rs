@@ -19,6 +19,10 @@ fn embedder_from(config: &memo_lua::Config) -> Option<Box<dyn memo_embed::Embed>
             .get("model")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
+        path: value
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
     });
     memo_embed::open(&memo_embed::Spec::read(said.as_ref()))
 }

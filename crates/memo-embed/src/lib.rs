@@ -12,11 +12,15 @@
 //! deliberately not the only one, because a memory layer whose search degrades to nothing
 //! without a 30 MB download is a memory layer that fails on the machine that needed it most.
 
+#[cfg(feature = "dense")]
+mod dense;
 mod hashed;
 mod registry;
 
+#[cfg(feature = "dense")]
+pub use dense::Dense;
 pub use hashed::Hashed;
-pub use registry::{Kind, Spec, open, serde_json_lite::Value};
+pub use registry::{Kind, Spec, open, open_explaining, serde_json_lite::Value};
 
 /// What went wrong.
 #[derive(Debug, thiserror::Error)]
