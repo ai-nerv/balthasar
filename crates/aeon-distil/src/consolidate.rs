@@ -25,6 +25,20 @@ use aeon_store::{Cluster, Landing, Store, mint};
 /// a memory layer that learns nothing from a project worked on twice.
 pub const DISTINCT_SESSIONS: usize = 2;
 
+/// How far back a consolidation pass looks for scratch worth corroborating.
+///
+/// Thirty days. Older scratch has either crossed the ladder already or decayed out of the live
+/// set, so opening its file would be paying to read what cannot be promoted. Bounding this is
+/// what stops a pass from scaling with the whole history of a project.
+pub const HORIZON: aeon_model::Timestamp = 30 * 24 * 60 * 60;
+
+/// How many runs one consolidation pass will open.
+///
+/// Newest first, so a project with ten thousand runs makes progress on every pass rather than
+/// timing out on all of them. The number is a wall-clock budget rather than a correctness one:
+/// anything missed this pass is found by the next.
+pub const RUNS_PER_PASS: usize = 256;
+
 /// What a pass did, or would do.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Consolidated {
@@ -56,6 +70,7 @@ impl Consolidated {
 /// is worth now rather than on what it was worth when it was learned.
 pub fn consolidate(
     store: &mut Store,
+    scratch: Option<&mut aeon_store::Scratchpad>,
     settings: &Settings,
     scope: &ScopeId,
     now: Timestamp,
@@ -76,7 +91,20 @@ pub fn consolidate(
     };
     report.decayed = faded.weakened.len();
 
-    for group in store.scratch_clusters(scope.as_str(), DISTINCT_SESSIONS)? {
+    // Where the scratch is. A host that keeps each run in its own file has to be asked across
+    // all of them; one that keeps everything in the project's store answers from a query.
+    let mut scratch = scratch;
+    let groups = match scratch.as_mut() {
+        Some(pad) => {
+            if !dry_run {
+                report.decayed += pad.weaken_all(now)?;
+            }
+            pad.recurring(scope.as_str(), DISTINCT_SESSIONS, now - HORIZON, RUNS_PER_PASS)?
+        }
+        None => store.scratch_clusters(scope.as_str(), DISTINCT_SESSIONS)?,
+    };
+
+    for group in groups {
         report.clusters += 1;
         if dry_run {
             report.promoted.push(group.text);
@@ -91,6 +119,9 @@ pub fn consolidate(
     // Only now. Everything left has had its chance at the ladder.
     if !dry_run {
         report.swept = store.sweep(now)?.swept.len();
+        if let Some(pad) = scratch.as_mut() {
+            report.swept += pad.sweep_all(now)?;
+        }
     }
     Ok(report)
 }

@@ -3,6 +3,7 @@
 //! Memory that cannot be inspected before it reaches a model is memory nobody will trust. This
 //! is the same code path a harness gets over the socket, printed instead of sent.
 
+use crate::Which;
 use crate::{now, open, render};
 use aeon_model::ScopeId;
 use aeon_recall::{Ask, Bound, Context, Section};
@@ -36,6 +37,7 @@ pub struct Args {
 pub fn run(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     args: &Args,
     loaded: &mut crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
@@ -53,11 +55,11 @@ pub fn run(
     );
 
     let stores = if store_path.is_some() || scope.is_global() {
-        vec![(open(store_path, scope)?, true)]
+        vec![(open(store_path, scope, tool)?, true)]
     } else {
         vec![
-            (open(None, scope)?, true),
-            (open(None, &ScopeId::global())?, false),
+            (open(None, scope, tool)?, true),
+            (open(None, &ScopeId::global(), tool)?, false),
         ]
     };
 

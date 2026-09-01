@@ -32,6 +32,8 @@ impl Held {
     fn ask(&mut self, door: &Door, request: &Request) -> aeon_ipc::Reply {
         let mut at = aeon_host::Answering {
             store: &mut self.0,
+            scrollback: None,
+            scratch: None,
             scope: ScopeId::new("/w/thing"),
             now: NOW,
             inject_floor: floor::INJECT,

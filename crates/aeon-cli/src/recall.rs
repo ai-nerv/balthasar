@@ -1,5 +1,6 @@
 //! `aeon recall` — search, and say why each answer is here.
 
+use crate::Which;
 use crate::{now, open, render};
 use aeon_lua::Floors;
 use aeon_model::{ScopeId, Tier};
@@ -42,6 +43,7 @@ pub struct Args {
 pub fn run(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     args: &Args,
     floors: Floors,
     loaded: &mut crate::loaded::Loaded,
@@ -68,15 +70,21 @@ pub fn run(
     ask.remote = args.remote;
 
     let mut found = Vec::new();
-    // The project first, then what is true everywhere. A project answer shadows a global one,
-    // which is what makes "we deploy to fly" and "I always use make" both sayable.
+    // Which tool each answer came from, so a result set spanning several can say so. Kept here
+    // rather than on the memory: which store a memory is in is a fact about this search, not
+    // about the memory.
+    let mut from: std::collections::HashMap<String, aeon_store::Tool> =
+        std::collections::HashMap::new();
     // The project first, and it says so: a project answer outranks a global one in the same
     // slot, which is what makes "we deploy to fly" and "I always use make" both sayable.
-    for (store, near) in stores(store_path, scope)? {
+    for (store, near, named) in stores(store_path, scope, tool)? {
         ask.near = near;
         // Deliberately without reinforcing. Reading your own memory is not the same as an
         // agent needing it, and counting it as such meant nothing ever faded.
-        found.extend(store.recall(&ask)?);
+        for hit in store.recall(&ask)? {
+            from.insert(hit.memory.id.to_string(), named.clone());
+            found.push(hit);
+        }
     }
     found.sort_by(|a, b| b.score.total_cmp(&a.score));
     found.truncate(args.limit);
@@ -84,7 +92,7 @@ pub fn run(
     // Evidence is fetched for the results that survived, not for every candidate: a search
     // over a thousand memories should not read four thousand witnesses nobody will see.
     if args.explain || args.json {
-        for (store, _) in stores(store_path, scope)? {
+        for (store, _, _) in stores(store_path, scope, tool)? {
             for hit in &mut found {
                 if let Ok(witnesses) = store.witnesses_of(&hit.memory.id)
                     && !witnesses.is_empty()
@@ -114,7 +122,18 @@ pub fn run(
     let project = project_name(scope);
     // Session names are resolved once for the whole result set rather than per line: a page of
     // results is a handful of distinct sessions, and one lookup each would be a query per row.
-    let names = session_names(store_path, scope)?;
+    let names = session_names(store_path, scope, tool)?;
+    // Only worth saying when the answers came from more than one place. On a single-tool
+    // project every line would carry the same word, which is noise rather than provenance.
+    let spans_tools = {
+        let mut seen: Vec<&aeon_store::Tool> = found
+            .iter()
+            .filter_map(|hit| from.get(&hit.memory.id.to_string()))
+            .collect();
+        seen.sort();
+        seen.dedup();
+        seen.len() > 1
+    };
     for hit in &found {
         crate::say!("{}", render::line(&hit.memory, floors.inject, at));
         let named = hit
@@ -123,9 +142,19 @@ pub fn run(
             .as_ref()
             .and_then(|id| names.get(id.as_str()))
             .map(String::as_str);
+        let whose = if spans_tools {
+            from.get(&hit.memory.id.to_string())
+                .map(|t| format!(" · {t}"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         crate::say!(
             "     {}",
-            render::dim(&render::origin(&hit.memory, project.as_deref(), named))
+            render::dim(&format!(
+                "{}{whose}",
+                render::origin(&hit.memory, project.as_deref(), named)
+            ))
         );
         if args.explain {
             crate::say!("     {}", render::dim(&breakdown(hit)));
@@ -139,25 +168,64 @@ pub fn run(
 
 /// Which stores answer a search: the scope asked for, and `global` underneath it unless it
 /// already is `global`.
-fn stores(store_path: Option<&Path>, scope: &ScopeId) -> anyhow::Result<Vec<(Store, bool)>> {
-    if store_path.is_some() || scope.is_global() {
-        return Ok(vec![(open(store_path, scope)?, true)]);
+///
+/// With no tool named, every tool in the project answers. A search is a question about what is
+/// known here, not about what one program happened to file, and a person who has to remember
+/// which tool wrote something in order to find it does not have a memory layer.
+fn stores(
+    store_path: Option<&Path>,
+    scope: &ScopeId,
+    tool: &Which,
+) -> anyhow::Result<Vec<(Store, bool, aeon_store::Tool)>> {
+    if store_path.is_some() {
+        return Ok(vec![(open(store_path, scope, tool)?, true, tool.tool.clone())]);
     }
-    // A missing global store is not an error: it means nothing has been remembered
-    // everywhere yet, which is the ordinary state of a fresh install.
-    Ok(vec![
-        (open(None, scope)?, true),
-        (open(None, &ScopeId::global())?, false),
-    ])
+    let mut out = Vec::new();
+    for named in searched(scope, tool) {
+        let which = Which {
+            tool: named.clone(),
+            named: true,
+        };
+        if !scope.is_global() {
+            out.push((open(None, scope, &which)?, true, named.clone()));
+        }
+        // A missing global store is not an error: it means nothing has been remembered
+        // everywhere yet, which is the ordinary state of a fresh install. Not opened when it is
+        // missing, either — searching several tools should not leave an empty file behind for
+        // each one, for the same reason looking at a run does not create its directory.
+        let everywhere = ScopeId::global();
+        if aeon_store::scope_path(&everywhere, &named).is_file() {
+            out.push((open(None, &everywhere, &which)?, scope.is_global(), named));
+        }
+    }
+    Ok(out)
+}
+
+/// Which tools a search covers.
+///
+/// The one named, or every tool with memory in this project. A project nothing has written to
+/// yet has no tools at all, and answering with none would make the first search after the first
+/// `remember` find nothing — so the default stands in.
+fn searched(scope: &ScopeId, tool: &Which) -> Vec<aeon_store::Tool> {
+    if tool.named {
+        return vec![tool.tool.clone()];
+    }
+    let present = aeon_store::tools_in(scope);
+    if present.is_empty() {
+        vec![tool.tool.clone()]
+    } else {
+        present
+    }
 }
 
 /// Every session's id and the name it is printed under.
 fn session_names(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
 ) -> anyhow::Result<std::collections::HashMap<String, String>> {
     let mut out = std::collections::HashMap::new();
-    for (store, _) in stores(store_path, scope)? {
+    for (store, _, _) in stores(store_path, scope, tool)? {
         for session in store.sessions(usize::MAX)? {
             out.insert(session.id.to_string(), session.name);
         }

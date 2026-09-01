@@ -4,7 +4,7 @@
 //! "sleep-time compute" is exactly what to spend it on. Shows first, like `decay`: a pass that
 //! changes what a project believes should not be a surprise.
 
-use crate::{now, open, render};
+use crate::{Which, now, open, render, runs_under};
 use aeon_distil::Consolidated;
 use aeon_model::ScopeId;
 use clap::Parser;
@@ -30,13 +30,22 @@ pub struct Args {
 pub fn run(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     args: &Args,
     loaded: &mut crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
     let at = now();
-    let mut store = open(store_path, scope)?;
+    let mut store = open(store_path, scope, tool)?;
+    let mut pad = aeon_store::Scratchpad::at(runs_under(store_path, scope, tool));
     let settings = loaded.settings().clone();
-    let report = aeon_distil::consolidate(&mut store, &settings, scope, at, !args.commit)?;
+    let report = aeon_distil::consolidate(
+        &mut store,
+        Some(&mut pad),
+        &settings,
+        scope,
+        at,
+        !args.commit,
+    )?;
 
     for text in &report.promoted {
         loaded.tell("consolidate", &[serde_json::json!(text)]);

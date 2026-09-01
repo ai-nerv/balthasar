@@ -4,6 +4,7 @@
 //! "I do not need this any more" means; the second is what "delete the key I pasted" means, and
 //! conflating them would make one of those two sentences unanswerable.
 
+use crate::Which;
 use crate::{now, open, render};
 use aeon_model::{MemoryId, ScopeId};
 use aeon_store::Store;
@@ -33,11 +34,12 @@ pub struct Args {
 pub fn run(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     args: &Args,
     loaded: &mut crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
     let at = now();
-    let mut store = open(store_path, scope)?;
+    let mut store = open(store_path, scope, tool)?;
     let id = resolve(&store, &args.id)?;
     let memory = store
         .get(&id)?

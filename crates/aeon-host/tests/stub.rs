@@ -23,6 +23,8 @@ fn serving(name: &str, seed: &[&str]) -> (std::path::PathBuf, std::thread::JoinH
     for text in seed {
         let mut at = Answering {
             store: &mut store,
+            scrollback: None,
+            scratch: None,
             scope: ScopeId::new("/w/thing"),
             now: NOW,
             inject_floor: floor::INJECT,
@@ -42,6 +44,8 @@ fn serving(name: &str, seed: &[&str]) -> (std::path::PathBuf, std::thread::JoinH
         let _ = listener.serve(|peer: &Peer, request: Request| {
             let mut at = Answering {
                 store: &mut store,
+                scrollback: None,
+                scratch: None,
                 scope: ScopeId::new("/w/thing"),
                 now: NOW,
                 inject_floor: floor::INJECT,

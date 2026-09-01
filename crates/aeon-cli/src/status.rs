@@ -1,5 +1,6 @@
 //! `aeon` with nothing after it — what this scope remembers.
 
+use crate::Which;
 use crate::{now, open, render};
 use aeon_lua::Floors;
 use aeon_model::ScopeId;
@@ -9,11 +10,12 @@ use std::path::Path;
 pub fn run(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     floors: Floors,
     loaded: &crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
     let at = now();
-    let store = open(store_path, scope)?;
+    let store = open(store_path, scope, tool)?;
 
     crate::say!("{}", render::bold(scope.as_str()));
     crate::say!("{}", render::dim(&store.path().display().to_string()));

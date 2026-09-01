@@ -28,6 +28,8 @@ impl Serving {
         for text in seed {
             let mut at = Answering {
                 store: &mut store,
+                scrollback: None,
+                scratch: None,
                 scope: ScopeId::new("/w/thing"),
                 now: 1_756_000_000,
                 inject_floor: floor::INJECT,
@@ -49,6 +51,8 @@ impl Serving {
             let _ = listener.serve(|peer: &Peer, request: Request| {
                 let mut at = Answering {
                     store: &mut store,
+                    scrollback: None,
+                    scratch: None,
                     scope: ScopeId::new("/w/thing"),
                     now: 1_756_000_000,
                     inject_floor: floor::INJECT,

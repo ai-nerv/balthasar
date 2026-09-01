@@ -12,12 +12,14 @@ mod decay;
 mod eval;
 mod forget;
 mod ingest;
+mod init;
 mod loaded;
 mod promote;
 mod recall;
 mod reindex;
 mod remember;
 mod render;
+mod replay;
 mod serve;
 mod sessions;
 mod status;
@@ -38,6 +40,14 @@ struct Cli {
     /// project share one memory rather than each starting the others' amnesia.
     #[arg(long, global = true, default_value = "project")]
     scope: String,
+
+    /// Which tool the memory belongs to.
+    ///
+    /// aeon keeps one store per tool per project, so a harness remembering a decision and a
+    /// shell recording every command it ran do not share a decay curve or a ranking. Socket
+    /// clients are named by the kernel and need not say; this is for the terminal.
+    #[arg(long, global = true, value_name = "NAME")]
+    tool: Option<String>,
 
     /// Work in a store somewhere else. For tests, and for looking at a copy.
     #[arg(long, global = true, value_name = "FILE")]
@@ -81,6 +91,8 @@ enum What {
     Ingest(ingest::Args),
     /// Give memories their vectors. Never on the critical path.
     Reindex(reindex::Args),
+    /// Everything a run said, back out again.
+    Replay(replay::Args),
     /// Which runs this project has had, and what each left behind.
     Sessions(sessions::Args),
     /// Carry what recurred across sessions into the project's memory. Shows first.
@@ -91,6 +103,8 @@ enum What {
     Export(transfer::ExportArgs),
     /// Read back what `export` wrote.
     Import(transfer::ImportArgs),
+    /// Make this directory the root of its own memory.
+    Init(init::Args),
     /// Install the shipped configuration into `$XDG_CONFIG_HOME/aeon`.
     Configs(configs::Args),
     /// Listen for other programs.
@@ -131,27 +145,30 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Loaded::read(&cwd)?
     };
     let scope = scope_of(cli, &mut loaded, &cwd);
+    let tool = tool_of(cli, &loaded)?;
     let floors = *loaded.settings().floors();
     let where_ = cli.store.as_deref();
 
     let outcome = match &cli.what {
-        None => status::run(where_, &scope, floors, &loaded),
-        Some(What::Remember(args)) => remember::run(where_, &scope, args, floors, &mut loaded),
-        Some(What::Recall(args)) => recall::run(where_, &scope, args, floors, &mut loaded),
-        Some(What::Why(args)) => ask::run(where_, &scope, args, floors),
-        Some(What::Promote(args)) => promote::run(where_, &scope, args, &mut loaded),
-        Some(What::Forget(args)) => forget::run(where_, &scope, args, &mut loaded),
-        Some(What::Context(args)) => context::run(where_, &scope, args, &mut loaded),
-        Some(What::Ingest(args)) => ingest::run(where_, &scope, args, &mut loaded),
-        Some(What::Reindex(args)) => reindex::run(where_, &scope, args, &loaded),
-        Some(What::Sessions(args)) => sessions::run(where_, &scope, args),
-        Some(What::Consolidate(args)) => consolidate::run(where_, &scope, args, &mut loaded),
-        Some(What::Decay(args)) => decay::run(where_, &scope, args),
-        Some(What::Export(args)) => transfer::export(where_, &scope, args),
-        Some(What::Import(args)) => transfer::import(where_, &scope, args),
+        None => status::run(where_, &scope, &tool, floors, &loaded),
+        Some(What::Remember(args)) => remember::run(where_, &scope, &tool, args, floors, &mut loaded),
+        Some(What::Recall(args)) => recall::run(where_, &scope, &tool, args, floors, &mut loaded),
+        Some(What::Why(args)) => ask::run(where_, &scope, &tool, args, floors),
+        Some(What::Promote(args)) => promote::run(where_, &scope, &tool, args, &mut loaded),
+        Some(What::Forget(args)) => forget::run(where_, &scope, &tool, args, &mut loaded),
+        Some(What::Context(args)) => context::run(where_, &scope, &tool, args, &mut loaded),
+        Some(What::Ingest(args)) => ingest::run(where_, &scope, &tool, args, &mut loaded),
+        Some(What::Reindex(args)) => reindex::run(where_, &scope, &tool, args, &loaded),
+        Some(What::Replay(args)) => replay::run(where_, &scope, &tool, args),
+        Some(What::Sessions(args)) => sessions::run(where_, &scope, &tool, args),
+        Some(What::Consolidate(args)) => consolidate::run(where_, &scope, &tool, args, &mut loaded),
+        Some(What::Decay(args)) => decay::run(where_, &scope, &tool, args),
+        Some(What::Export(args)) => transfer::export(where_, &scope, &tool, args),
+        Some(What::Import(args)) => transfer::import(where_, &scope, &tool, args),
+        Some(What::Init(args)) => init::run(args),
         Some(What::Configs(args)) => configs::run(args),
-        Some(What::Serve(args)) => serve::serve(where_, &scope, args, floors, &mut loaded),
-        Some(What::Api(args)) => serve::api(where_, &scope, args, floors, &mut loaded),
+        Some(What::Serve(args)) => serve::serve(where_, &scope, &tool, args, floors, &mut loaded),
+        Some(What::Api(args)) => serve::api(where_, &scope, &tool, args, floors, &mut loaded),
         Some(What::Eval(args)) => eval::run(args),
         Some(What::LuaApi) => {
             serve::lua_api();
@@ -174,6 +191,33 @@ fn scope_of(cli: &Cli, loaded: &mut Loaded, cwd: &Path) -> aeon_model::ScopeId {
         "project" | "." => loaded.scope_of(cwd),
         path => loaded.scope_of(&PathBuf::from(path)),
     }
+}
+
+/// Open the scrollback for a scope.
+///
+/// Beside the memory store and never inside it: a transcript is orders of magnitude larger than
+/// the memories distilled from it, and sharing a file would make every recall walk past it.
+///
+/// `--store` names a memory file directly, so the scrollback goes beside *that* — which is what
+/// makes a test or a copy self-contained rather than reaching into the real data directory.
+pub(crate) fn scrollback(
+    override_path: Option<&Path>,
+    scope: &aeon_model::ScopeId,
+    tool: &Which,
+) -> anyhow::Result<aeon_store::Transcript> {
+    let path = match override_path {
+        Some(memory) => {
+            let stem = memory
+                .file_stem()
+                .map_or_else(|| "store".to_owned(), |s| s.to_string_lossy().into_owned());
+            memory.with_file_name(format!("{stem}-transcript.db"))
+        }
+        None => {
+            home(scope)?;
+            aeon_store::transcript_path(scope, &tool.tool)
+        }
+    };
+    Ok(aeon_store::Transcript::open(&path)?)
 }
 
 /// The retrieval weighting a configuration asked for.
@@ -216,16 +260,91 @@ pub(crate) fn now() -> aeon_model::Timestamp {
     }
 }
 
+/// Which tool a command works in, and whether anybody said so.
+///
+/// The second half is what makes a read different from a write. A write always names one tool,
+/// because provenance is the point and "some tool" is not an answer. A read with nothing named
+/// searches every tool in the project, because the question is what is known here rather than
+/// what one program happened to file.
+#[derive(Debug, Clone)]
+pub(crate) struct Which {
+    /// The tool to write as, and to read from when one was named.
+    pub tool: aeon_store::Tool,
+    /// Whether a flag or a configuration said which, rather than this being the default.
+    pub named: bool,
+}
+
 /// Open the store a command should work in.
 pub(crate) fn open(
     override_path: Option<&std::path::Path>,
     scope: &aeon_model::ScopeId,
+    tool: &Which,
 ) -> anyhow::Result<aeon_store::Store> {
-    let path = override_path.map_or_else(|| aeon_store::scope_path(scope), Path::to_owned);
+    let path =
+        override_path.map_or_else(|| aeon_store::scope_path(scope, &tool.tool), Path::to_owned);
+    if override_path.is_none() {
+        home(scope)?;
+    }
     Ok(aeon_store::Store::open(&path)?)
 }
 
 use std::path::Path;
+
+/// Where a tool's runs keep their own memories.
+///
+/// Beneath the tool's home, so a run's scratch sits beside the project store it promotes into.
+/// `--store` names a file directly and takes its runs with it, which is what makes a test or a
+/// copy self-contained rather than reaching into the real data directory.
+pub(crate) fn runs_under(
+    override_path: Option<&Path>,
+    scope: &aeon_model::ScopeId,
+    tool: &Which,
+) -> PathBuf {
+    match override_path {
+        Some(memory) => memory.with_extension("runs"),
+        None => aeon_store::home_of(scope).join(tool.tool.as_str()),
+    }
+}
+
+/// Make sure a scope has somewhere to keep its memory.
+///
+/// Creating the home is a side effect of opening a store rather than a command somebody has to
+/// remember to run, and it is idempotent. Scopes with no project — the global one, and any
+/// directory that is not a checkout — have nothing to create: the data directory needs no
+/// marker and no ignore file.
+fn home(scope: &aeon_model::ScopeId) -> anyhow::Result<()> {
+    if let Some(at) = aeon_store::project_home(scope) {
+        aeon_store::make_home(&at)?;
+    }
+    Ok(())
+}
+
+/// Which tool's memory the flags name.
+///
+/// Strict about what `--tool` accepts, because a name that had to be rewritten to be usable
+/// would put memories somewhere nobody asked for. Socket clients do not come through here —
+/// the kernel names them, and `Tool::from_program` salvages what it can from an executable's
+/// name because nobody typed that.
+fn tool_of(cli: &Cli, loaded: &Loaded) -> anyhow::Result<Which> {
+    let said = cli
+        .tool
+        .as_deref()
+        .or_else(|| loaded.settings().tool())
+        .map(str::to_owned);
+    match said {
+        None => Ok(Which {
+            tool: aeon_store::Tool::default(),
+            named: false,
+        }),
+        Some(name) => aeon_store::Tool::new(&name)
+            .map(|tool| Which { tool, named: true })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "`{name}` cannot name a tool: lowercase letters, digits, `-` and `_`, up to 32"
+                )
+            }),
+    }
+}
 
 #[cfg(test)]
 mod tests {

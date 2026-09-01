@@ -50,6 +50,21 @@ pub const SURFACE: &[Verb] = &[
         about: "what to send: (session, window) -> { keep, mask, drop, summarise, why }",
     },
     Verb {
+        name: "amend",
+        writes: true,
+        about: "revise a turn where it stands: (session, turn) -> ok",
+    },
+    Verb {
+        name: "replay",
+        writes: false,
+        about: "everything a run said, in order: (session) -> [turn]",
+    },
+    Verb {
+        name: "resume",
+        writes: false,
+        about: "where a restarting harness left off: (session) -> { next, turns }",
+    },
+    Verb {
         name: "remember",
         writes: true,
         about: "propose something worth keeping: (text, opts) -> landing",

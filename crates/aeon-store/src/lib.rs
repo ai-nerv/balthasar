@@ -23,20 +23,27 @@ mod paths;
 mod purge;
 mod read;
 mod row;
+mod scratchpad;
 mod schema;
 mod score;
 mod session;
+mod transcript;
 mod write;
 
 pub use decay::{Faded, Weakened};
 pub use entity::{Entity, Kind as EntityKind, extract as entities_in, rarity};
 pub use ledger::{Entry, State};
 pub use mint::mint;
-pub use paths::{data_dir, scope_of, scope_path};
+pub use paths::{
+    HOME, Tool, data_dir, home_of, make_home, project_home, scope_of, scope_path, session_dir,
+    session_dir_in, session_path, session_transcript_path, tools_in,
+};
 pub use purge::purge;
+pub use scratchpad::Scratchpad;
 pub use read::{Cluster, Recall};
 pub use score::{Scored, Weights, cosine, coverage, frecency};
 pub use session::{Session, name_for};
+pub use transcript::{Run, Transcript, Turn, transcript_path};
 pub use write::Landing;
 
 use rusqlite::Connection;

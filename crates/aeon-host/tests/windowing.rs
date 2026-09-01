@@ -22,6 +22,8 @@ impl Harness {
     fn ask(&mut self, request: &Request) -> Reply {
         let mut at = Answering {
             store: &mut self.store,
+            scrollback: None,
+            scratch: None,
             scope: ScopeId::new("/w/thing"),
             now: NOW,
             inject_floor: floor::INJECT,
@@ -38,6 +40,8 @@ impl Harness {
         };
         let mut at = Answering {
             store: &mut self.store,
+            scrollback: None,
+            scratch: None,
             scope: ScopeId::new("/w/thing"),
             now: NOW,
             inject_floor: floor::INJECT,

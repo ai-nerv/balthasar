@@ -131,6 +131,8 @@ pub struct Settings {
     pub witness: Vec<(WitnessKind, f64)>,
     /// Directories whose own `.aeon.lua` may declare.
     pub trusted: Vec<String>,
+    /// Which tool this configuration's memories belong to, when the binary name is not it.
+    pub tool: Option<String>,
     /// Words that mark a user turn as an instruction to remember.
     pub imperatives: Vec<String>,
 }
@@ -232,9 +234,20 @@ impl Settings {
             weights,
             budget,
             witness: witness_weights(config),
+            tool: config.string("tool").map(str::to_owned),
             trusted: strings(config, "trusted"),
             imperatives: imperatives(config),
         }
+    }
+
+    /// Which tool this configuration names, if it names one.
+    ///
+    /// A wrapper script or a dev build under another name is the case this exists for: the
+    /// kernel would call it something nobody recognises, and the memories would land in a
+    /// directory named after the wrapper.
+    #[must_use]
+    pub fn tool(&self) -> Option<&str> {
+        self.tool.as_deref()
     }
 
     /// The decay constant for a class, as this configuration set it.

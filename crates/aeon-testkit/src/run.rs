@@ -101,7 +101,7 @@ pub fn run(scenario: &Scenario, with_memory: bool) -> Score {
         if with_memory {
             // Between sessions, not during. Free compute, and the point at which what
             // recurred in unrelated runs becomes the project's.
-            consolidate(&mut store, &settings, &scope, session.at + 3600, false)
+            consolidate(&mut store, None, &settings, &scope, session.at + 3600, false)
                 .expect("consolidate");
         }
         score.sessions.push(ran);

@@ -27,7 +27,7 @@ fn said(store: &mut Store, session: &str, text: &str, at: Timestamp) {
 }
 
 fn run(store: &mut Store, now: Timestamp) -> aeon_distil::Consolidated {
-    consolidate(store, &Settings::default(), &scope(), now, false).expect("consolidate")
+    consolidate(store, None, &Settings::default(), &scope(), now, false).expect("consolidate")
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn a_dry_run_writes_nothing() {
 
     let before = store.all().expect("export").len();
     let report =
-        consolidate(&mut store, &Settings::default(), &scope(), AUGUST, true).expect("preview");
+        consolidate(&mut store, None, &Settings::default(), &scope(), AUGUST, true).expect("preview");
     assert!(report.dry_run);
     assert_eq!(report.promoted.len(), 1, "it still says what it would do");
     assert_eq!(

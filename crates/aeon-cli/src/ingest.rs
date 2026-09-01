@@ -4,6 +4,7 @@
 //! offered to the ladder. Nothing here knows what a harness's records look like; that is the
 //! adapter's job and the adapter is Lua.
 
+use crate::Which;
 use crate::{now, open, render};
 use aeon_distil::{Ingest, Report};
 use aeon_model::ScopeId;
@@ -38,11 +39,12 @@ pub struct Args {
 pub fn run(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     args: &Args,
     loaded: &mut crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
     let at = now();
-    let mut store = open(store_path, scope)?;
+    let mut store = open(store_path, scope, tool)?;
     let settings = loaded.settings().clone();
 
     let ask = Ingest {

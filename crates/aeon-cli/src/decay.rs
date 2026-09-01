@@ -4,6 +4,7 @@
 //! cannot undo by asking again, so it defaults to showing rather than doing: `aeon decay`
 //! rehearses, and `aeon decay --now` commits.
 
+use crate::Which;
 use crate::{now, open, render};
 use aeon_model::ScopeId;
 use aeon_store::Faded;
@@ -23,9 +24,9 @@ pub struct Args {
 }
 
 /// Rehearse or run a decay pass.
-pub fn run(store_path: Option<&Path>, scope: &ScopeId, args: &Args) -> anyhow::Result<()> {
+pub fn run(store_path: Option<&Path>, scope: &ScopeId, tool: &Which, args: &Args) -> anyhow::Result<()> {
     let at = now();
-    let mut store = open(store_path, scope)?;
+    let mut store = open(store_path, scope, tool)?;
     let report = if args.commit {
         store.decay(at)?
     } else {

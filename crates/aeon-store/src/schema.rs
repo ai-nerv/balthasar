@@ -1,13 +1,15 @@
-//! The tables, and how a store gets from one version of them to the next.
+//! The tables.
 //!
-//! Migrations are numbered and forward-only, tracked in SQLite's own `user_version` so no table
-//! is needed to say which tables exist. While aeon is the only reader, a migration may be
-//! rewritten freely; once somebody else's store is in the field it may not.
+//! Numbered and forward-only, tracked in SQLite's own `user_version` so no table is needed to
+//! say which tables exist. There is one so far, and it is the shape the store settled into
+//! rather than the sequence of edits that got there: nothing else has ever read one of these
+//! files, so the sequence was archaeology. The next change appends a migration; this one does
+//! not have to remember a past nobody lived through.
 
 use rusqlite::Connection;
 
 /// Every migration, in order. The index is the version it produces.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
+const MIGRATIONS: &[&str] = &[V1];
 
 /// Bring `connection` up to the current schema.
 pub fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
@@ -22,7 +24,7 @@ pub fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
-/// The store, as first written.
+/// The store.
 const V1: &str = r#"
 CREATE TABLE memory (
   id             TEXT PRIMARY KEY,
@@ -35,6 +37,12 @@ CREATE TABLE memory (
   subject        TEXT,
   predicate      TEXT,
   object         TEXT,
+
+  -- A claim's opening words, so a revision of it can be found without scanning. Most of what
+  -- people say carries no slot: "we deploy to heroku" is prose. Without this, aeon asserted
+  -- that and "we deploy to fly.io" at the same time, a month apart, with nothing to tell them
+  -- apart.
+  lead           TEXT,
 
   body           TEXT NOT NULL,
   text           TEXT NOT NULL,
@@ -51,6 +59,11 @@ CREATE TABLE memory (
   access_count   INTEGER NOT NULL DEFAULT 0,
   pinned         INTEGER NOT NULL DEFAULT 0,
 
+  -- Whether this predicate holds one answer or several. A store that assumes every predicate
+  -- holds one cannot record that somebody likes two things: `likes -> sushi` and
+  -- `likes -> pizza` would contradict each other, while `deploy_target` genuinely may not.
+  single_valued  INTEGER NOT NULL DEFAULT 1,
+
   confidence     REAL NOT NULL DEFAULT 0.0,
   privacy        TEXT NOT NULL DEFAULT 'open',
   through        TEXT NOT NULL DEFAULT 'local',
@@ -64,13 +77,17 @@ CREATE TABLE memory (
 -- Two simultaneously-true answers to one slot are impossible, in the database rather than in
 -- a policy somebody has to remember to apply. A correction that forgets to close the old
 -- interval fails loudly here instead of leaving the store quietly saying both.
+--
+-- Keyed on `single_valued` as well, so the constraint does real work for `deploy_target` and
+-- stays out of the way of anything a person can have several of.
 CREATE UNIQUE INDEX memory_slot_live ON memory(scope, subject, predicate)
-  WHERE valid_to IS NULL AND tier = 'fact' AND archived_at IS NULL;
+  WHERE valid_to IS NULL AND tier = 'fact' AND archived_at IS NULL AND single_valued = 1;
 
 CREATE INDEX memory_recall  ON memory(scope, tier, archived_at, confidence DESC);
 CREATE INDEX memory_decay   ON memory(pinned, archived_at, last_accessed);
 CREATE INDEX memory_session ON memory(session, tier);
 CREATE INDEX memory_hash    ON memory(scope, content_hash);
+CREATE INDEX memory_lead    ON memory(scope, tier, lead) WHERE valid_to IS NULL;
 
 CREATE VIRTUAL TABLE memory_fts USING fts5(
   text,
@@ -115,6 +132,10 @@ CREATE TABLE link (
 
 CREATE INDEX link_to ON link(dst, rel);
 
+-- `name` and `title` because "which session did I learn that in" has no good answer when the
+-- only handle is a twenty-six character id. The name is short and typeable; the title is
+-- whatever was asked first, which is the closest thing to a name that exists without asking a
+-- model to invent one.
 CREATE TABLE session (
   id       TEXT PRIMARY KEY,
   scope    TEXT NOT NULL,
@@ -123,8 +144,13 @@ CREATE TABLE session (
   opened   INTEGER NOT NULL,
   closed   INTEGER,
   branch   TEXT,
-  parent   TEXT
+  parent   TEXT,
+  name     TEXT,
+  title    TEXT
 ) STRICT;
+
+CREATE INDEX session_named  ON session(scope, name);
+CREATE INDEX session_recent ON session(scope, opened DESC);
 
 -- Every ingest of every source, so a re-run is idempotent and a better extractor can be run
 -- over old material without redoing what has not changed.
@@ -136,29 +162,14 @@ CREATE TABLE stamp (
   at         INTEGER NOT NULL,
   PRIMARY KEY (source, ref, extractor)
 ) STRICT;
-"#;
 
-/// Sessions get a name a person can say, and a title saying what they were for.
-///
-/// A project has many sessions, and "which session did I learn that in" is a question with no
-/// good answer when the only handle is a twenty-six character id. The name is short and
-/// typeable; the title is whatever was asked first, which is the closest thing to a name that
-/// exists without asking a model to invent one.
-const V2: &str = r#"
-ALTER TABLE session ADD COLUMN name TEXT;
-ALTER TABLE session ADD COLUMN title TEXT;
-CREATE INDEX session_named ON session(scope, name);
-CREATE INDEX session_recent ON session(scope, opened DESC);
-"#;
-
-/// The ledger: what is in a session's context window, and what it costs.
-///
-/// Its own table rather than columns on `memory`, because the two answer different questions
-/// and change at different rates. A memory is a claim that may outlive every session; a ledger
-/// row is one turn's place in one window, and it is rewritten every time a plan masks or
-/// summarises something. Keeping them apart is what lets the window be replanned without
-/// touching a single durable record.
-const V3: &str = r#"
+-- What is in a session's context window, and what it costs.
+--
+-- Its own table rather than columns on `memory`, because the two answer different questions and
+-- change at different rates. A memory is a claim that may outlive every session; a ledger row is
+-- one turn's place in one window, and it is rewritten every time a plan masks or summarises
+-- something. Keeping them apart is what lets the window be replanned without touching a single
+-- durable record.
 CREATE TABLE ledger (
   session  TEXT NOT NULL,
   cursor   INTEGER NOT NULL,
@@ -174,18 +185,9 @@ CREATE TABLE ledger (
 ) STRICT;
 
 CREATE INDEX ledger_live ON ledger(session, state, cursor);
-"#;
 
-/// What a memory is about, and how many answers a predicate may hold at once.
-///
-/// Two additions that arrived together because they are the same realisation: a store that
-/// knows only words cannot tell `deployment` from `we deploy with fly`, and a store that
-/// assumes every predicate holds one answer cannot record that somebody likes two things.
-///
-/// The unique index is rebuilt to key on `single_valued`. It was applied to every fact, which
-/// meant `likes → sushi` and `likes → pizza` could not both be true — a constraint doing real
-/// work for `deploy_target` and silently wrong for anything a person can have several of.
-const V4: &str = r#"
+-- What a memory is about. A store that knows only words cannot tell `deployment` from
+-- `we deploy with fly`.
 CREATE TABLE entity (
   scope    TEXT NOT NULL,
   name     TEXT NOT NULL,
@@ -197,22 +199,6 @@ CREATE TABLE entity (
 
 CREATE INDEX entity_name ON entity(scope, name);
 CREATE INDEX entity_of   ON entity(memory);
-
-ALTER TABLE memory ADD COLUMN single_valued INTEGER NOT NULL DEFAULT 1;
-
-DROP INDEX memory_slot_live;
-CREATE UNIQUE INDEX memory_slot_live ON memory(scope, subject, predicate)
-  WHERE valid_to IS NULL AND tier = 'fact' AND archived_at IS NULL AND single_valued = 1;
-"#;
-
-/// A claim's opening words, so a revision of it can be found without scanning.
-///
-/// Most of what people say carries no slot: "we deploy to heroku" is prose. Without this,
-/// aeon asserted that and "we deploy to fly.io" at the same time, a month apart, with nothing
-/// to tell them apart.
-const V5: &str = r#"
-ALTER TABLE memory ADD COLUMN lead TEXT;
-CREATE INDEX memory_lead ON memory(scope, tier, lead) WHERE valid_to IS NULL;
 "#;
 
 #[cfg(test)]

@@ -4,6 +4,7 @@
 //! table rather than a number. A confidence nobody can interrogate is a confidence nobody
 //! should act on.
 
+use crate::Which;
 use crate::{now, open, render};
 use aeon_lua::Floors;
 use aeon_model::{LinkRelation, ScopeId};
@@ -25,11 +26,12 @@ pub struct Args {
 pub fn run(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     args: &Args,
     floors: Floors,
 ) -> anyhow::Result<()> {
     let at = now();
-    let store = open(store_path, scope)?;
+    let store = open(store_path, scope, tool)?;
     let id = crate::forget::resolve(&store, &args.id)?;
     let memory = store
         .get(&id)?
@@ -97,6 +99,9 @@ pub fn run(
             memory.distinct_sessions()
         ))
     );
+    // What the witnesses actually saw, when the scrollback still holds it. The difference
+    // between naming a cursor at somebody and showing them the turn.
+    let scrollback = crate::scrollback(store_path, scope, tool).ok();
     let names: std::collections::HashMap<String, String> = store
         .sessions(usize::MAX)?
         .into_iter()
@@ -105,6 +110,25 @@ pub fn run(
     for witness in &memory.witnesses {
         let named = names.get(witness.session.as_str()).map(String::as_str);
         crate::say!("{}", render::evidence(witness, at, named));
+
+        let quoted = witness.cursor.and_then(|cursor| {
+            scrollback
+                .as_ref()?
+                .at(&witness.session, cursor)
+                .ok()
+                .flatten()
+        });
+        if let Some(turn) = quoted
+            && !turn.text.trim().is_empty()
+        {
+            crate::say!(
+                "{}",
+                render::dim(&format!(
+                    "                 “{}”",
+                    render::clip(&turn.text, 96)
+                ))
+            );
+        }
     }
     if memory.witnesses.is_empty() {
         crate::say!(

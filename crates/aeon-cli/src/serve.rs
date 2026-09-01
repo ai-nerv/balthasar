@@ -4,7 +4,7 @@
 //! is the arrangement that keeps a socket answer and a terminal answer from describing a
 //! memory differently.
 
-use crate::{now, open, render};
+use crate::{Which, now, open, render, runs_under};
 use aeon_host::{Answering, Door};
 use aeon_ipc::{Listener, Peer, Reply, Request};
 use aeon_model::ScopeId;
@@ -32,6 +32,7 @@ pub struct ApiArgs {
 pub fn serve(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     args: &ServeArgs,
     floors: aeon_lua::Floors,
     loaded: &mut crate::loaded::Loaded,
@@ -48,10 +49,43 @@ pub fn serve(
         render::dim(&format!("descriptor {}", descriptor.display()))
     );
 
-    let mut store = open(store_path, scope)?;
+    // One store per tool, opened when that tool first speaks. A harness and a shell reaching
+    // the same daemon are two memories, and neither is opened on the chance that it might be.
+    let mut opened: std::collections::HashMap<aeon_store::Tool, Opened> =
+        std::collections::HashMap::new();
+    let fallback = tool.tool.clone();
+
     listener.serve(|peer: &Peer, request: Request| {
+        let named = named_by_kernel(peer).unwrap_or_else(|| fallback.clone());
+        let held = match opened.entry(named.clone()) {
+            std::collections::hash_map::Entry::Occupied(seat) => seat.into_mut(),
+            std::collections::hash_map::Entry::Vacant(seat) => {
+                // The kernel named it, so this counts as named: a peer reads its own memory
+                // rather than every tool's, which is what a program asking for context wants.
+                let which = Which {
+                    tool: named.clone(),
+                    named: true,
+                };
+                let made = open(store_path, scope, &which).and_then(|store| {
+                    crate::scrollback(store_path, scope, &which).map(|scrollback| Opened {
+                        store,
+                        scrollback,
+                        scratch: aeon_store::Scratchpad::at(runs_under(store_path, scope, &which)),
+                    })
+                });
+                match made {
+                    Ok(ready) => {
+                        eprintln!("{}", render::dim(&format!("tool {named}")));
+                        seat.insert(ready)
+                    }
+                    Err(why) => return Reply::refused(why.to_string()),
+                }
+            }
+        };
         let mut at = Answering {
-            store: &mut store,
+            store: &mut held.store,
+            scrollback: Some(&mut held.scrollback),
+            scratch: Some(&mut held.scratch),
             scope: scope.clone(),
             now: now(),
             inject_floor: floors.inject,
@@ -73,6 +107,7 @@ pub fn serve(
 pub fn api(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     args: &ApiArgs,
     floors: aeon_lua::Floors,
     loaded: &mut crate::loaded::Loaded,
@@ -92,10 +127,14 @@ pub fn api(
         args: parsed,
     };
 
-    let reply = match open(store_path, scope) {
-        Ok(mut store) => {
+    let reply = match open(store_path, scope, tool).and_then(|store| {
+        crate::scrollback(store_path, scope, tool).map(|scrollback| (store, scrollback))
+    }) {
+        Ok((mut store, mut scrollback)) => {
             let mut at = Answering {
                 store: &mut store,
+                scrollback: Some(&mut scrollback),
+                scratch: None,
                 scope: scope.clone(),
                 now: now(),
                 inject_floor: floors.inject,
@@ -116,3 +155,27 @@ pub fn api(
 pub fn lua_api() {
     print!("{}", aeon_lua::CLIENT);
 }
+
+/// One tool's memory, held open for as long as the daemon is.
+struct Opened {
+    store: aeon_store::Store,
+    scrollback: aeon_store::Transcript,
+    scratch: aeon_store::Scratchpad,
+}
+
+/// Which tool a connection belongs to, as the kernel names it.
+///
+/// This is the whole reason a tool dimension is safe: the caller is not asked, so it cannot
+/// answer wrongly. A peer the kernel will not name, or whose name nothing survives, falls back
+/// to whatever the daemon was started as rather than being filed under a guess.
+fn named_by_kernel(peer: &Peer) -> Option<aeon_store::Tool> {
+    peer.program
+        .as_deref()
+        .and_then(|program| {
+            Path::new(program)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .and_then(|name| aeon_store::Tool::from_program(&name))
+}
+

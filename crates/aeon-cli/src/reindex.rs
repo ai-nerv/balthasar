@@ -4,6 +4,7 @@
 //! memory with no vector is scored on the signals it does have. A pass here makes the ranking
 //! better; skipping it makes nothing fail.
 
+use crate::Which;
 use crate::{now, open, render};
 use aeon_model::ScopeId;
 use clap::Parser;
@@ -29,6 +30,7 @@ pub struct Args {
 pub fn run(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     args: &Args,
     loaded: &crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
@@ -43,7 +45,7 @@ pub fn run(
         return Ok(());
     };
 
-    let mut store = open(store_path, scope)?;
+    let mut store = open(store_path, scope, tool)?;
     let model = embedder.model().to_owned();
     let ceiling = args.limit.unwrap_or(usize::MAX);
     let mut done = 0_usize;

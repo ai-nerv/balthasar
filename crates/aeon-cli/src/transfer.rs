@@ -4,6 +4,7 @@
 //! is a memory system that owns you, and the export is also the only way to inspect what a
 //! store holds without trusting the code that prints it.
 
+use crate::Which;
 use crate::{now, open};
 use aeon_model::{Memory, ScopeId};
 use clap::Parser;
@@ -30,8 +31,8 @@ pub struct ImportArgs {
 }
 
 /// Every memory, one JSON object per line, oldest first.
-pub fn export(store_path: Option<&Path>, scope: &ScopeId, args: &ExportArgs) -> anyhow::Result<()> {
-    let store = open(store_path, scope)?;
+pub fn export(store_path: Option<&Path>, scope: &ScopeId, tool: &Which, args: &ExportArgs) -> anyhow::Result<()> {
+    let store = open(store_path, scope, tool)?;
     let everything = store.all()?;
 
     let mut out: Box<dyn Write> = match &args.out {
@@ -54,14 +55,14 @@ pub fn export(store_path: Option<&Path>, scope: &ScopeId, args: &ExportArgs) -> 
 /// and it must land on the same ladder as everything else. Importing a store into itself
 /// therefore reinforces rather than duplicating, which is the property that makes an import
 /// safe to re-run.
-pub fn import(store_path: Option<&Path>, scope: &ScopeId, args: &ImportArgs) -> anyhow::Result<()> {
+pub fn import(store_path: Option<&Path>, scope: &ScopeId, tool: &Which, args: &ImportArgs) -> anyhow::Result<()> {
     let at = now();
     let source: Box<dyn BufRead> = match &args.file {
         Some(path) => Box::new(std::io::BufReader::new(std::fs::File::open(path)?)),
         None => Box::new(std::io::stdin().lock()),
     };
 
-    let mut store = open(store_path, scope)?;
+    let mut store = open(store_path, scope, tool)?;
     let (mut added, mut reinforced, mut superseded, mut skipped) = (0, 0, 0, 0);
 
     for (number, line) in source.lines().enumerate() {

@@ -4,6 +4,7 @@
 //! own dies with it unless something on the ladder carries it across, so "which session" and
 //! "which project" are different questions and both have to be answerable.
 
+use crate::Which;
 use crate::{now, open, render};
 use aeon_model::ScopeId;
 use clap::Parser;
@@ -25,9 +26,9 @@ pub struct Args {
 }
 
 /// Show the sessions.
-pub fn run(store_path: Option<&Path>, scope: &ScopeId, args: &Args) -> anyhow::Result<()> {
+pub fn run(store_path: Option<&Path>, scope: &ScopeId, tool: &Which, args: &Args) -> anyhow::Result<()> {
     let at = now();
-    let store = open(store_path, scope)?;
+    let store = open(store_path, scope, tool)?;
 
     if let Some(handle) = &args.session {
         let session = store

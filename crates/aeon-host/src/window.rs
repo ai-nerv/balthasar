@@ -27,14 +27,38 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
     // Recorded on first sight rather than requiring a harness to open one first. A session
     // that streamed turns and had no name was invisible to `aeon sessions` and to
     // `aeon promote`, so what it held could not be looked at or kept.
-    if let Err(why) = at.store.open_session(
-        &session,
-        &at.scope.clone(),
-        &at.scope.to_string(),
-        "peer",
-        at.now,
-    ) {
+    if let Some(scrollback) = at.scrollback.as_mut() {
+        let _ = scrollback.open_run(
+            &session,
+            &at.scope.to_string(),
+            &at.scope.to_string(),
+            "peer",
+            at.now,
+        );
+    }
+    // Twice on purpose. The project keeps the registry, so `aeon sessions` can list runs
+    // without opening every one of them; the run keeps its own row, so its scratch has
+    // something to point at.
+    let (scope, now) = (at.scope.clone(), at.now);
+    if let Err(why) = at.store.open_session(&session, &scope, &scope.to_string(), "peer", now) {
         return Reply::refused(why.to_string());
+    }
+    match at.run(&session) {
+        Ok(run) => {
+            if let Err(why) = run.open_session(&session, &scope, &scope.to_string(), "peer", now) {
+                return Reply::refused(why.to_string());
+            }
+        }
+        Err(why) => return Reply::refused(why.to_string()),
+    }
+
+    // The scrollback first, and durably. For a harness with no journal of its own this call
+    // answering is the only signal that the turn is safe, so nothing else happens until it is.
+    if let Some(scrollback) = at.scrollback.as_mut() {
+        let verbatim = turn_of(&session, turn, at.now);
+        if let Err(why) = scrollback.write(&session, &verbatim) {
+            return Reply::refused(why.to_string());
+        }
     }
 
     let cursor = turn
@@ -84,7 +108,11 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
         held.session = Some(session.clone());
         // The id that actually holds the text, which is not always the one that went in: a
         // session repeating itself gets one row and several references to it.
-        match at.store.keep_scratch(held) {
+        let landed = match at.run(&session) {
+            Ok(run) => run.keep_scratch(held),
+            Err(why) => return Reply::refused(why.to_string()),
+        };
+        match landed {
             Ok(id) => Some(id),
             Err(why) => return Reply::refused(why.to_string()),
         }
@@ -109,9 +137,10 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
     // session has without asking a model to invent one.
     if entry.role == "user" && !text.is_empty() {
         let _ = at.store.title_session(&session, text);
+        let _ = at.run(&session).map(|run| run.title_session(&session, text));
     }
 
-    match at.store.observe(&session, &entry) {
+    match at.run(&session).and_then(|run| run.observe(&session, &entry)) {
         Ok(()) => Reply::none(),
         Err(why) => Reply::refused(why.to_string()),
     }
@@ -143,7 +172,7 @@ pub fn plan(
         masked_cost: fallback.masked_cost,
     };
 
-    let entries = match at.store.ledger(&session) {
+    let entries = match at.run(&session).and_then(|run| run.ledger(&session)) {
         Ok(entries) => entries,
         Err(why) => return Reply::refused(why.to_string()),
     };
@@ -157,12 +186,12 @@ pub fn plan(
     // The plan is recorded as it is handed over. A harness that applies it and then asks again
     // must not be told to mask what it has already masked.
     for masked in &plan.mask {
-        let _ = at.store.mark(&session, masked.cursor, State::Masked);
+        let _ = at.run(&session).map(|run| run.mark(&session, masked.cursor, State::Masked));
     }
     if let Some(span) = plan.summarise {
         for cursor in &plan.drop {
             if *cursor >= span.from && *cursor <= span.to {
-                let _ = at.store.mark(&session, *cursor, State::Summarised);
+                let _ = at.run(&session).map(|run| run.mark(&session, *cursor, State::Summarised));
             }
         }
         // TIDE. The moment a span leaves the window is the last moment anybody will look at
@@ -174,6 +203,118 @@ pub fn plan(
     }
 
     Reply::one(as_json(&plan))
+}
+
+/// The turn a harness sent, in the shape the scrollback keeps.
+///
+/// `raw` is whatever the harness's own record is, carried verbatim and never parsed. That is
+/// what lets a harness with no journal of its own treat this as one: it gets back exactly what
+/// it wrote, and aeon never needs to know what an entry means.
+fn turn_of(
+    session: &SessionId,
+    turn: &serde_json::Value,
+    now: aeon_model::Timestamp,
+) -> aeon_store::Turn {
+    let text = turn
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let _ = session;
+    aeon_store::Turn {
+        cursor: turn
+            .get("cursor")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        at: turn
+            .get("at")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(now),
+        role: turn
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("user")
+            .to_owned(),
+        kind: turn
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("prose")
+            .to_owned(),
+        text: text.to_owned(),
+        tool: turn
+            .get("tool")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        // A string if the harness sent one, otherwise the whole object it sent. Either way it
+        // comes back byte for byte.
+        raw: turn
+            .get("raw")
+            .map(|raw| raw.as_str().map_or_else(|| raw.to_string(), str::to_owned)),
+        revisions: 0,
+    }
+}
+
+/// Revise the turn already at a cursor.
+///
+/// Not exceptional. A tool call is written when it is made and written again when its result
+/// arrives, so the same cursor is written twice and the second write is the one that matters.
+pub fn amend(at: &mut Answering<'_>, request: &Request) -> Reply {
+    let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
+        return Reply::refused("amend needs a session");
+    };
+    let Some(turn) = request.args.get(1) else {
+        return Reply::refused("amend needs a turn");
+    };
+    let session = SessionId::new(session);
+    let held = turn_of(&session, turn, at.now);
+
+    let Some(scrollback) = at.scrollback.as_mut() else {
+        return Reply::refused(
+            "this aeon keeps no scrollback — a harness relying on it for persistence must be \
+             served by one that does",
+        );
+    };
+    match scrollback.write(&session, &held) {
+        Ok(()) => Reply::none(),
+        Err(why) => Reply::refused(why.to_string()),
+    }
+}
+
+/// Everything a run said, in order.
+///
+/// What a harness restores from. Turns come back as they finally stood, so a tool call arrives
+/// with its result rather than as it was first written.
+pub fn replay(at: &mut Answering<'_>, request: &Request) -> Reply {
+    let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
+        return Reply::refused("replay needs a session");
+    };
+    let session = SessionId::new(session);
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Reply::refused("this aeon keeps no scrollback");
+    };
+    match scrollback.replay(&session) {
+        Ok(turns) => Reply::one(serde_json::json!(turns)),
+        Err(why) => Reply::refused(why.to_string()),
+    }
+}
+
+/// Where a restarting harness left off.
+///
+/// A harness with no journal has no other way to know which cursor to allocate next, and
+/// guessing wrong overwrites a turn that nothing else holds a copy of.
+pub fn resume(at: &mut Answering<'_>, request: &Request) -> Reply {
+    let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
+        return Reply::refused("resume needs a session");
+    };
+    let session = SessionId::new(session);
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Reply::refused("this aeon keeps no scrollback");
+    };
+    let next = match scrollback.next_cursor(&session) {
+        Ok(next) => next,
+        Err(why) => return Reply::refused(why.to_string()),
+    };
+    let turns = scrollback.replay(&session).map(|t| t.len()).unwrap_or(0);
+    Reply::one(serde_json::json!({ "next": next, "turns": turns }))
 }
 
 /// Attach a distillation witness to everything a summary is about to stand in for.
@@ -202,7 +343,10 @@ fn distil(
         )
         .at_cursor(entry.cursor)
         .noted("left the context window (rules, not a model)");
-        at.store.attach(id, witness, at.now)?;
+        // In the run's own store, which is where the memory a summary stands in for lives.
+        // Attaching in the project's would be evidence for a memory that is not there.
+        let now = at.now;
+        at.run(session)?.attach(id, witness, now)?;
         carried += 1;
     }
     Ok(carried)

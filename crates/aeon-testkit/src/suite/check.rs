@@ -133,7 +133,7 @@ fn perform(store: &mut Store, settings: &Settings, scope: &ScopeId, act: &Act) {
             tool(store, settings, scope, session, *at, command, *ok);
         }
         Act::Consolidate { at } => {
-            consolidate(store, settings, scope, *at, false).expect("consolidate");
+            consolidate(store, None, settings, scope, *at, false).expect("consolidate");
         }
         Act::Decay { at } => {
             store.decay(*at).expect("decay");

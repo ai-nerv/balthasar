@@ -4,6 +4,7 @@
 //! What is typed here is what a person chose to keep, so it arrives as evidence of the
 //! strongest kind and pins unless told not to.
 
+use crate::Which;
 use crate::{now, open, render};
 use aeon_lua::Floors;
 use aeon_model::{
@@ -62,6 +63,7 @@ pub struct Args {
 pub fn run(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     args: &Args,
     floors: Floors,
     loaded: &mut crate::loaded::Loaded,
@@ -75,7 +77,7 @@ pub fn run(
     })?;
 
     let at = now();
-    let mut store = open(store_path, scope)?;
+    let mut store = open(store_path, scope, tool)?;
 
     let body = match (&args.subject, &args.predicate) {
         (Some(subject), Some(predicate)) => Body::fact(subject, predicate, text),

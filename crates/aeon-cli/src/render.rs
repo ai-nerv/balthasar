@@ -196,6 +196,21 @@ pub fn confidence(value: f64) -> String {
     format!("confidence {value:.2}")
 }
 
+/// One line of a quoted turn, cut to fit.
+///
+/// A transcript turn can be a wall of tool output, and `aeon why` is showing what a witness saw
+/// rather than reprinting the session.
+#[must_use]
+pub fn clip(text: &str, width: usize) -> String {
+    let one_line = text.split('\n').next().unwrap_or_default().trim();
+    if one_line.chars().count() <= width {
+        return one_line.to_owned();
+    }
+    let cut: String = one_line.chars().take(width.saturating_sub(1)).collect();
+    let end = cut.rfind(char::is_whitespace).unwrap_or(cut.len());
+    format!("{}…", cut[..end].trim_end())
+}
+
 /// The handle a person types: the last eight characters of an id.
 ///
 /// The *last*, not the first. A ULID's leading ten characters are its millisecond timestamp,
@@ -300,6 +315,17 @@ mod tests {
         for value in [0.0, 0.35, 1.0, 2.0, -1.0] {
             assert_eq!(bar(value).chars().count(), 10, "at {value}");
         }
+    }
+
+    #[test]
+    fn a_quoted_turn_is_one_line_and_fits() {
+        // A transcript turn can be a wall of tool output, and `why` is showing what a witness
+        // saw rather than reprinting the session.
+        assert_eq!(clip("short", 40), "short");
+        assert_eq!(clip("first line\nsecond line", 40), "first line");
+        let long = clip(&"word ".repeat(60), 40);
+        assert!(long.chars().count() <= 40, "{long}");
+        assert!(long.ends_with('…'));
     }
 
     #[test]

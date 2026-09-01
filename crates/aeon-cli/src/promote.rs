@@ -8,6 +8,7 @@
 //! It is the strongest evidence there is, because it is somebody choosing rather than aeon
 //! inferring. So it crosses alone and it pins.
 
+use crate::Which;
 use crate::{now, open, render};
 use aeon_model::{ScopeId, SessionId, Tier, Witness, WitnessId, WitnessKind};
 use clap::Parser;
@@ -40,11 +41,12 @@ pub struct Args {
 pub fn run(
     store_path: Option<&Path>,
     scope: &ScopeId,
+    tool: &Which,
     args: &Args,
     loaded: &mut crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
     let at = now();
-    let mut store = open(store_path, scope)?;
+    let mut store = open(store_path, scope, tool)?;
 
     if let Some(handle) = &args.handle {
         return keep(&mut store, scope, handle, args, at, loaded);

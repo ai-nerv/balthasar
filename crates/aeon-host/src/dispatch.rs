@@ -12,6 +12,19 @@ use aeon_store::{Recall, Store, mint};
 pub struct Answering<'a> {
     /// The memory being worked in.
     pub store: &'a mut Store,
+    /// The scrollback, when this host keeps one.
+    ///
+    /// Optional in the type and mandatory in practice for a harness that keeps no journal of
+    /// its own: without it there is nowhere for a turn to be, and `replay` has nothing to
+    /// answer with. A host that serves such a harness and passes `None` here has quietly
+    /// removed the only copy.
+    pub scrollback: Option<&'a mut aeon_store::Transcript>,
+    /// Where each run's own memories go, when this host keeps them separately.
+    ///
+    /// A session's scratch belongs to that run and lives in that run's file, so deleting one
+    /// run is deleting one directory. `None` keeps everything in [`Answering::store`], which is
+    /// what a test with one ephemeral store wants and what `--store` asks for.
+    pub scratch: Option<&'a mut aeon_store::Scratchpad>,
     /// Which project.
     pub scope: ScopeId,
     /// The moment.
@@ -20,6 +33,23 @@ pub struct Answering<'a> {
     pub inject_floor: f64,
     /// Where keeping begins.
     pub live_floor: f64,
+}
+
+impl Answering<'_> {
+    /// The store a run's own memories belong in.
+    ///
+    /// The run's own file when this host keeps one, and the project's store otherwise. Callers
+    /// do not branch on which: a scratch memory is written the same way either way, and the
+    /// only difference is which file the write lands in.
+    pub(crate) fn run(
+        &mut self,
+        session: &SessionId,
+    ) -> Result<&mut Store, aeon_store::StoreError> {
+        match self.scratch.as_mut() {
+            Some(pad) => pad.of(session),
+            None => Ok(self.store),
+        }
+    }
 }
 
 /// Answer one call, with no way to describe a masked turn.
@@ -65,6 +95,9 @@ pub fn answer_with(
         "why" => why(at, request),
         "sessions" => sessions(at),
         "observe" => crate::window::observe(at, request),
+        "amend" => crate::window::amend(at, request),
+        "replay" => crate::window::replay(at, request),
+        "resume" => crate::window::resume(at, request),
         "plan" => crate::window::plan(at, request, describe),
         "remember" => remember(at, door, request),
         "forget" => forget(at, door, request),
@@ -112,10 +145,31 @@ fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(true);
 
-    let found = match at.store.recall(&ask) {
+    let mut found = match at.store.recall(&ask) {
         Ok(found) => found,
         Err(why) => return Reply::refused(why.to_string()),
     };
+    // A run searches its own scratch too. Its memories live in its own file now, so without
+    // this a session could not find what it had just been told.
+    if let Some(run) = opts
+        .and_then(|o| o.get("session"))
+        .and_then(serde_json::Value::as_str)
+        .map(SessionId::new)
+    {
+        let own = match at.scratch.as_mut() {
+            Some(pad) => pad.peek(&run).and_then(|held| match held {
+                Some(store) => store.recall(&ask),
+                None => Ok(Vec::new()),
+            }),
+            None => Ok(Vec::new()),
+        };
+        match own {
+            Ok(mine) => found.extend(mine),
+            Err(why) => return Reply::refused(why.to_string()),
+        }
+        found.sort_by(|a, b| b.score.total_cmp(&a.score));
+        found.truncate(limit);
+    }
     // Names are resolved once for the whole result set. A caller handed a bare identity has to
     // ask a second question to find out which run it means, and "which session" is one of the
     // two questions every answer here has to be able to settle.
@@ -133,9 +187,29 @@ fn why(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(id) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("why needs an id");
     };
-    match at.store.get(&MemoryId::new(id)) {
+    let held = at.store.get(&MemoryId::new(id));
+    match held {
         Ok(Some(memory)) => {
             let names = session_names(at);
+            let quoted: Vec<serde_json::Value> = memory
+                .witnesses
+                .iter()
+                .filter_map(|w| {
+                    let cursor = w.cursor?;
+                    let turn = at
+                        .scrollback
+                        .as_ref()?
+                        .at(&w.session, cursor)
+                        .ok()
+                        .flatten()?;
+                    Some(serde_json::json!({
+                        "session": w.session.to_string(),
+                        "cursor": cursor,
+                        "role": turn.role,
+                        "said": turn.text,
+                    }))
+                })
+                .collect();
             Reply::one(serde_json::json!({
                 "id": memory.id.to_string(),
                 "text": memory.text(),
@@ -150,6 +224,9 @@ fn why(at: &mut Answering<'_>, request: &Request) -> Reply {
                     "worth": w.value(at.now),
                     "note": w.note,
                 })).collect::<Vec<_>>(),
+                // What the witnesses actually saw, when the scrollback still has it. The
+                // difference between naming a cursor and showing the turn.
+                "quoted": quoted,
             }))
         }
         Ok(None) => Reply::refused(format!("no memory called '{id}'")),
@@ -200,6 +277,10 @@ fn remember(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         .and_then(serde_json::Value::as_str)
         .map(SessionId::new);
 
+    // Which file this lands in. A session's own memory goes in that run's store; a durable
+    // one goes in the project's, which is the same store when this host keeps no scratchpad.
+    let landing_in = session.clone();
+
     // The ceiling, applied here rather than trusted to the caller: a peer proposes at the
     // weight a peer proposes at, whatever it asked for.
     let kind = door.witness_for(WitnessKind::Imperative);
@@ -239,7 +320,15 @@ fn remember(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         None => witness.noted("typed at the command line"),
     };
 
-    match at.store.remember(memory, witness, at.now) {
+    let now = at.now;
+    let landed = match landing_in {
+        Some(run) => match at.run(&run) {
+            Ok(store) => store.remember(memory, witness, now),
+            Err(why) => return Reply::refused(why.to_string()),
+        },
+        None => at.store.remember(memory, witness, now),
+    };
+    match landed {
         Ok(landing) => {
             let id = landing.id().clone();
             Reply::one(serde_json::json!({
