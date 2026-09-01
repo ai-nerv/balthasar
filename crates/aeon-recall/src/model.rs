@@ -19,7 +19,8 @@ use std::path::Path;
 /// The features, in the order the weights expect.
 ///
 /// Fixed and named, because a model whose inputs shifted underneath it would keep predicting
-/// confidently from the wrong columns. [`Model::version`] moves if this list does.
+/// confidently from the wrong columns. [`LAYOUT`] moves if this list does, and a model fitted
+/// to an older one is refused.
 pub const FEATURES: &[&str] = &[
     "rank",
     "score",
