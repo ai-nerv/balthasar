@@ -11,6 +11,7 @@
 
 mod akin;
 mod candidate;
+mod clash;
 mod consolidate;
 mod derive;
 mod distil;
@@ -25,6 +26,7 @@ mod segment;
 
 pub use akin::{Akin, merge};
 pub use candidate::{Candidate, Decided, Verdict, weigh};
+pub use clash::clashes;
 pub use consolidate::{Consolidated, DISTINCT_SESSIONS, RUNS_PER_PASS, consolidate};
 pub use derive::{
     DERIVATION as RELATION_DERIVATION, Step, Thresholds, entities, overlap, repairs, temporal,

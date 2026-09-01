@@ -314,3 +314,89 @@ fn a_rehearsal_writes_nothing() {
         "a rehearsal does not stamp the run as read"
     );
 }
+
+#[test]
+fn a_correction_nobody_marked_is_learned_from_the_contradiction() {
+    // The sentence this whole line of work started from. It carries no imperative, opens with
+    // no "no,", and every word-matching rule memo has is blind to it — but the project is
+    // holding the opposite, and that disagreement is the signal.
+    let mut store = Store::ephemeral().expect("store");
+    let mut engine = Engine::new();
+    let settings = Settings::default();
+    let mut held = Transcript::ephemeral().expect("scrollback");
+
+    // What an earlier run taught the project.
+    let first = SessionId::new("01MARCH");
+    streamed(
+        &mut held,
+        &first,
+        vec![said(1, "remember: we deploy with heroku")],
+    );
+    distil_run(
+        &mut store,
+        &mut engine,
+        &settings,
+        &held,
+        &first,
+        &ask(false),
+    )
+    .expect("march");
+    assert!(
+        store
+            .recall(&Recall::of("deploy", NOW))
+            .expect("recall")
+            .iter()
+            .any(|s| s.memory.text().contains("heroku")),
+        "the project believes it"
+    );
+
+    // Months later, somebody mentions in passing that it changed.
+    let later = SessionId::new("01AUGUST");
+    streamed(
+        &mut held,
+        &later,
+        vec![said(1, "we deploy with fly.io now, since the migration")],
+    );
+    let report = distil_run(
+        &mut store,
+        &mut engine,
+        &settings,
+        &held,
+        &later,
+        &ask(false),
+    )
+    .expect("august");
+    assert!(report.proposed > 0, "something was noticed: {report:?}");
+
+    // The old claim is superseded rather than removed — "what did we use before?" still has an
+    // answer — and the new one is what gets asserted.
+    let found = store.recall(&Recall::of("deploy", NOW)).expect("recall");
+    let live: Vec<String> = found
+        .iter()
+        .map(|s| &s.memory)
+        .filter(|m| m.confidence >= memo_model::floor::INJECT)
+        .map(memo_model::Memory::text)
+        .collect();
+    assert!(
+        live.iter().any(|t| t.contains("fly.io")),
+        "the correction crossed: {live:?}"
+    );
+    assert!(
+        !live.iter().any(|t| t.contains("heroku")),
+        "and the project stopped asserting what it replaced: {live:?}"
+    );
+
+    // The receipt says what it contradicted, so a person can disagree with the inference.
+    let corrected = found
+        .iter()
+        .map(|s| &s.memory)
+        .find(|m| m.text().contains("fly.io"))
+        .expect("the new claim");
+    let why = store.witnesses_of(&corrected.id).expect("witnesses");
+    assert!(
+        why.iter()
+            .any(|w| w.note.as_deref().is_some_and(|n| n.contains("heroku"))),
+        "the note names what it replaced: {:?}",
+        why.iter().map(|w| w.note.clone()).collect::<Vec<_>>()
+    );
+}

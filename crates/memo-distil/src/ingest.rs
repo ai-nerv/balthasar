@@ -142,7 +142,10 @@ pub fn ingest(
         if let Some(first) = turns.iter().find(|t| t.role == crate::Role::User) {
             store.title_session(&SessionId::new(&source.meta.id), &first.text)?;
         }
-        let found = extract(&turns, &settings.imperatives);
+        let mut found = extract(&turns, &settings.imperatives);
+        found
+            .candidates
+            .extend(crate::clashes(store, &ask.scope, &turns));
         report.proposed += found.candidates.len();
         let from = Provenance {
             scope: ask.scope.clone(),

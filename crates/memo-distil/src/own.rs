@@ -57,6 +57,14 @@ pub fn distil_run(
     let seen: Vec<Observation> = turns.iter().map(observation).collect();
     let mut found = extract(&seen, &settings.imperatives);
 
+    // Then what disagrees with what this project already believes. It needs the store, so it
+    // cannot live in `extract` with the rules that read a turn on its own — and it catches the
+    // corrections none of them can, because a contradiction is a property of the pair rather
+    // than of the words.
+    found
+        .candidates
+        .extend(crate::clashes(store, &ask.scope, &seen));
+
     // Then, if a model is configured and reachable, what the rules could not read. Added to the
     // same list rather than handled apart: an inferred claim goes through the same floors, the
     // same configuration gate and the same store as everything else, and the only thing that

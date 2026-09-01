@@ -68,6 +68,39 @@ impl Store {
         Ok(found.map(MemoryId::new))
     }
 
+    /// What a sentence would revise, if it were written down.
+    ///
+    /// The read-only half of the revision check, for a caller holding words rather than a
+    /// memory. What it answers is the question the literature calls contradiction detection:
+    /// *does this disagree with something already believed here?* — which is a far better
+    /// signal for "worth remembering" than any list of words a person might have used.
+    pub fn what_this_revises(
+        &self,
+        scope: &memo_model::ScopeId,
+        text: &str,
+    ) -> Result<Option<(MemoryId, String)>, StoreError> {
+        let lead = memo_model::lead(text);
+        if lead.is_empty() {
+            return Ok(None);
+        }
+        let mut statement = self.db().prepare(
+            "SELECT id, text FROM memory \
+             WHERE scope = ?1 AND tier = 'fact' AND lead = ?2 \
+               AND valid_to IS NULL AND archived_at IS NULL \
+             ORDER BY observed_at DESC LIMIT 8",
+        )?;
+        let held = statement
+            .query_map(params![scope.as_str(), lead], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(held
+            .into_iter()
+            .find(|(_, held)| memo_model::same_claim_different_value(held, text))
+            .map(|(id, held)| (MemoryId::new(id), held)))
+    }
+
     /// The live claim this one restates, if it restates anything.
     ///
     /// Candidates come from the full-text index, so the cost is a bounded lookup rather than a
