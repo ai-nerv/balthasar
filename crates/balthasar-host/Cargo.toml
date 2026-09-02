@@ -1,0 +1,24 @@
+[package]
+name = "balthasar-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "balthasar's verbs: what another program may ask, and what it may not"
+
+[dependencies]
+balthasar-buffer.workspace = true
+balthasar-ipc.workspace = true
+balthasar-lua.workspace = true
+balthasar-model.workspace = true
+balthasar-recall.workspace = true
+balthasar-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+balthasar-lua.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,27 @@
+[package]
+name = "balthasar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "memory for agents"
+
+[[bin]]
+name = "balthasar"
+path = "src/main.rs"
+
+[features]
+# Forwarded so `cargo build --features dense` reaches the embedder. Off by default: the shipped
+# binary is 7 MB and needs no weights, and that is the build almost everybody wants.
+default = []
+dense = ["balthasar-cli/dense"]
+
+[dependencies]
+balthasar-cli.workspace = true
+
+[dev-dependencies]
+balthasar-model.workspace = true
+balthasar-store.workspace = true
+
+[lints]
+workspace = true
