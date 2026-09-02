@@ -105,6 +105,80 @@ impl Scenario {
         }
     }
 
+    /// Many distinct lessons, each needed again long after the window has dropped it.
+    ///
+    /// The shape a window cannot answer and a memory can, and it took three attempts to build
+    /// one that actually separates them. A scenario that repeats a single lesson cannot: the
+    /// newest copy is always in the window. Nor can one that revisits a small rotating set, for
+    /// the same reason. What works is a lesson met twice in a row — enough to cross the ladder —
+    /// and then not mentioned again until far more has been said than a window can hold.
+    #[must_use]
+    pub fn many_lessons(sessions: usize, start: Timestamp) -> Self {
+        /// How long ago the revisited lesson was last mentioned, in sessions.
+        ///
+        /// Far enough that everything about it has left a bounded window, which is the only
+        /// condition under which the two arms can disagree.
+        const AGO: usize = 25;
+
+        // Distinctive words on purpose. An intent made of stopwords and a bare digit has nothing
+        // a full-text query can match — the first version of this scenario scored memory at
+        // exactly zero for that reason, which measured the fixture rather than the system.
+        const SUBJECT: &[&str] = &[
+            "migrations",
+            "billing",
+            "webhooks",
+            "telemetry",
+            "invoices",
+            "sessions",
+            "payouts",
+            "scheduler",
+            "indexer",
+            "compactor",
+            "gateway",
+            "ledger",
+            "renderer",
+            "uploader",
+            "publisher",
+            "sharder",
+            "throttler",
+            "reconciler",
+            "digester",
+            "notifier",
+        ];
+        let make = |n: usize| {
+            let subject = SUBJECT[n % SUBJECT.len()];
+            let round = n / SUBJECT.len();
+            Lesson::new(
+                &format!("work on the {subject} service {round}"),
+                &format!("cargo {subject}-{round}"),
+                &format!("make {subject}-{round}"),
+            )
+        };
+        Self {
+            project: "/w/thing".to_owned(),
+            sessions: (0..sessions)
+                .map(|n| {
+                    let fresh = make(n);
+                    let mut met = vec![fresh.clone()];
+                    // Seen twice in a row, which is what two distinct sessions agreeing means.
+                    if n > 0 {
+                        met.push(make(n - 1));
+                    }
+                    // And once more, long after everything about it has scrolled away.
+                    if n >= AGO {
+                        met.push(make(n - AGO));
+                    }
+                    Session {
+                        id: format!("01SESSION{n:04}"),
+                        at: start + n as Timestamp * DAY,
+                        asked: fresh.intent.clone(),
+                        lessons: met,
+                    }
+                })
+                .collect(),
+        }
+    }
+
     /// Every distinct lesson in the scenario.
     #[must_use]
     pub fn lessons(&self) -> Vec<Lesson> {

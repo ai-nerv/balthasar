@@ -141,6 +141,30 @@ impl Measured {
     }
 }
 
+/// Which arm of the benchmark is being run.
+///
+/// Three, and the third is the one that matters. `Nothing` is the baseline every harness ships
+/// today and it cannot win — it starts blank every session and scores zero by construction.
+/// `InWindow` is the arm the field insists on and the one memo has never run against itself:
+/// the same history, carried forward in the window, with no memory system at all. It is the
+/// control that can lose, and in the published comparisons it frequently wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arm {
+    /// memo, as it ships.
+    Memory,
+    /// Nothing carried between sessions.
+    Nothing,
+    /// Every earlier session's text carried forward, truncated to a token budget.
+    InWindow(usize),
+}
+
+/// How much window the in-window arm gets.
+///
+/// A budget rather than everything, because "put the whole history in" stops being an option at
+/// some length and the point of the arm is to find where. Small enough that a long scenario
+/// overflows it, which is where memo should start winning.
+pub const WINDOW: usize = 900;
+
 /// Run a scenario against a store, consolidating between sessions.
 ///
 /// `with_memory` is the switch the whole thing turns on: with it off, nothing is written and
@@ -149,11 +173,32 @@ pub fn run(scenario: &Scenario, with_memory: bool) -> Score {
     measure(scenario, with_memory).0
 }
 
+/// Run one arm.
+pub fn run_arm(scenario: &Scenario, arm: Arm) -> Score {
+    measure_arm(scenario, arm).0
+}
+
 /// The same run, with what it cost.
 ///
 /// One implementation rather than two, so a measured run and a scored run can never disagree
 /// about what happened.
 pub fn measure(scenario: &Scenario, with_memory: bool) -> (Score, Measured) {
+    measure_arm(
+        scenario,
+        if with_memory {
+            Arm::Memory
+        } else {
+            Arm::Nothing
+        },
+    )
+}
+
+/// The same, for one named arm.
+pub fn measure_arm(scenario: &Scenario, arm: Arm) -> (Score, Measured) {
+    let with_memory = arm == Arm::Memory;
+    // What an agent with no memory system would still have in front of it: the text of what has
+    // happened, oldest dropped first when it stops fitting.
+    let mut window: Vec<String> = Vec::new();
     let mut store = Store::ephemeral().expect("a store");
     let settings = Settings::default();
     let scope = ScopeId::new(&scenario.project);
@@ -169,10 +214,13 @@ pub fn measure(scenario: &Scenario, with_memory: bool) -> (Score, Measured) {
 
         for lesson in &session.lessons {
             cost.encounters += 1;
-            let looked = if with_memory {
-                look(&store, &scope, lesson, session.at, &mut cost)
-            } else {
-                false
+            let looked = match arm {
+                Arm::Memory => look(&store, &scope, lesson, session.at, &mut cost),
+                Arm::Nothing => false,
+                // No retrieval, no ranking: the agent simply has the earlier text in front of
+                // it. Knowing means the answer is still in the window and has not been pushed
+                // out by everything said since.
+                Arm::InWindow(_) => window.iter().any(|held| held.contains(&lesson.right)),
             };
             if looked {
                 ran.knew.push(lesson.intent.clone());
@@ -187,6 +235,17 @@ pub fn measure(scenario: &Scenario, with_memory: bool) -> (Score, Measured) {
                 // known is still worked through — the agent uses the right command — and that
                 // is itself another session agreeing.
                 observe(&mut store, &scope, session, lesson, looked);
+            }
+            if let Arm::InWindow(budget) = arm {
+                window.push(format!(
+                    "{}: tried {}, which failed; {} worked",
+                    lesson.intent, lesson.wrong, lesson.right
+                ));
+                // Oldest first out. This is the whole mechanism the arm exists to model — a
+                // window is not a memory, and what falls off the front is gone.
+                while window.iter().map(|l| l.len().div_ceil(4)).sum::<usize>() > budget {
+                    window.remove(0);
+                }
             }
         }
 

@@ -23,6 +23,14 @@ pub struct Args {
     #[arg(long, default_value_t = 10)]
     sessions: usize,
 
+    /// Run the long scenario, where the history outruns the window.
+    ///
+    /// The only shape that separates memory from carrying the text forward: a lesson learned
+    /// twice, then not mentioned again until far more has been said than a window can hold. On
+    /// anything shorter the two arms tie, which is a real result and not a broken benchmark.
+    #[arg(long)]
+    long: bool,
+
     /// Use the several-lessons scenario, which is closer to a real project.
     #[arg(long)]
     varied: bool,
@@ -68,15 +76,15 @@ const START: memo_model::Timestamp = 1_756_000_000;
 /// Run it, with memory and without.
 pub fn run(args: &Args) -> anyhow::Result<()> {
     anyhow::ensure!(args.sessions > 0, "how many sessions?");
-    let name = if args.varied {
-        "several-lessons"
-    } else {
-        "one-lesson"
+    let name = match (args.long, args.varied) {
+        (true, _) => "many-lessons",
+        (false, true) => "several-lessons",
+        (false, false) => "one-lesson",
     };
-    let scenario = if args.varied {
-        Scenario::several_lessons(args.sessions, START)
-    } else {
-        Scenario::one_lesson(args.sessions, START)
+    let scenario = match (args.long, args.varied) {
+        (true, _) => Scenario::many_lessons(args.sessions, START),
+        (false, true) => Scenario::several_lessons(args.sessions, START),
+        (false, false) => Scenario::one_lesson(args.sessions, START),
     };
 
     let settings = memo_lua::Settings::default();
@@ -208,6 +216,38 @@ fn say_full(held: &memo_testkit::Full) {
             b.ceiling * 100.0,
             b.without_memory * 100.0
         ))
+    );
+    // The arm that can lose, printed beside the one that cannot. A report without it can be won
+    // by a system that is worse than doing nothing clever at all, which is the failure this
+    // exists to make visible.
+    crate::say!(
+        "  {:>7}  {}",
+        format!("{:.0}%", b.in_window * 100.0),
+        render::dim(&format!(
+            "the same history in the window, no memory at all — memo is {}",
+            if b.task_success > b.in_window {
+                format!(
+                    "ahead by {:.0} points",
+                    (b.task_success - b.in_window) * 100.0
+                )
+            } else if b.task_success < b.in_window {
+                format!(
+                    "BEHIND by {:.0} points",
+                    (b.in_window - b.task_success) * 100.0
+                )
+            } else {
+                "level".to_owned()
+            }
+        ))
+    );
+    crate::say!(
+        "  {:>7}  {}",
+        b.crossover
+            .map_or_else(|| "—".to_owned(), |n| n.to_string()),
+        render::dim(match b.crossover {
+            Some(_) => "sessions before memory catches the window",
+            None => "the window was still ahead at the end of this scenario",
+        })
     );
     crate::say!(
         "  {:>7}  {}",

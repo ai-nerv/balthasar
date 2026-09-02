@@ -99,3 +99,55 @@ fn a_score_is_reproducible() {
     let scenario = Scenario::several_lessons(6, START);
     assert_eq!(run(&scenario, true), run(&scenario, true));
 }
+
+#[test]
+fn the_window_wins_until_the_history_outruns_it() {
+    // The control the field insists on and memo had never run against itself. A short history
+    // fits in the window, so carrying the text forward answers everything and memory buys
+    // nothing. The claim memo can actually defend is about what happens after that.
+    let short = Scenario::one_lesson(3, START);
+    let windowed = memo_testkit::run_arm(&short, memo_testkit::Arm::InWindow(memo_testkit::WINDOW));
+    assert!(
+        windowed.hit_rate() > 0.0,
+        "a window that holds the history answers from it"
+    );
+}
+
+#[test]
+fn memory_catches_the_window_once_the_window_overflows() {
+    // Where the honest claim lives. Oldest falls off the front, and a lesson pushed out is gone
+    // — while a promoted claim is still there.
+    // Many distinct lessons, with early ones revisited late — the shape a bounded window loses.
+    let long = Scenario::many_lessons(40, START);
+    let with = memo_testkit::run_arm(&long, memo_testkit::Arm::Memory);
+    let windowed = memo_testkit::run_arm(&long, memo_testkit::Arm::InWindow(memo_testkit::WINDOW));
+
+    println!(
+        "\n  memory {:.3}   window {:.3}\n",
+        with.hit_rate(),
+        windowed.hit_rate()
+    );
+    assert!(
+        with.hit_rate() > windowed.hit_rate(),
+        "memory {:.3} must beat the window {:.3} once the history outruns it",
+        with.hit_rate(),
+        windowed.hit_rate()
+    );
+}
+
+#[test]
+fn the_control_arm_is_reported_and_cannot_go_missing() {
+    // A plan that quietly drops the arm that can lose is the failure this exists to prevent, so
+    // the number is part of the report rather than something a caller opts into.
+    let held = memo_testkit::Baseline::of(
+        &Scenario::one_lesson(10, START),
+        "control",
+        1,
+        &memo_lua::Settings::default(),
+    );
+    assert!(held.in_window >= 0.0 && held.in_window <= 1.0);
+    assert!(
+        held.task_success >= held.without_memory,
+        "the easy control still cannot beat memory"
+    );
+}

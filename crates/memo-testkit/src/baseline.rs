@@ -51,6 +51,18 @@ pub struct Baseline {
     pub task_success: f64,
     /// The best this scenario allows.
     pub ceiling: f64,
+    /// The same history in the window, with no memory system at all.
+    ///
+    /// The control that can lose, and the one the field is emphatic about: a memory system that
+    /// does not beat simply carrying the text forward has not earned its latency, its storage or
+    /// its failure modes. Published comparisons routinely report the arm memo did not run —
+    /// Mem0 at 66.88% against full context's 72.90% on its own benchmark.
+    pub in_window: f64,
+    /// How many sessions in memo first matches or beats the window.
+    ///
+    /// `None` while it has not. This is the honest form of the claim: a window wins until the
+    /// history outruns it, and the number worth stating is where that stops being true.
+    pub crossover: Option<usize>,
     /// The same run with memory switched off.
     pub without_memory: f64,
     /// Rediscoveries that memory could have prevented and did not.
@@ -71,11 +83,42 @@ pub struct Baseline {
     pub recall_p95_ms: f64,
 }
 
+/// The shortest history at which memory catches the window.
+///
+/// Walked prefix by prefix rather than solved, because the two arms fail for different reasons
+/// and the point where they cross is a measurement rather than an inequality. `None` means the
+/// window was still ahead at the end of the scenario, which is a result and not an omission.
+fn crossover(scenario: &Scenario) -> Option<usize> {
+    // Walking every prefix is quadratic in sessions, and a benchmark slow enough to skip is a
+    // benchmark nobody runs. If the crossing has not happened in this many sessions it is not
+    // the interesting kind of crossing.
+    const LOOKED: usize = 16;
+    for n in 2..=scenario.sessions.len().min(LOOKED) {
+        let prefix = Scenario {
+            sessions: scenario.sessions[..n].to_vec(),
+            ..scenario.clone()
+        };
+        let with = crate::run_arm(&prefix, crate::Arm::Memory).hit_rate();
+        let window = crate::run_arm(&prefix, crate::Arm::InWindow(crate::WINDOW)).hit_rate();
+        if with >= window {
+            return Some(n);
+        }
+    }
+    None
+}
+
 impl Baseline {
     /// Run `scenario` both ways and report everything about it.
     pub fn of(scenario: &Scenario, name: &str, seed: i64, settings: &memo_lua::Settings) -> Self {
         let (with, cost) = measure(scenario, true);
         let (without, _) = measure(scenario, false);
+        let (windowed, _) = crate::measure_arm(scenario, crate::Arm::InWindow(crate::WINDOW));
+        // Only worth walking when there is a crossing to find. If the window is still level or
+        // ahead over the whole scenario then memory never overtook it here, and searching the
+        // prefixes is dozens of runs spent confirming it.
+        let crossover = (with.hit_rate() > windowed.hit_rate())
+            .then(|| crossover(scenario))
+            .flatten();
         let ceiling = Score::ceiling(scenario);
 
         // What memory could have prevented and did not: every rediscovery after the first
@@ -107,6 +150,8 @@ impl Baseline {
             task_success: with.hit_rate(),
             ceiling,
             without_memory: without.hit_rate(),
+            in_window: windowed.hit_rate(),
+            crossover,
             avoidable_failures,
             recall_precision: cost.recall_precision(),
             recall_relevance: cost.recall_relevance(),
