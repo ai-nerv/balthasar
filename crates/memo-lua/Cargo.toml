@@ -1,0 +1,17 @@
+[package]
+name = "memo-lua"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "memo's configuration: a program, not a data file"
+
+[dependencies]
+memo-model.workspace = true
+luna.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

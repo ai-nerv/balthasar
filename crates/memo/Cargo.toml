@@ -1,0 +1,27 @@
+[package]
+name = "memo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "memory for agents"
+
+[[bin]]
+name = "memo"
+path = "src/main.rs"
+
+[features]
+# Forwarded so `cargo build --features dense` reaches the embedder. Off by default: the shipped
+# binary is 7 MB and needs no weights, and that is the build almost everybody wants.
+default = []
+dense = ["memo-cli/dense"]
+
+[dependencies]
+memo-cli.workspace = true
+
+[dev-dependencies]
+memo-model.workspace = true
+memo-store.workspace = true
+
+[lints]
+workspace = true

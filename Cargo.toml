@@ -1,16 +1,61 @@
-[package]
-name = "aeon"
-version = "0.1.0"
+[workspace]
+members = [
+  "crates/memo-model",
+  "crates/memo-store",
+  "crates/memo-lua",
+  "crates/memo-distil",
+  "crates/memo-recall",
+  "crates/memo-embed",
+  "crates/memo-ipc",
+  "crates/memo-host",
+  "crates/memo-buffer",
+  "crates/memo-testkit",
+  "crates/memo-cli",
+  "crates/memo",
+]
+resolver = "3"
+
+[workspace.package]
 edition = "2024"
-description = "aeon"
 license = "MIT"
-readme = "README.md"
 publish = false
+version = "0.1.0"
 
-[lib]
-path = "src/lib.rs"
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused = { level = "deny", priority = -1 }
 
-[dependencies]
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"
 
-[dev-dependencies]
+[workspace.dependencies]
+memo-model = { path = "crates/memo-model" }
+memo-store = { path = "crates/memo-store" }
+memo-cli = { path = "crates/memo-cli" }
+memo-lua = { path = "crates/memo-lua" }
+memo-distil = { path = "crates/memo-distil" }
+memo-recall = { path = "crates/memo-recall" }
+memo-embed = { path = "crates/memo-embed" }
+memo-ipc = { path = "crates/memo-ipc" }
+memo-host = { path = "crates/memo-host" }
+memo-buffer = { path = "crates/memo-buffer" }
+memo-testkit = { path = "crates/memo-testkit" }
 
+anyhow = "1.0"
+luna = { git = "https://github.com/onix-os/luna", tag = "v0.5.0" }
+clap = { version = "4.5", features = ["derive", "std", "help", "usage", "error-context"], default-features = false }
+rustix = { version = "1", features = ["net", "process"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+sha2 = "0.10"
+thiserror = "2.0"
+
+# Asserted rather than left to defaults, as the family pins its release profile: a build that
+# silently switches to fat LTO and one codegen unit turns a ten-second link into minutes.
+[profile.release]
+codegen-units = 16
+lto = "thin"
+strip = "symbols"

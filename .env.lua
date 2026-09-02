@@ -1,4 +1,4 @@
--- aeon's directory environment. Loaded when you `cd` here, unloaded when you leave.
+-- memo's directory environment. Loaded when you `cd` here, unloaded when you leave.
 --
 -- Shared by every language wing generates, so the paths below are a union: a directory that does
 -- not exist in this project costs nothing. A language template can ship its own .env.lua, which
@@ -19,6 +19,7 @@ oslo.direnv.path_add("./target/release")
 
 -- Where the checkout is, for scripts that need to find their way back to the top.
 oslo.env.set("TOP_HEAD", oslo.sys.pwd())
+oslo.env.set("TMPDIR", oslo.sys.pwd() .. "/.tmp")
 
 -- A token in the environment is a token in every child process, and nothing in here needs it.
 oslo.env.unset("GITHUB_TOKEN")

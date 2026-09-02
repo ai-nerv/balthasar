@@ -1,4 +1,4 @@
--- aeon's build, as recipes. This replaced the Makefile; there is no other.
+-- memo's build, as recipes. This replaced the Makefile; there is no other.
 --
 --   make            the recipes, with what each of them says it does
 --   make build      the binary
@@ -17,7 +17,7 @@ local function project()
     local value = line:match("^%s*([^#%[%s]%S*)%s*$")
     if value then found[#found + 1] = value end
   end
-  return found[1] or "aeon", found[2] or "0.1.0"
+  return found[1] or "memo", found[2] or "0.1.0"
 end
 
 local NAME, VERSION = project()
@@ -81,16 +81,6 @@ local function report(path)
   print("")
 end
 
--- The same, for artifacts whose exact path the build system decides. Walked with find rather than
--- globbed: oslo's `**` matches a single directory level, and build trees nest deeper than that.
-local function report_found(root, pattern)
-  local found = oslo.run{ "find", root, "-type", "f", "-name", pattern, capture = true }
-  for path in (found.out or ""):gmatch("[^\n]+") do
-    report(path)
-    return
-  end
-end
-
 
 make.recipe{ name = "version", desc = "what this checkout calls itself",
              run = function() print(("%s v%s"):format(NAME, VERSION)) end }
@@ -122,39 +112,103 @@ make.recipe{
 
 ---------------------------------------------------------------------------- rust
 
-local EXAMPLE = os.getenv("EXAMPLE") or "main"
+-- Everything that produces a binary produces the real one.
+--
+-- The debug build is 62 MB and the release build is 6.7 MB, and the difference is entirely
+-- symbols nobody reads. `[profile.release]` in Cargo.toml already does the work -- thin LTO and
+-- stripped symbols -- and the recipes simply never asked for it.
+--
+-- Deliberately NOT applied to `test`, `check` and `clippy`. Release turns off integer overflow
+-- panics and `debug_assert!`, so a suite that ran there would pass on an overflow the debug
+-- build catches -- and this is a project full of scores, decay curves and counters. It also
+-- costs a second full compile of everything. `test-release` exists for when the shipped code
+-- itself is what needs testing.
+local PROFILE = "--release"
 
-make.recipe{ name = "build", desc = "the library",
+-- Static, against musl. A dynamic binary needs a matching libc wherever it lands, which for a
+-- tool people copy between machines is a failure that happens at somebody else's prompt.
+--
+-- The C toolchain comes from the flake as a path rather than a package: `rusqlite` compiles
+-- SQLite's amalgamation, so the static build needs a compiler targeting musl -- and putting one
+-- on the default search path would let an ordinary build compile against musl headers while
+-- linking against glibc, which succeeds silently and crashes at startup.
+local TRIPLE = "x86_64-unknown-linux-musl"
+local BUILT = "target/" .. TRIPLE .. "/release"
+
+local function musl()
+  local cc = os.getenv("MUSL_CC")
+  assert(cc, "MUSL_CC is not set -- this needs `nix develop`, where the flake hands it over")
+  return {
+    "CC_x86_64_unknown_linux_musl=" .. cc .. "/bin/cc",
+    "AR_x86_64_unknown_linux_musl=" .. cc .. "/bin/ar",
+    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=" .. cc .. "/bin/cc",
+  }
+end
+
+make.recipe{ name = "build", desc = "the binary: static, optimized, stripped",
              run = function()
-               sh.cargo("build", "--lib")
-               report_found("target", "*.rlib")
+               local argv = musl()
+               for _, a in ipairs({ "cargo", "build", "--workspace", PROFILE,
+                                    "--target", TRIPLE }) do
+                 argv[#argv + 1] = a
+               end
+               table.insert(argv, 1, "env")
+               assert(oslo.run(argv).ok, "build failed")
+               report(BUILT .. "/" .. NAME)
              end }
 make.alias("b", "build")
 
+make.recipe{ name = "build-host", desc = "the binary for this machine, dynamic",
+             run = function()
+               sh.cargo("build", "--workspace", PROFILE)
+               report("target/release/" .. NAME)
+             end }
+
+make.recipe{ name = "build-debug", desc = "the binary, unoptimized and quick",
+             run = function()
+               sh.cargo("build", "--workspace")
+               report("target/debug/" .. NAME)
+             end }
+
 make.recipe{
   name = "run",
-  desc = "run a development example: --example NAME",
-  params = { { "--example", desc = "which example to run", default = EXAMPLE } },
-  run = function(a) sh.cargo("run", "--example", a.example or EXAMPLE) end,
+  desc = "run memo: --args='recall \"make test\"'",
+  params = { { "--args", desc = "what to pass memo", default = "" } },
+  run = function(a)
+    -- Split here rather than through oslo: `oslo.text` is not lent to a make script, and
+    -- reaching for it made `make run` fail with "could not index into a nil value" for anyone
+    -- who tried it.
+    local args = {}
+    for word in (a.args or ""):gmatch("%S+") do
+      args[#args + 1] = word
+    end
+    sh.cargo("run", "--quiet", PROFILE, "--bin", NAME, "--", table.unpack(args))
+  end,
 }
 make.alias("r", "run")
 
 make.recipe{ name = "test", desc = "the suite",
-             run = function() sh.cargo("test", "--all-targets") end }
+             run = function() sh.cargo("test", "--workspace", "--all-targets") end }
 make.alias("t", "test")
 
 make.recipe{ name = "test-all", desc = "the suite, with every feature on",
-             run = function() sh.cargo("test", "--all-targets", "--all-features") end }
+             run = function() sh.cargo("test", "--workspace", "--all-targets", "--all-features") end }
+
+-- What the binary actually does, rather than what the debug build does. Slower to compile and
+-- blind to overflow, so it is a separate recipe rather than the default -- run it before a
+-- release, not on every change.
+make.recipe{ name = "test-release", desc = "the suite against the optimized build",
+             run = function() sh.cargo("test", "--workspace", "--all-targets", PROFILE) end }
 
 make.recipe{ name = "check", desc = "type-check every target",
-             run = function() sh.cargo("check", "--all-targets") end }
+             run = function() sh.cargo("check", "--workspace", "--all-targets") end }
 
 make.recipe{ name = "check-all", desc = "type-check every target, every feature",
-             run = function() sh.cargo("check", "--all-targets", "--all-features") end }
+             run = function() sh.cargo("check", "--workspace", "--all-targets", "--all-features") end }
 
 make.recipe{ name = "clippy", desc = "clippy, with warnings denied",
              run = function()
-               sh.cargo("clippy", "--all-targets", "--all-features", "--", "-Dwarnings")
+               sh.cargo("clippy", "--workspace", "--all-targets", "--all-features", "--", "-Dwarnings")
              end }
 
 make.recipe{
@@ -162,7 +216,7 @@ make.recipe{
   desc = "build the docs, with warnings denied",
   run = function()
     local built = oslo.run{ "env", "RUSTDOCFLAGS=-Dwarnings",
-                            "cargo", "doc", "--all-features", "--no-deps" }
+                            "cargo", "doc", "--workspace", "--all-features", "--no-deps" }
     assert(built.ok, "rustdoc failed")
   end,
 }
@@ -179,9 +233,58 @@ make.recipe{ name = "clean", desc = "remove every build output",
 make.recipe{ name = "compile", desc = "clean, then build", deps = { "clean", "build" } }
 make.alias("c", "compile")
 
+------------------------------------------------------------------------- gates
+
+-- Not advisory. Each one mechanizes a commitment the code states in its own doc comments,
+-- and each one exists because
+-- the alternative is remembering to check -- which is how every reference implementation in
+-- xtra/ ended up with a 2,000-line file and a store that deletes.
+
+local GATES = {
+  { "gate-file-size",    "no .rs over 800 lines" },
+  { "gate-no-delete",    "nothing is deleted outside purge.rs" },
+  { "gate-independent",  "no Rust file names a harness" },
+  { "gate-witnessed",    "every asserted memory answers for itself" },
+  { "gate-untrusted",    "untrusted content cannot become durable instruction" },
+  { "gate-no-exec",      "memo describes procedures and never runs them" },
+}
+
+for _, gate in ipairs(GATES) do
+  local name, desc = gate[1], gate[2]
+  make.recipe{
+    name = name, desc = desc,
+    run = function()
+      local ran = oslo.run{ "sh", "scripts/" .. name .. ".sh" }
+      assert(ran.ok, name .. " failed")
+    end,
+  }
+end
+
+make.recipe{
+  name = "gates",
+  desc = "every architectural gate",
+  deps = {
+    "gate-file-size",
+    "gate-no-delete",
+    "gate-independent",
+    "gate-witnessed",
+    "gate-untrusted",
+    "gate-no-exec",
+  },
+}
+
+make.recipe{
+  name = "gate-no-llm",
+  desc = "the suite passes with no key, no network, no embeddings",
+  run = function()
+    local ran = oslo.run{ "sh", "scripts/gate-no-llm.sh" }
+    assert(ran.ok, "gate-no-llm failed")
+  end,
+}
+
 make.recipe{
   name = "verify",
   desc = "the whole local gate",
-  deps = { "fmt-check", "check", "test", "check-all", "test-all", "clippy", "rustdoc" },
+  deps = { "fmt-check", "check", "test", "clippy", "rustdoc", "gates", "gate-no-llm" },
 }
 make.alias("v", "verify")

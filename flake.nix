@@ -1,18 +1,26 @@
 {
-  description = "aeon Rust development shell";
+  description = "memo Rust development shell";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs?rev=4c1018dae018162ec878d42fec712642d214fdfa";
     flake-utils.url = "github:numtide/flake-utils";
     nixgl.url = "github:nix-community/nixGL";
+    # For the musl target's standard library, and nothing else.
+    #
+    # nixpkgs ships `rustc` with std for the host only, so `--target x86_64-unknown-linux-musl`
+    # fails on "can't find crate for `core`". Its answer is `pkgsCross.musl64.rustc`, which
+    # compiles a whole cross rustc from source -- hours, for a file we already have. This
+    # overlay hands over the official prebuilt std for a named target instead.
+    rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
   outputs =
-    { nixpkgs, flake-utils, nixgl, ... }:
+    { nixpkgs, flake-utils, nixgl, rust-overlay, ... }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
         overlays = [
+          rust-overlay.overlays.default
           (final: prev: {
             xorg = prev.xorg // {
               libX11 = final.libx11;
@@ -28,6 +36,14 @@
             allowUnfree = true;
             nvidia.acceptLicense = true;
           };
+        };
+
+        # Pinned to the version nixpkgs was already giving us, with the musl target added.
+        # Floating to `latest` would drift the compiler underneath a workspace that builds
+        # under `-Dwarnings`, where one new lint is a failed verify.
+        rust = pkgs.rust-bin.stable."1.94.0".default.override {
+          extensions = [ "rust-src" ];
+          targets = [ "x86_64-unknown-linux-musl" ];
         };
 
         nvidiaVersion = builtins.getEnv "NVIDIA_VERSION";
@@ -73,10 +89,9 @@
       {
         devShells.default = pkgs.mkShell {
           packages = [
-            pkgs.rustc
-            pkgs.cargo
-            pkgs.rustfmt
-            pkgs.clippy
+            # One toolchain, carrying cargo, rustfmt and clippy with it. Listing nixpkgs's
+            # rustc beside this one puts two compilers on PATH and the first wins by accident.
+            rust
             pkgs.rust-analyzer
             pkgs.git-cliff
             pkgs.clang
