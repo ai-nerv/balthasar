@@ -6,7 +6,8 @@
 # pasted" can be answered with yes.
 #
 # DERIVED INDEXES ARE DIFFERENT IN KIND, and the gate says so rather than exempting a file.
-# `entity` and `memory_fts` hold nothing that is not recomputable from `memory`; re-indexing has
+# `entity`, `memory_fts` and `turn_fts` hold nothing not recomputable from `memory` or `turn`;
+# re-indexing has
 # to clear the old rows or a better extractor leaves its predecessor's names behind and the
 # rarity counts go quietly wrong.
 #
@@ -20,7 +21,7 @@ set -eu
 
 PURGE='crates/memo-store/src/purge.rs'
 LEDGER='crates/memo-store/src/usage.rs'
-DERIVED='entity memory_fts'
+DERIVED='entity memory_fts turn_fts'
 TELEMETRY='recall_run recall_candidate injection injection_memory action_use action_memory outcome'
 
 fail=0

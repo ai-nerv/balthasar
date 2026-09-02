@@ -510,9 +510,21 @@ mod tests {
 
     #[test]
     fn a_question_made_of_nothing_matches_nothing() {
-        // The correct answer to "what is it" is nothing, not everything.
+        // The correct answer to "what is it" is nothing, not everything — and not an error.
+        //
+        // This test used to assert the sentinel contained a NUL, which encoded the defect
+        // rather than the requirement: FTS5 reads a NUL inside a quoted string as the end of
+        // the string, so `memo recall "what is it"` failed with "unterminated string" instead
+        // of answering nothing. What matters is that the sentinel is a term the parser accepts
+        // and the tokenizer can never produce.
         for empty in ["  ", "what is it", "how do you do that"] {
-            assert!(fts_query(empty).contains('\u{0}'), "{empty}");
+            let q = fts_query(empty);
+            assert!(
+                !q.contains('\u{0}'),
+                "the sentinel must be parseable: {empty}"
+            );
+            assert_eq!(q.matches('"').count() % 2, 0, "and balanced: {empty}");
+            assert!(!q.contains(" OR "), "one term, matching nothing: {empty}");
         }
     }
 

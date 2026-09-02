@@ -13,6 +13,7 @@ mod compose;
 mod model;
 mod policy;
 mod section;
+mod spans;
 
 pub use advisor::{Advisory, Forbidden, Proposal, Stage};
 pub use assemble::{Ask, Bound, Context, Rendered, assemble, stores_for};
@@ -22,3 +23,4 @@ pub use compose::{Prompt, Split, compose};
 pub use model::{FEATURES, LAYOUT, MINIMUM, Model};
 pub use policy::{Policy, Shadow};
 pub use section::{Filter, Section};
+pub use spans::{Quoted, Quotes, quote};

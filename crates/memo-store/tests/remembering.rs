@@ -466,3 +466,24 @@ fn one_word_swapped_is_a_different_claim_however_alike_it_reads() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn a_query_of_only_short_words_answers_nothing_rather_than_failing() {
+    // Found while making the transcript searchable. Every term in "is it a" is filtered as a
+    // stopword, so the query fell through to a sentinel meant to match nothing — and the
+    // sentinel was a NUL inside a quoted string, which FTS5 reads as the end of the string.
+    // `memo recall "is it a"` did not answer nothing; it errored with "unterminated string".
+    let mut store = store();
+    store
+        .remember(
+            note("we deploy with fly.io", MARCH),
+            saw(WitnessKind::Imperative, "s1", MARCH),
+            MARCH,
+        )
+        .expect("remember");
+
+    let found = store
+        .recall(&Recall::of("is it a", MARCH))
+        .expect("a query that asks nothing is not an error");
+    assert!(found.is_empty(), "and it finds nothing: {}", found.len());
+}

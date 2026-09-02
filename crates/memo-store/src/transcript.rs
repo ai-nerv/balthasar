@@ -325,6 +325,16 @@ impl Transcript {
                 turn.args,
             ],
         )?;
+        self.connection.execute(
+            "DELETE FROM turn_fts WHERE session = ?1 AND cursor = ?2",
+            params![session.as_str(), turn.cursor as i64],
+        )?;
+        if !turn.text.trim().is_empty() {
+            self.connection.execute(
+                "INSERT INTO turn_fts (text, session, cursor) VALUES (?1, ?2, ?3)",
+                params![turn.text, session.as_str(), turn.cursor as i64],
+            )?;
+        }
         Ok(())
     }
 
@@ -561,6 +571,18 @@ CREATE TABLE IF NOT EXISTS turn (
 CREATE INDEX IF NOT EXISTS turn_of ON turn(session, cursor);
 CREATE INDEX IF NOT EXISTS turn_live ON turn(session, state, cursor);
 CREATE INDEX IF NOT EXISTS turn_entry ON turn(session, entry) WHERE entry IS NOT NULL;
+
+-- What was actually said, searchable.
+--
+-- The transcript is the only place a claim nobody extracted still exists. Without this index it
+-- is unreachable: recall queries `memory`, and a thing said once and never written down is
+-- findable by nobody. A span found here is evidence and never a claim -- see `Span`.
+CREATE VIRTUAL TABLE IF NOT EXISTS turn_fts USING fts5(
+  text,
+  session UNINDEXED,
+  cursor UNINDEXED,
+  tokenize = 'porter unicode61'
+);
 "#;
 
 #[cfg(test)]

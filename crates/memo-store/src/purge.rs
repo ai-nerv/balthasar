@@ -120,6 +120,13 @@ pub fn purge_run(
     scrollback: &crate::Transcript,
     session: &memo_model::SessionId,
 ) -> Result<usize, StoreError> {
+    // The search index holds a second copy of every word. Deleting the turn and leaving the
+    // index is the failure this whole file exists to prevent, and the byte-level purge test
+    // catches it the moment the index is added — which is how this line came to be written.
+    scrollback.db().execute(
+        "DELETE FROM turn_fts WHERE session = ?1",
+        params![session.as_str()],
+    )?;
     let gone = scrollback.db().execute(
         "DELETE FROM turn WHERE session = ?1",
         params![session.as_str()],

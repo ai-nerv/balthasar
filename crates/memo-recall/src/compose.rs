@@ -30,6 +30,11 @@ pub struct Split {
     pub memory_floor: f64,
     /// The most the scrollback may take before memory's floor bites.
     pub scrollback_ceiling: f64,
+    /// The share of memory's own allowance that verbatim spans may take.
+    ///
+    /// A minority on purpose. A promoted claim carries witnesses and a derived confidence; a span
+    /// carries neither, so it earns room only where memory had nothing to say.
+    pub span_share: f64,
     /// What the reply and a compaction call need kept clear.
     pub reserve: usize,
 }
@@ -40,6 +45,7 @@ impl Default for Split {
             tokens: 8_000,
             memory_floor: 0.25,
             scrollback_ceiling: 0.75,
+            span_share: 0.3,
             reserve: 2_000,
         }
     }
@@ -124,6 +130,11 @@ pub struct Prompt {
     pub omitted: usize,
     /// What memory added.
     pub memory: Context,
+    /// What was said that no memory records.
+    ///
+    /// Evidence, never assertion. These are turns matching the question that never crossed the
+    /// ladder — the answer to "nobody wrote this down, but somebody said it".
+    pub spans: crate::Quotes,
     /// The whole thing.
     pub tokens: usize,
     /// How full this leaves the window.
@@ -137,6 +148,7 @@ impl Default for Prompt {
             scrollback_tokens: 0,
             omitted: 0,
             memory: Context::default(),
+            spans: crate::Quotes::default(),
             tokens: 0,
             pressure: Pressure { used: 0, usable: 0 },
         }
@@ -198,23 +210,37 @@ pub fn compose(
         },
     )?;
 
+    let for_memory = split.for_memory(read.tokens);
     let memory = assemble(
         stores,
         sections,
         &Ask {
-            tokens: split.for_memory(read.tokens),
+            tokens: for_memory,
             ..ask.clone()
         },
         redact,
     )?;
 
-    let used = read.tokens + memory.tokens;
+    // Then what nobody ever wrote down. Spans get what memory did not spend, capped at their
+    // share — so a question memory answers well costs no spans at all, and a question it cannot
+    // answer spends the room on the words themselves.
+    let spare = for_memory.saturating_sub(memory.tokens);
+    let allowance = spare.min((for_memory as f64 * split.span_share) as usize);
+    let already: Vec<String> = memory
+        .sections
+        .iter()
+        .flat_map(|s| s.lines.iter().cloned())
+        .collect();
+    let spans = crate::quote(scrollback, &ask.turn, &already, allowance, |_| false)?;
+
+    let used = read.tokens + memory.tokens + spans.tokens;
     Ok(Prompt {
         tokens: used,
         scrollback_tokens: read.tokens,
         omitted: read.omitted,
         turns: read.turns,
         memory,
+        spans,
         pressure: Pressure {
             used,
             usable: split.tokens.saturating_sub(split.reserve),

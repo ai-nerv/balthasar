@@ -235,7 +235,8 @@ make.alias("c", "compile")
 
 ------------------------------------------------------------------------- gates
 
--- Not advisory. Each one mechanizes a commitment from PLAN.md, and each one exists because
+-- Not advisory. Each one mechanizes a commitment the code states in its own doc comments,
+-- and each one exists because
 -- the alternative is remembering to check -- which is how every reference implementation in
 -- xtra/ ended up with a 2,000-line file and a store that deletes.
 

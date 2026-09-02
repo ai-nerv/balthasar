@@ -13,7 +13,9 @@ memo why <handle>            # the evidence, not just the number
 memo decay                   # what today's forgetting would take, before it takes it
 ```
 
-See [`PLAN.md`](PLAN.md) for the whole design.
+The design lives in the code's own doc comments — `confidence.rs` for the witness model,
+`claim.rs` for when two claims are one claim, `akin.rs` for why the embedder was measured
+for that job and rejected. `PLAN.md` is what is *not* built yet.
 
 ## What is different about it
 
@@ -53,7 +55,9 @@ not mentions.
 
 ## Status
 
-`PLAN.md` is the build order and says what is done. M0 through M9 are built.
+Everything `PLAN_FUTURE.md` describes is built, M0 through M9 and F0 through F9. `PLAN.md`
+now holds only what is *not* built: three things a survey of the field turned up that memo
+cannot do yet.
 
 ```sh
 memo serve                     # listen for a harness

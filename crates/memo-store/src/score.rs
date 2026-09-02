@@ -182,7 +182,7 @@ const STOPWORDS: &[&str] = &[
 ///
 /// Stopwords are dropped. A query made of nothing else asks nothing, and answers nothing —
 /// which is the correct behaviour and not an empty result to apologise for.
-pub(crate) fn fts_query(query: &str) -> String {
+pub fn fts_query(query: &str) -> String {
     let terms: Vec<String> = query
         .split_whitespace()
         .map(|term| term.replace('"', ""))
@@ -199,7 +199,11 @@ pub(crate) fn fts_query(query: &str) -> String {
         .collect();
     if terms.is_empty() {
         // A term nothing can match, rather than a syntax error or a match on everything.
-        return "\"\u{0}nothing\"".to_owned();
+        //
+        // Not a NUL: FTS5 reads one inside a quoted string as the end of the string and reports
+        // "unterminated string", so the sentinel for "this query asks nothing" became an error
+        // rather than an empty result. A word no tokenizer will ever produce does the job.
+        return "\"zznomatchzz\"".to_owned();
     }
     terms.join(" OR ")
 }
