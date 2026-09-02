@@ -1,0 +1,15 @@
+[package]
+name = "balthasar-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "balthasar's domain records: what a memory is, and how it knows"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

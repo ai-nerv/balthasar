@@ -50,6 +50,150 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "balthasar"
+version = "0.1.0"
+dependencies = [
+ "balthasar-cli",
+ "balthasar-model",
+ "balthasar-store",
+]
+
+[[package]]
+name = "balthasar-buffer"
+version = "0.1.0"
+dependencies = [
+ "balthasar-model",
+ "balthasar-store",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "balthasar-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "balthasar-distil",
+ "balthasar-embed",
+ "balthasar-host",
+ "balthasar-ipc",
+ "balthasar-lua",
+ "balthasar-model",
+ "balthasar-recall",
+ "balthasar-store",
+ "balthasar-testkit",
+ "clap",
+ "serde_json",
+]
+
+[[package]]
+name = "balthasar-distil"
+version = "0.1.0"
+dependencies = [
+ "balthasar-embed",
+ "balthasar-lua",
+ "balthasar-model",
+ "balthasar-store",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "balthasar-embed"
+version = "0.1.0"
+dependencies = [
+ "balthasar-model",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokenizers",
+]
+
+[[package]]
+name = "balthasar-host"
+version = "0.1.0"
+dependencies = [
+ "balthasar-buffer",
+ "balthasar-ipc",
+ "balthasar-lua",
+ "balthasar-model",
+ "balthasar-recall",
+ "balthasar-store",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "balthasar-ipc"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "balthasar-lua"
+version = "0.1.0"
+dependencies = [
+ "balthasar-model",
+ "luna",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "balthasar-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "balthasar-recall"
+version = "0.1.0"
+dependencies = [
+ "balthasar-lua",
+ "balthasar-model",
+ "balthasar-store",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "balthasar-store"
+version = "0.1.0"
+dependencies = [
+ "balthasar-model",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "balthasar-testkit"
+version = "0.1.0"
+dependencies = [
+ "balthasar-distil",
+ "balthasar-lua",
+ "balthasar-model",
+ "balthasar-recall",
+ "balthasar-store",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "base64"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -842,150 +986,6 @@ checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc",
  "stable_deref_trait",
-]
-
-[[package]]
-name = "memo"
-version = "0.1.0"
-dependencies = [
- "memo-cli",
- "memo-model",
- "memo-store",
-]
-
-[[package]]
-name = "memo-buffer"
-version = "0.1.0"
-dependencies = [
- "memo-model",
- "memo-store",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "memo-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "memo-distil",
- "memo-embed",
- "memo-host",
- "memo-ipc",
- "memo-lua",
- "memo-model",
- "memo-recall",
- "memo-store",
- "memo-testkit",
- "serde_json",
-]
-
-[[package]]
-name = "memo-distil"
-version = "0.1.0"
-dependencies = [
- "memo-embed",
- "memo-lua",
- "memo-model",
- "memo-store",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "memo-embed"
-version = "0.1.0"
-dependencies = [
- "candle-core",
- "candle-nn",
- "candle-transformers",
- "memo-model",
- "serde_json",
- "thiserror 2.0.20",
- "tokenizers",
-]
-
-[[package]]
-name = "memo-host"
-version = "0.1.0"
-dependencies = [
- "memo-buffer",
- "memo-ipc",
- "memo-lua",
- "memo-model",
- "memo-recall",
- "memo-store",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "memo-ipc"
-version = "0.1.0"
-dependencies = [
- "rustix",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "memo-lua"
-version = "0.1.0"
-dependencies = [
- "luna",
- "memo-model",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "memo-model"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "memo-recall"
-version = "0.1.0"
-dependencies = [
- "memo-lua",
- "memo-model",
- "memo-store",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "memo-store"
-version = "0.1.0"
-dependencies = [
- "memo-model",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "memo-testkit"
-version = "0.1.0"
-dependencies = [
- "memo-distil",
- "memo-lua",
- "memo-model",
- "memo-recall",
- "memo-store",
- "serde",
- "serde_json",
 ]
 
 [[package]]

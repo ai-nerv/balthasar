@@ -3,10 +3,10 @@
 #
 # A fact the model is shown as true must be able to answer "how do you know". Checked against
 # the schema rather than trusted: `Memory::witness` is the only path that attaches evidence,
-# and a second path that forgot to would be invisible until somebody ran `memo why`.
+# and a second path that forgot to would be invisible until somebody ran `balthasar why`.
 set -eu
-grep -q 'must_be_witnessed' crates/memo-model/src/tier.rs || {
+grep -q 'must_be_witnessed' crates/balthasar-model/src/tier.rs || {
     echo "gate-witnessed: the tier rule is gone" >&2; exit 1; }
-grep -q 'if witnesses.is_empty() {' crates/memo-model/src/confidence.rs || {
+grep -q 'if witnesses.is_empty() {' crates/balthasar-model/src/confidence.rs || {
     echo "gate-witnessed: nothing witnessed no longer means nothing believed" >&2; exit 1; }
 echo "gate-witnessed: ok"

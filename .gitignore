@@ -1,7 +1,7 @@
 *.exe
 *.test
 *.out
-/memo
+/balthasar
 /coverage.out
 /bin
 /build

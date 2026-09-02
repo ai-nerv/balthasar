@@ -1,4 +1,4 @@
-# memo
+# balthasar
 
 Memory for agents. Short-term and long-term, in one layer, driven over Lua.
 
@@ -7,10 +7,10 @@ a harness cannot hold for itself: what is in the context window right now, what 
 session, what is true, and how things are done here. And the ladder between them.
 
 ```sh
-memo remember "we run the tests with make test"
-memo recall "tests" --explain
-memo why <handle>            # the evidence, not just the number
-memo decay                   # what today's forgetting would take, before it takes it
+balthasar remember "we run the tests with make test"
+balthasar recall "tests" --explain
+balthasar why <handle>            # the evidence, not just the number
+balthasar decay                   # what today's forgetting would take, before it takes it
 ```
 
 ```
@@ -19,7 +19,7 @@ memo decay                   # what today's forgetting would take, before it tak
                       observe │  SO_PEERCRED names it, so the kernel says who
                               ▼
                      ┌─────────────────┐
-                     │    memo.sock    │
+                     │    balthasar.sock    │
                      └────────┬────────┘
               ┌───────────────┴───────────────┐
               ▼                               ▼
@@ -54,7 +54,7 @@ wrong while making them.
 
 **Every durable memory names its witnesses.** Confidence is never assigned — it is computed
 from the evidence that promoted a memory, and recomputed whenever that evidence changes. So
-`memo why` prints an argument rather than a number:
+`balthasar why` prints an argument rather than a number:
 
 ```
 project test_command make test
@@ -98,7 +98,7 @@ stops being *findable*. That gap is the answer to staleness: an agent that can s
 this in March, it may be stale" instead of stating it flatly.
 
 **Nothing is ever deleted.** Superseded, contradicted, decayed past the floor, forgotten on
-purpose — every one of those is a column. `memo forget --purge` is the single exception, and it
+purpose — every one of those is a column. `balthasar forget --purge` is the single exception, and it
 exists so that "delete the key I pasted" can be answered with yes.
 
 **Diversity beats volume.** One session repeating something is a person being emphatic; the
@@ -119,26 +119,26 @@ the field turned up afterwards — searching the spans, the control arm that can
 erasure that reaches what was derived from what. 927 tests, seven gates.
 
 ```sh
-memo serve                     # listen for a harness
-memo distil                    # read what this project's own runs said
-memo ingest --source axon      # or read transcripts that already exist
-memo consolidate               # carry what recurred into the project's memory
-memo context "run the tests"   # exactly what a model would be told
-memo forget <handle> --purge   # gone, with everything derived from it
-memo eval --full --long        # measured against the arm that can beat it
+balthasar serve                     # listen for a harness
+balthasar distil                    # read what this project's own runs said
+balthasar ingest --source magi      # or read transcripts that already exist
+balthasar consolidate               # carry what recurred into the project's memory
+balthasar context "run the tests"   # exactly what a model would be told
+balthasar forget <handle> --purge   # gone, with everything derived from it
+balthasar eval --full --long        # measured against the arm that can beat it
 ```
 
 ### Does it earn its place
 
 A session that discovers `make test` after `cargo test` fails should leave the next one already
-knowing. `memo eval` runs that N times, three ways.
+knowing. `balthasar eval` runs that N times, three ways.
 
 ```
-$ memo eval --full --long --sessions 40
+$ balthasar eval --full --long --sessions 40
 
 agent outcomes
       57%  task success against a 57% ceiling, 0% without memory
-      41%  the same history in the window, no memory at all — memo is ahead by 16 points
+      41%  the same history in the window, no memory at all — balthasar is ahead by 16 points
        2   sessions before memory catches the window
 ```
 
@@ -147,10 +147,10 @@ same history simply carried forward in the window, with no memory layer at all. 
 on a short history it does —
 
 ```
-$ memo eval --full --sessions 30        # one lesson, repeated
+$ balthasar eval --full --sessions 30        # one lesson, repeated
 
       97%  task success against a 97% ceiling, 0% without memory
-      97%  the same history in the window, no memory at all — memo is level
+      97%  the same history in the window, no memory at all — balthasar is level
 ```
 
 **Level.** Carrying the text forward does exactly as well until the history outruns the window.
@@ -164,12 +164,12 @@ Durable memory is the project's and every session in it reads it. What a session
 own dies with it, unless something on the ladder carries it across.
 
 ```
-$ memo sessions
+$ balthasar sessions
 /home/you/work/thing
 the project. every session below shares its memory.
 
 0831-yt8z  get the test suite passing
-     2 hours ago · axon · 2 kept
+     2 hours ago · magi · 2 kept
 ```
 
 Every answer says which project and which run — by name, never by a twenty-six character id.
@@ -197,10 +197,10 @@ The gates are not advisory:
 | `gate-independent` | no Rust file names a harness |
 | `gate-witnessed` | every asserted memory answers for itself |
 | `gate-untrusted` | untrusted content cannot become durable instruction |
-| `gate-no-exec` | memo describes procedures and never runs them |
+| `gate-no-exec` | balthasar describes procedures and never runs them |
 | `gate-no-llm` | the suite passes with no key, no network, no embeddings |
 
-The last one is the load-bearing one. A model makes memo better; its absence never makes memo
+The last one is the load-bearing one. A model makes balthasar better; its absence never makes balthasar
 fail, and the only way that stays true is to prove it on every run rather than remember it.
 
 ## Requirements

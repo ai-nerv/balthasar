@@ -1,4 +1,4 @@
--- memo's directory environment. Loaded when you `cd` here, unloaded when you leave.
+-- balthasar's directory environment. Loaded when you `cd` here, unloaded when you leave.
 --
 -- Shared by every language wing generates, so the paths below are a union: a directory that does
 -- not exist in this project costs nothing. A language template can ship its own .env.lua, which

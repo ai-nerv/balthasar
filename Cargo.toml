@@ -1,17 +1,17 @@
 [workspace]
 members = [
-  "crates/memo-model",
-  "crates/memo-store",
-  "crates/memo-lua",
-  "crates/memo-distil",
-  "crates/memo-recall",
-  "crates/memo-embed",
-  "crates/memo-ipc",
-  "crates/memo-host",
-  "crates/memo-buffer",
-  "crates/memo-testkit",
-  "crates/memo-cli",
-  "crates/memo",
+  "crates/balthasar-model",
+  "crates/balthasar-store",
+  "crates/balthasar-lua",
+  "crates/balthasar-distil",
+  "crates/balthasar-recall",
+  "crates/balthasar-embed",
+  "crates/balthasar-ipc",
+  "crates/balthasar-host",
+  "crates/balthasar-buffer",
+  "crates/balthasar-testkit",
+  "crates/balthasar-cli",
+  "crates/balthasar",
 ]
 resolver = "3"
 
@@ -31,17 +31,17 @@ todo = "deny"
 unwrap_used = "deny"
 
 [workspace.dependencies]
-memo-model = { path = "crates/memo-model" }
-memo-store = { path = "crates/memo-store" }
-memo-cli = { path = "crates/memo-cli" }
-memo-lua = { path = "crates/memo-lua" }
-memo-distil = { path = "crates/memo-distil" }
-memo-recall = { path = "crates/memo-recall" }
-memo-embed = { path = "crates/memo-embed" }
-memo-ipc = { path = "crates/memo-ipc" }
-memo-host = { path = "crates/memo-host" }
-memo-buffer = { path = "crates/memo-buffer" }
-memo-testkit = { path = "crates/memo-testkit" }
+balthasar-model = { path = "crates/balthasar-model" }
+balthasar-store = { path = "crates/balthasar-store" }
+balthasar-cli = { path = "crates/balthasar-cli" }
+balthasar-lua = { path = "crates/balthasar-lua" }
+balthasar-distil = { path = "crates/balthasar-distil" }
+balthasar-recall = { path = "crates/balthasar-recall" }
+balthasar-embed = { path = "crates/balthasar-embed" }
+balthasar-ipc = { path = "crates/balthasar-ipc" }
+balthasar-host = { path = "crates/balthasar-host" }
+balthasar-buffer = { path = "crates/balthasar-buffer" }
+balthasar-testkit = { path = "crates/balthasar-testkit" }
 
 anyhow = "1.0"
 luna = { git = "https://github.com/onix-os/luna", tag = "v0.5.0" }
