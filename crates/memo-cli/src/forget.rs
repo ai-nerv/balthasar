@@ -74,6 +74,18 @@ pub fn run(
         return Ok(());
     }
 
+    // What else goes, before anything goes. A person asked to confirm removing one claim, and
+    // being told afterwards that it took three beliefs with it is the wrong order.
+    let closure = memo_store::closure_of(&store, &id)?;
+    if closure.derived > 0 {
+        crate::say!(
+            "{}",
+            render::dim(&format!(
+                "this also removes {} thing(s) distilled out of it",
+                closure.derived
+            ))
+        );
+    }
     if !args.yes && !confirmed(&memory.text())? {
         crate::say!("{}", render::dim("left alone"));
         return Ok(());
@@ -84,7 +96,14 @@ pub fn run(
     crate::say!("purged {}", render::dim(&memory.text()));
     crate::say!(
         "     {}",
-        render::dim("gone, with its evidence and its edges")
+        render::dim(&if closure.derived > 0 {
+            format!(
+                "gone, with its evidence, its edges and {} derived from it",
+                closure.derived
+            )
+        } else {
+            "gone, with its evidence and its edges".to_owned()
+        })
     );
     Ok(())
 }

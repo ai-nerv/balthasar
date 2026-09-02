@@ -168,6 +168,19 @@ fn promote(
         who: None,
     };
 
+    // What it was made from, recorded rather than inferred. Without this a purge of the scratch
+    // leaves the fact standing with nothing pointing at where it came from — and the next pass
+    // writes the claim back out of a record that was supposed to be gone.
+    memory.links = group
+        .sources
+        .iter()
+        .map(|source| memo_model::Link {
+            to: source.clone(),
+            rel: memo_model::LinkRelation::DerivedFrom,
+            at: now,
+        })
+        .collect();
+
     let first = witness_for(akin, 0, scope, settings, now);
     let landing = store.remember(memory, first, now)?;
 

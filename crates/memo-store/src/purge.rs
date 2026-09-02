@@ -36,13 +36,19 @@ pub struct Closure {
     pub ledger: usize,
     /// Whether it carries an embedding.
     pub embedded: bool,
+    /// Memories distilled or consolidated out of this one, which go with it.
+    ///
+    /// Counted separately from `links` because these are not rows that point at a memory — they
+    /// are memories, and removing this one removes them too. A confirmation that said "four
+    /// links" when it meant "four beliefs" would be the wrong prompt.
+    pub derived: usize,
 }
 
 impl Closure {
     /// How many rows in total, beside the memory itself.
     #[must_use]
     pub fn rows(&self) -> usize {
-        self.witnesses + self.links + self.relations + self.entities + self.ledger
+        self.witnesses + self.links + self.relations + self.entities + self.ledger + self.derived
     }
 }
 
@@ -67,6 +73,7 @@ pub fn closure_of(store: &Store, id: &MemoryId) -> Result<Closure, StoreError> {
                   + (SELECT count(*) FROM action_memory WHERE memory_id = ?1)",
         )?,
         embedded: one("SELECT count(*) FROM memory WHERE id = ?1 AND embedding IS NOT NULL")? > 0,
+        derived: descendants(store, id)?.len(),
     })
 }
 
@@ -148,7 +155,52 @@ pub fn purge_run(
 /// foreign keys point that way and a partial failure that left evidence for nothing would be
 /// worse than not starting. The embedding needs no statement of its own — it is a column, and
 /// it goes with the row.
+///
+/// **Derivations go too.** A memory distilled or consolidated out of this one is a copy of it
+/// under another name, and leaving it standing means the claim survives the delete — worse, the
+/// next consolidation pass rewrites it back out of the survivor while the record says it was
+/// erased. Descendants are removed first, so no edge is ever left pointing at nothing.
 pub fn purge(store: &mut Store, id: &MemoryId) -> Result<usize, StoreError> {
+    let mut gone = 0;
+    for derived in descendants(store, id)? {
+        gone += purge_one(store, &derived)?;
+    }
+    Ok(gone + purge_one(store, id)?)
+}
+
+/// Everything made out of this memory, deepest first.
+///
+/// Breadth-first with a seen set, so a cycle in the derivation graph terminates and a memory
+/// reached by two paths is removed once. Reversed on the way out, so a descendant is always
+/// purged before whatever it was derived from.
+fn descendants(store: &Store, root: &MemoryId) -> Result<Vec<MemoryId>, StoreError> {
+    let mut seen = vec![root.clone()];
+    let mut order = Vec::new();
+    let mut queue = vec![root.clone()];
+
+    while let Some(here) = queue.pop() {
+        let mut statement = store
+            .db()
+            .prepare("SELECT src FROM link WHERE dst = ?1 AND rel = 'derived_from'")?;
+        let made: Vec<MemoryId> = statement
+            .query_map(params![here.as_str()], |r| {
+                Ok(MemoryId::new(r.get::<_, String>(0)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for id in made {
+            if !seen.contains(&id) {
+                seen.push(id.clone());
+                order.push(id.clone());
+                queue.push(id);
+            }
+        }
+    }
+    order.reverse();
+    Ok(order)
+}
+
+/// One memory, and everything that points at it.
+fn purge_one(store: &mut Store, id: &MemoryId) -> Result<usize, StoreError> {
     let tx = store.db_mut().transaction()?;
 
     // Asserted edges, in both directions.

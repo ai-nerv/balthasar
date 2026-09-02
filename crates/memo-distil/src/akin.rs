@@ -49,6 +49,7 @@ pub fn merge(clusters: Vec<Cluster>) -> Vec<Akin> {
                     }
                 }
                 held.cluster.first_seen = held.cluster.first_seen.min(cluster.first_seen);
+                held.cluster.sources.extend(cluster.sources);
                 held.near |= reworded;
             }
             None => out.push(Akin {
@@ -69,6 +70,7 @@ mod tests {
             text: text.to_owned(),
             hash: memo_model::content_hash(text),
             sessions: sessions.iter().map(|s| SessionId::new(*s)).collect(),
+            sources: Vec::new(),
             first_seen: 0,
         }
     }

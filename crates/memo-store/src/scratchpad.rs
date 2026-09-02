@@ -150,6 +150,10 @@ impl Scratchpad {
             .into_iter()
             .filter(|(_, (_, _, runs))| runs.len() >= at_least)
             .map(|(hash, (text, first_seen, sessions))| crate::Cluster {
+                // Left empty on purpose: these ids live in each run's own file, and a link row
+                // in the project's store cannot reference them. What a promoted claim keeps
+                // instead is the session, which `purge_session` already follows.
+                sources: Vec::new(),
                 text,
                 hash,
                 sessions,

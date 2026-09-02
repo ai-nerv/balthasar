@@ -304,3 +304,99 @@ fn one_run_saying_it_two_ways_is_still_one_run() {
     assert!(report.promoted.is_empty(), "{:?}", report.promoted);
     assert_eq!(DISTINCT_SESSIONS, 2, "the bar is unchanged");
 }
+
+#[test]
+fn a_promoted_fact_records_what_it_was_made_from() {
+    // Without this edge a purge of the scratch leaves the fact standing with nothing pointing
+    // at where it came from — and the next pass writes the claim back out of the survivor.
+    let mut store = Store::ephemeral().expect("store");
+    said(&mut store, "s1", "the database is postgres", MARCH);
+    said(&mut store, "s2", "the database is postgres", MARCH + 86_400);
+
+    let report = run(&mut store, AUGUST);
+    assert_eq!(report.promoted.len(), 1, "{:?}", report.promoted);
+
+    let all = store.all().expect("all");
+    let fact = all.iter().find(|m| m.tier == Tier::Fact).expect("a fact");
+    let links = store.links_of(&fact.id).expect("links");
+    let derived: Vec<_> = links
+        .iter()
+        .filter(|l| l.rel == memo_model::LinkRelation::DerivedFrom)
+        .collect();
+    assert_eq!(
+        derived.len(),
+        2,
+        "one edge per scratch it was made from: {links:?}"
+    );
+}
+
+#[test]
+fn purging_the_scratch_takes_the_fact_made_from_it() {
+    // The cascade. Erasing a claim has to reach what the claim became, or the compliance record
+    // says it was removed while a consolidation pass rewrites it tomorrow.
+    let mut store = Store::ephemeral().expect("store");
+    said(
+        &mut store,
+        "s1",
+        "the deploy token is hunter2-nevershare",
+        MARCH,
+    );
+    said(
+        &mut store,
+        "s2",
+        "the deploy token is hunter2-nevershare",
+        MARCH + 86_400,
+    );
+    run(&mut store, AUGUST);
+
+    // The sweep at the end of a pass archives spent scratch, so the source is found through the
+    // edge rather than by tier — which is the point of recording the edge at all.
+    let all = store.all().expect("all");
+    let fact = all.iter().find(|m| m.tier == Tier::Fact).expect("a fact");
+    let scratch = store
+        .links_of(&fact.id)
+        .expect("links")
+        .into_iter()
+        .find(|l| l.rel == memo_model::LinkRelation::DerivedFrom)
+        .expect("it records what it was made from")
+        .to;
+
+    // The prompt has to say so before anything is removed.
+    let closure = memo_store::closure_of(&store, &scratch).expect("closure");
+    assert_eq!(closure.derived, 1, "one belief goes with it");
+
+    memo_store::purge(&mut store, &scratch).expect("purge");
+
+    let left = store.all().expect("all");
+    assert!(
+        !left.iter().any(|m| m.tier == Tier::Fact),
+        "the belief made out of it went with it: {:?}",
+        left.iter().map(|m| (m.tier, m.text())).collect::<Vec<_>>()
+    );
+    // The other run's scratch is a different memory and nobody asked for it. Taking a sibling
+    // along would be a larger operation than the one requested — `memo forget --session` is the
+    // verb for that, and it is a different verb on purpose.
+    assert_eq!(left.len(), 1, "and only its own descendants went");
+}
+
+#[test]
+fn a_cycle_in_the_derivation_graph_terminates() {
+    // Nothing writes a cycle today, but a graph that can be walked has to be walked safely —
+    // the alternative is a purge that never returns.
+    let mut store = Store::ephemeral().expect("store");
+    said(&mut store, "s1", "a claim that recurs", MARCH);
+    said(&mut store, "s2", "a claim that recurs", MARCH + 86_400);
+    run(&mut store, AUGUST);
+
+    let all = store.all().expect("all");
+    let a = &all[0].id;
+    let b = &all[1].id;
+    store
+        .link(a, b, memo_model::LinkRelation::DerivedFrom, AUGUST)
+        .expect("edge");
+    store
+        .link(b, a, memo_model::LinkRelation::DerivedFrom, AUGUST)
+        .expect("the other way");
+
+    assert!(memo_store::purge(&mut store, a).is_ok(), "it returns");
+}

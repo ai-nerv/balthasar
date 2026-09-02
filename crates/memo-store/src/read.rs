@@ -93,6 +93,12 @@ pub struct Cluster {
     pub sessions: Vec<memo_model::SessionId>,
     /// When the first of them did.
     pub first_seen: Timestamp,
+    /// The memories this cluster was assembled from, when they are in the store being written.
+    ///
+    /// Empty when they are not. A `link` row has foreign keys into `memory`, so an id belonging
+    /// to a run's own file cannot be recorded from the project's — and the honest answer to
+    /// "what was this made from" is then the session, which the promoted memory already carries.
+    pub sources: Vec<memo_model::MemoryId>,
 }
 
 /// How many candidates full-text search may hand to scoring.
@@ -401,6 +407,20 @@ impl Store {
     ///
     /// Grouped by content hash, which is exact and free. A distiller clusters better; its
     /// absence does not stop this.
+    /// The scratch memories in this store saying exactly this, by digest.
+    fn saying(&self, scope: &str, hash: &str) -> Result<Vec<memo_model::MemoryId>, StoreError> {
+        let mut statement = self.db().prepare(
+            "SELECT id FROM memory \
+             WHERE scope = ?1 AND content_hash = ?2 AND tier = 'scratch' AND archived_at IS NULL",
+        )?;
+        let found = statement
+            .query_map(params![scope, hash], |r| {
+                Ok(memo_model::MemoryId::new(r.get::<_, String>(0)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(found)
+    }
+
     pub fn scratch_clusters(
         &self,
         scope: &str,
@@ -423,6 +443,7 @@ impl Store {
         for (hash, text, first_seen) in groups {
             out.push(Cluster {
                 sessions: self.sessions_saying(scope, &hash)?,
+                sources: self.saying(scope, &hash)?,
                 text,
                 hash,
                 first_seen,

@@ -331,6 +331,25 @@ impl Store {
         self.insert_unwitnessed(memory, now)
     }
 
+    /// Draw an asserted edge between two memories that are already here.
+    ///
+    /// Links are normally set on a memory before it is written, which is right when the edge is
+    /// known at write time. This is for the edges that are not — a derivation noticed later, or
+    /// a relationship a person asserts about two things already believed.
+    pub fn link(
+        &mut self,
+        src: &MemoryId,
+        dst: &MemoryId,
+        rel: memo_model::LinkRelation,
+        at: Timestamp,
+    ) -> Result<(), StoreError> {
+        self.db().execute(
+            "INSERT OR IGNORE INTO link (src, rel, dst, at) VALUES (?1, ?2, ?3, ?4)",
+            params![src.as_str(), row::relation_str(rel), dst.as_str(), at],
+        )?;
+        Ok(())
+    }
+
     /// The scratch memory a session holds for this text, if any.
     ///
     /// How a turn finds its own memory. The transcript holds no memory id — it is a separate
