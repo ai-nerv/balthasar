@@ -14,6 +14,9 @@ use std::io::Write;
 /// What a coordinator may tell this balthasar.
 #[derive(Debug, Parser)]
 pub struct NeedsArgs {
+    /// Answer in JSON. The default, and accepted so every sibling takes the same flags.
+    #[arg(long)]
+    pub json: bool,
     /// Answer in CBOR rather than JSON.
     #[arg(long)]
     pub cbor: bool,
@@ -22,6 +25,9 @@ pub struct NeedsArgs {
 /// Take a chunk of config Lua on stdin.
 #[derive(Debug, Parser)]
 pub struct ConfigureArgs {
+    /// Answer in JSON. The default, and accepted so every sibling takes the same flags.
+    #[arg(long)]
+    pub json: bool,
     /// Answer in CBOR rather than JSON.
     #[arg(long)]
     pub cbor: bool,
