@@ -24,7 +24,9 @@ balthasar-store.workspace = true
 balthasar-testkit.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+ciborium.workspace = true
 
 [lints]
 workspace = true

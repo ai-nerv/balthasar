@@ -4,7 +4,8 @@
 //!   frame   4 bytes big-endian length, then the body
 //!   request {"call":"recall","args":["build command",{"limit":5}]}
 //!   reply   {"ok":true,"n":1,"result":[[…]]}
-//!   refusal {"ok":false,"error":"…"}
+//!   refusal {"ok":false,"error":"…","fault":"refused"}
+//!   failure {"ok":false,"error":"…","fault":"failed"}
 //! ```
 //!
 //! `result` is a **list** of return values and `n` says how many, so one call answers with what
@@ -47,6 +48,20 @@ pub struct Request {
     pub args: Vec<serde_json::Value>,
 }
 
+/// Which kind of "no" an answer is.
+///
+/// A caller that keeps its only transcript here has to tell two failures apart, and cannot do it
+/// by reading the message. A refusal costs it a feature; a failed write costs it the turn that
+/// just happened, and continuing past one writes the next turn on top of a hole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fault {
+    /// A verb balthasar will not do. The caller carries on; this is not fatal.
+    Refused,
+    /// Something the caller handed over was not recorded. The caller must stop.
+    Failed,
+}
+
 /// One answer, as it goes back.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Reply {
@@ -61,6 +76,13 @@ pub struct Reply {
     /// Why not, when `ok` is false.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Which kind of "no", when `ok` is false.
+    ///
+    /// Machine-readable on purpose. The third state a caller needs — nothing listening at all —
+    /// is not in here because it cannot be: it is what a failed dial looks like, and a balthasar
+    /// that is not running cannot say so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fault: Option<Fault>,
 }
 
 impl Reply {
@@ -72,6 +94,7 @@ impl Reply {
             n: Some(1),
             result: Some(vec![value]),
             error: None,
+            fault: None,
         }
     }
 
@@ -83,6 +106,7 @@ impl Reply {
             n: Some(0),
             result: Some(Vec::new()),
             error: None,
+            fault: None,
         }
     }
 
@@ -98,6 +122,23 @@ impl Reply {
             n: None,
             result: None,
             error: Some(why.into()),
+            fault: Some(Fault::Refused),
+        }
+    }
+
+    /// What was handed over was not recorded.
+    ///
+    /// Distinct from a refusal because the consequences are: a caller that treats this as "no,
+    /// and carry on" continues a session on top of a turn that is not there. Anything that took
+    /// custody of a caller's only copy and then could not keep it answers with this.
+    #[must_use]
+    pub fn failed(why: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            n: None,
+            result: None,
+            error: Some(why.into()),
+            fault: Some(Fault::Failed),
         }
     }
 }

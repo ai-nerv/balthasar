@@ -25,6 +25,7 @@ mod handler;
 mod helpers;
 mod plugins;
 mod settings;
+pub mod setup;
 mod stream;
 
 pub use client::CLIENT;

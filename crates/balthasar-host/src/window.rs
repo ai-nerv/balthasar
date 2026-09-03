@@ -57,12 +57,15 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
     }
 
     // The scrollback first, and durably. For a harness with no journal of its own this call
-    // answering is the only signal that the turn is safe, so nothing else happens until it is.
-    if let Some(scrollback) = at.scrollback.as_mut() {
-        let verbatim = turn_of(&session, turn, at.now);
-        if let Err(why) = scrollback.write(&session, &verbatim) {
-            return Reply::refused(why.to_string());
-        }
+    // answering is the only signal that the turn is safe, so nothing else happens until it is —
+    // and a balthasar with nowhere to put it says so rather than answering yes to a turn it
+    // dropped on the floor.
+    let Some(scrollback) = at.scrollback.as_mut() else {
+        return Reply::failed("this balthasar keeps no scrollback: the turn was not recorded");
+    };
+    let verbatim = turn_of(&session, turn, at.now);
+    if let Err(why) = scrollback.write(&session, &verbatim) {
+        return Reply::failed(why.to_string());
     }
 
     let cursor = turn
@@ -287,10 +290,13 @@ fn turn_of(
             .get("at")
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(now),
+        // Not "user". A turn arriving without a role is a turn nobody vouched for, and the
+        // person's rung is the one that crosses alone — so an omission must cost an extraction
+        // rather than buy an imperative.
         role: turn
             .get("role")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("user")
+            .unwrap_or("other")
             .to_owned(),
         kind: turn
             .get("kind")

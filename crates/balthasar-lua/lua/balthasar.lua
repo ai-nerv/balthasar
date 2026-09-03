@@ -267,7 +267,14 @@ function Session:call(name, ...)
   if not reply_body then return nil, cut end
 
   local reply = decode(reply_body)
-  if not reply.ok then return nil, reply.error or "balthasar refused the call" end
+  -- A third value, because the two failures a caller must tell apart look identical in the
+  -- message. "refused" costs a feature and the caller carries on; "failed" means what it just
+  -- handed over was not recorded, and the next turn would be written on top of a hole.
+  -- A transport error above answers `nil, why` with no third value, which is neither: nothing
+  -- was listening, and that is the caller's to notice.
+  if not reply.ok then
+    return nil, reply.error or "balthasar refused the call", reply.fault or "refused"
+  end
   -- `result` is a list of return values and `n` says how many, so one Lua call answers with
   -- what the remote one did. The same shape oslo's server uses: a client that unpacked a
   -- bare-value reply lost every record, string and number it was handed.
@@ -563,7 +570,9 @@ function M.fetch(where, verb, ...)
   local decoded, why = pcall(decode, r.stdout or "")
   if not decoded then return nil, "'" .. tool .. "' did not answer in the family's shape: " .. tostring(why) end
   local reply = why
-  if not reply.ok then return nil, reply.error or "the tool refused the call" end
+  if not reply.ok then
+    return nil, reply.error or "the tool refused the call", reply.fault or "refused"
+  end
   return table.unpack(reply.result or {}, 1, reply.n or #(reply.result or {}))
 end
 

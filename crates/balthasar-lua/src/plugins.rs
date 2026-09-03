@@ -98,6 +98,15 @@ pub fn runtimepath(roots: &Roots) -> Vec<(PathBuf, bool)> {
             out.push((local, false));
         }
     }
+
+    // What a coordinator said, last of all and trusted like the owner's own: whoever starts this
+    // process is deciding what it should be, and a file on disk that quietly won would be the
+    // disagreement the arrangement exists to end. Absent is the ordinary case — a balthasar
+    // nobody is coordinating reads its own files exactly as before.
+    let given = crate::setup::given();
+    if given.is_file() {
+        out.push((given, true));
+    }
     out
 }
 

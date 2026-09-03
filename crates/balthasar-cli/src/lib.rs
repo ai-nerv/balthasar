@@ -8,6 +8,7 @@ mod ask;
 mod configs;
 mod consolidate;
 mod context;
+mod coordinated;
 mod decay;
 pub(crate) mod distil;
 mod eval;
@@ -103,6 +104,10 @@ enum What {
     Replay(replay::Args),
     /// Which runs this project has had, and what each left behind.
     Sessions(sessions::Args),
+    /// What a coordinator may tell this balthasar.
+    Needs(coordinated::NeedsArgs),
+    /// Take configuration from a coordinator, as Lua on stdin.
+    Configure(coordinated::ConfigureArgs),
     /// Carry what recurred across sessions into the project's memory. Shows first.
     Consolidate(consolidate::Args),
     /// Fade what has not been needed. Shows first; `--now` applies.
@@ -186,6 +191,8 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Some(What::Reindex(args)) => reindex::run(where_, &scope, &tool, args, &loaded),
         Some(What::Replay(args)) => replay::run(where_, &scope, &tool, args),
         Some(What::Sessions(args)) => sessions::run(where_, &scope, &tool, args),
+        Some(What::Needs(args)) => coordinated::needs(args),
+        Some(What::Configure(args)) => coordinated::configure(args),
         Some(What::Consolidate(args)) => consolidate::run(where_, &scope, &tool, args, &mut loaded),
         Some(What::Decay(args)) => decay::run(where_, &scope, &tool, args),
         Some(What::Export(args)) => transfer::export(where_, &scope, &tool, args),

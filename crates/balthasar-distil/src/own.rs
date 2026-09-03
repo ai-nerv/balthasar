@@ -123,15 +123,19 @@ fn observation(turn: &Turn) -> Observation {
     Observation {
         cursor: Some(turn.cursor),
         role: match turn.role.as_str() {
+            "user" => Role::User,
             "assistant" => Role::Assistant,
             "tool" => Role::Tool,
-            _ => Role::User,
+            _ => Role::Other,
         },
         kind: match turn.kind.as_str() {
             "thinking" => Kind::Thinking,
             "tool_call" => Kind::ToolCall,
             "tool_result" => Kind::ToolResult,
             "summary" => Kind::Summary,
+            "from" => Kind::From,
+            "branch" => Kind::Branch,
+            "user" => Kind::User,
             _ => Kind::Prose,
         },
         text: turn.text.clone(),

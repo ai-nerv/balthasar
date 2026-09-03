@@ -52,7 +52,10 @@ const CLAIM: std::ops::RangeInclusive<usize> = 12..=200;
 pub fn clashes(store: &Store, scope: &ScopeId, turns: &[Observation]) -> Vec<Candidate> {
     let mut out = Vec::new();
 
-    for turn in turns.iter().filter(|t| t.role == Role::User) {
+    for turn in turns
+        .iter()
+        .filter(|t| t.role == Role::User && t.kind.can_instruct())
+    {
         for said in assertions(&turn.text) {
             let Ok(Some((_, held))) = store.what_this_revises(scope, &said) else {
                 continue;

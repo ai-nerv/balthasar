@@ -18,13 +18,13 @@ balthasar decay                   # what today's forgetting would take, before i
                               │
                       observe │  SO_PEERCRED names it, so the kernel says who
                               ▼
-                     ┌─────────────────┐
-                     │    balthasar.sock    │
-                     └────────┬────────┘
+                     ┌────────────────────┐
+                     │  api@default.sock  │
+                     └────────┬───────────┘
               ┌───────────────┴───────────────┐
               ▼                               ▼
-    project-transcript.db              <run>/memory.db
-    every turn, verbatim               this run's scratch
+    <run>/transcript.db                <run>/memory.db
+    that run's turns, verbatim         this run's scratch
     the only copy of what was said     dies with the run
               │                               │
        ┌──────┴───────┐                       │  the ladder — eight kinds of
@@ -47,8 +47,7 @@ thing, which is a weaker claim than the thing being true.
 
 The design lives in the code's own doc comments — `confidence.rs` for the witness model,
 `claim.rs` for when two claims are one claim, `akin.rs` for why the embedder was measured
-for that job and rejected. `PLAN.md` records the last three changes and what went
-wrong while making them.
+for that job and rejected. That is where to read *why* something works the way it does.
 
 ## What is different about it
 
@@ -114,9 +113,9 @@ in the transcript and nowhere else. `recall` answers from it too, as evidence �
 
 ## Status
 
-Built. M0–M9 and F0–F9 in `PLAN_FUTURE.md`, and the three things in `PLAN.md` that a survey of
-the field turned up afterwards — searching the spans, the control arm that can lose, and an
-erasure that reaches what was derived from what. 927 tests, seven gates.
+Built. M0–M9, F0–F9, and the three things a survey of the field turned up afterwards —
+searching the spans, the control arm that can lose, and an erasure that reaches what was
+derived from what. 927 tests, seven gates.
 
 ```sh
 balthasar serve                     # listen for a harness
