@@ -33,6 +33,13 @@ pub struct Roots {
     pub site: Option<PathBuf>,
     /// The working directory, whose `.balthasar.lua` may choose but not declare.
     pub project: Option<PathBuf>,
+    /// What a coordinator said, read last of all.
+    ///
+    /// A root like the others rather than a path this module goes and looks up, so
+    /// [`runtimepath`] is a function of what it is handed. Reading it inside meant the answer
+    /// depended on whether *this machine* happened to have a coordinator running — which made
+    /// every test of the order pass alone and fail beside a real session.
+    pub given: Option<PathBuf>,
 }
 
 impl Roots {
@@ -43,6 +50,7 @@ impl Roots {
             config: Some(PathBuf::from(crate::helpers::config_home()).join("balthasar")),
             site: Some(PathBuf::from(crate::helpers::data_home()).join("balthasar/site")),
             project: Some(cwd.to_owned()),
+            given: Some(crate::setup::given()),
         }
     }
 }
@@ -103,9 +111,10 @@ pub fn runtimepath(roots: &Roots) -> Vec<(PathBuf, bool)> {
     // process is deciding what it should be, and a file on disk that quietly won would be the
     // disagreement the arrangement exists to end. Absent is the ordinary case — a balthasar
     // nobody is coordinating reads its own files exactly as before.
-    let given = crate::setup::given();
-    if given.is_file() {
-        out.push((given, true));
+    if let Some(given) = &roots.given
+        && given.is_file()
+    {
+        out.push((given.clone(), true));
     }
     out
 }
@@ -184,6 +193,7 @@ mod tests {
             config: Some(config),
             site: None,
             project: None,
+            given: None,
         });
         assert!(files[0].0.ends_with("init.lua"));
         let _ = std::fs::remove_dir_all(&root);
@@ -202,6 +212,7 @@ mod tests {
             config: Some(config),
             site: None,
             project: None,
+            given: None,
         });
         let last = &files.last().expect("something").0;
         assert!(
@@ -223,12 +234,55 @@ mod tests {
             config: Some(config),
             site: None,
             project: None,
+            given: None,
         });
         let names: Vec<String> = files
             .iter()
             .map(|(p, _)| p.file_name().unwrap_or_default().to_string_lossy().into())
             .collect();
         assert_eq!(names, ["aaa.lua", "bbb.lua", "ccc.lua"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn what_a_coordinator_said_comes_after_everything_on_disk() {
+        // The point of the arrangement: whoever started this process is deciding what it should
+        // be, and registrars are keyed, so the last word has to be theirs. A file on disk that
+        // quietly won would be the disagreement this exists to end.
+        let root = scratch("coordinated");
+        let config = root.join("config");
+        touch(&config.join("init.lua"));
+        touch(&config.join("after/plugin/zzz.lua"));
+        let given = root.join("given.lua");
+        touch(&given);
+        touch(&root.join(".balthasar.lua"));
+
+        let files = runtimepath(&Roots {
+            config: Some(config),
+            site: None,
+            project: Some(root.clone()),
+            given: Some(given.clone()),
+        });
+        assert_eq!(files.last().expect("something").0, given, "{files:?}");
+        assert!(files.last().expect("something").1, "and trusted to declare");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_coordinator_that_said_nothing_adds_nothing() {
+        // The ordinary case: a balthasar nobody is coordinating reads its own files exactly as
+        // it did before any of this existed.
+        let root = scratch("uncoordinated");
+        let config = root.join("config");
+        touch(&config.join("init.lua"));
+
+        let files = runtimepath(&Roots {
+            config: Some(config),
+            site: None,
+            project: None,
+            given: Some(root.join("nothing-was-written-here.lua")),
+        });
+        assert_eq!(files.len(), 1, "{files:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -240,6 +294,7 @@ mod tests {
             config: None,
             site: None,
             project: Some(root.clone()),
+            given: None,
         });
         assert_eq!(files.len(), 1);
         assert!(
@@ -272,6 +327,7 @@ mod tests {
             config: Some(PathBuf::from("/no/such/place")),
             site: Some(PathBuf::from("/nor/this")),
             project: None,
+            given: None,
         });
         assert!(files.is_empty());
     }
