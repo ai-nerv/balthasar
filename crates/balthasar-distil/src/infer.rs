@@ -95,7 +95,7 @@ fn prose_of(turns: &[Observation]) -> Option<String> {
     let mut spent = 0;
 
     for turn in turns.iter().rev() {
-        if turn.role != Role::User {
+        if turn.role != Role::User || !turn.kind.can_instruct() {
             continue;
         }
         let text = turn.text.trim();

@@ -39,7 +39,10 @@ pub fn extract(turns: &[Observation], imperatives: &[String]) -> Extracted {
 
     for (index, turn) in turns.iter().enumerate() {
         match turn.role {
-            Role::User => {
+            // A sibling session's words reach the transcript as ordinary turns, so the kind is
+            // checked as well as the role: `from` is somebody else asking, and the imperative
+            // rung is reserved for the person whose session this is.
+            Role::User if turn.kind.can_instruct() => {
                 if let Some(said) = instruction::read(&turn.text, imperatives) {
                     out.candidates
                         .extend(asked_for(&said, turn, &turns[..index]));
@@ -67,7 +70,7 @@ pub fn extract(turns: &[Observation], imperatives: &[String]) -> Extracted {
                     out.candidates.push(candidate);
                 }
             }
-            Role::Assistant => {}
+            Role::User | Role::Assistant | Role::Other => {}
         }
     }
     out
@@ -138,7 +141,7 @@ fn recent_substance(before: &[Observation]) -> Vec<(String, Option<u64>)> {
         let worth = match turn.role {
             Role::Assistant => !turn.text.trim().is_empty(),
             Role::Tool => turn.worked() && turn.command().is_some(),
-            Role::User => false,
+            Role::User | Role::Other => false,
         };
         if !worth {
             continue;

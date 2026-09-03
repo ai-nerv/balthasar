@@ -272,3 +272,162 @@ fn two_runs_keep_separate_scrollbacks() {
         serde_json::json!("one")
     );
 }
+
+// ── what a harness with no journal requires ──────────────────────────────────────────────────────
+//
+// Once balthasar holds the only copy, replay *is* the
+// transcript, and anything normalised on the way through is a session that comes back subtly
+// wrong. These pin the four properties reconstruction depends on.
+
+/// A turn carrying its record as an opaque string, which is the contract that survives.
+fn carrying(cursor: u64, at: i64, raw: &str) -> serde_json::Value {
+    serde_json::json!({
+        "cursor": cursor, "role": "assistant", "kind": "prose",
+        "text": "shown", "at": at, "raw": raw,
+    })
+}
+
+#[test]
+fn a_record_sent_as_text_comes_back_the_same_bytes() {
+    // Not "equivalent JSON" — the same bytes. A provider signature is opaque state that the
+    // next request must carry verbatim or the provider rejects it, so re-encoding, whitespace
+    // folding and unicode normalisation are all data loss.
+    let mut held = Held::new();
+    let raw = "{\"type\":\"assistant\",\
+               \"signatures\":[\"ErUBCkYIBxgCIkDx+\\/9AZ0lNPLAIT7Ck=\"],\
+               \"text\":\"  spaced  \",\
+               \"thinking\":\"café — naïve\\u00a0nbsp\",\
+               \"usage\":{\"output\":12,\"input\":3}}";
+
+    held.ask("observe", vec![serde_json::json!(S), carrying(0, NOW, raw)]);
+
+    let back = Held::value(&held.ask("replay", vec![serde_json::json!(S)]));
+    let got = back.as_array().expect("a list")[0]["raw"]
+        .as_str()
+        .expect("raw is text");
+    assert_eq!(got, raw, "byte for byte");
+    assert_eq!(got.as_bytes(), raw.as_bytes(), "and as bytes");
+}
+
+#[test]
+fn order_is_by_cursor_even_when_the_clock_disagrees() {
+    // A harness assigns cursors and `keeps`/`replaces` index them, so a branch cuts in the wrong
+    // place the moment anything reorders. Written newest-clock-first, out of cursor order.
+    let mut held = Held::new();
+    for (cursor, at) in [(2_u64, NOW - 500), (0, NOW), (1, NOW - 900)] {
+        held.ask(
+            "observe",
+            vec![
+                serde_json::json!(S),
+                carrying(cursor, at, &format!("{{\"n\":{cursor}}}")),
+            ],
+        );
+    }
+    let back = Held::value(&held.ask("replay", vec![serde_json::json!(S)]));
+    let seen: Vec<u64> = back
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|t| t["cursor"].as_u64().expect("cursor"))
+        .collect();
+    assert_eq!(seen, vec![0, 1, 2], "ascending by cursor, never by at");
+}
+
+#[test]
+fn a_gap_in_the_cursors_replays_as_what_is_there() {
+    // Gaps are legal. A hole is not a failure and must not be reported as one, because a harness
+    // does not promise a dense sequence.
+    let mut held = Held::new();
+    for cursor in [0_u64, 1, 7, 40] {
+        held.ask(
+            "observe",
+            vec![
+                serde_json::json!(S),
+                carrying(cursor, NOW, &format!("{{\"n\":{cursor}}}")),
+            ],
+        );
+    }
+    let reply = held.ask("replay", vec![serde_json::json!(S)]);
+    assert!(reply.ok, "a gap is not an error");
+    let seen: Vec<u64> = Held::value(&reply)
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|t| t["cursor"].as_u64().expect("cursor"))
+        .collect();
+    assert_eq!(seen, vec![0, 1, 7, 40]);
+}
+
+#[test]
+fn amending_a_cursor_returns_only_the_final_state() {
+    // A streaming assistant message is amended as it grows. Replay owes the last write, and
+    // owes it once.
+    let mut held = Held::new();
+    for n in 0..4 {
+        held.ask(
+            "observe",
+            vec![
+                serde_json::json!(S),
+                carrying(3, NOW, &format!("{{\"grown\":{n}}}")),
+            ],
+        );
+    }
+    let back = Held::value(&held.ask("replay", vec![serde_json::json!(S)]));
+    let turns = back.as_array().expect("a list");
+    assert_eq!(turns.len(), 1, "one cursor, one turn");
+    assert_eq!(
+        turns[0]["raw"].as_str().expect("raw"),
+        "{\"grown\":3}",
+        "the second write wins, and the fourth wins over that"
+    );
+}
+
+#[test]
+fn a_refusal_and_a_lost_turn_are_different_answers() {
+    // A caller keeping its only transcript here has to tell
+    // "balthasar will not do that" from "the turn you just handed me is gone", and it must not
+    // have to read the message to do it. The first costs a feature; the second means carrying
+    // on would write the next turn on top of a hole.
+    let mut held = Held::new();
+
+    let refused = held.ask("observe", vec![serde_json::json!(S)]);
+    assert!(!refused.ok);
+    assert_eq!(
+        refused.fault,
+        Some(balthasar_ipc::Fault::Refused),
+        "a missing argument is a refusal — the caller carries on"
+    );
+
+    // The same call against a balthasar that keeps no scrollback at all.
+    let mut store = Store::ephemeral().expect("store");
+    let mut at = Answering {
+        store: &mut store,
+        scrollback: None,
+        scratch: None,
+        scope: ScopeId::new("/w/thing"),
+        now: NOW,
+        inject_floor: floor::INJECT,
+        live_floor: floor::LIVE,
+        capture: false,
+    };
+    let lost = answer(
+        &mut at,
+        &Door::Owner,
+        &Request {
+            call: "observe".to_owned(),
+            args: vec![
+                serde_json::json!(S),
+                turn(0, "user", "said", serde_json::json!({ "type": "user" })),
+            ],
+        },
+    );
+    assert!(
+        !lost.ok,
+        "it did not record the turn, so it does not say yes"
+    );
+    assert_eq!(
+        lost.fault,
+        Some(balthasar_ipc::Fault::Failed),
+        "and it says which kind of no, so the caller knows to stop"
+    );
+}

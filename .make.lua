@@ -22,6 +22,7 @@ end
 
 local NAME, VERSION = project()
 local PREFIX = os.getenv("PREFIX") or (os.getenv("HOME") .. "/.local")
+local CONFIG = (os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config")) .. "/" .. NAME
 
 ------------------------------------------------------------------ what was built
 
@@ -157,6 +158,47 @@ make.recipe{ name = "build", desc = "the binary: static, optimized, stripped",
                report(BUILT .. "/" .. NAME)
              end }
 make.alias("b", "build")
+
+make.recipe{
+  name = "install",
+  desc = ("install the binary to %s/bin, and config/ where it reads it"):format(PREFIX),
+  -- `build-host` rather than `build`: the static musl build wants a target installed, and a
+  -- person running `make install` wants the thing on their PATH rather than a cross-compile.
+  -- `make dist` is where the portable one comes from.
+  deps = { "build-host" },
+  run = function()
+    local bin = PREFIX .. "/bin"
+    assert(oslo.run{ "mkdir", "-p", bin }.ok, "could not create " .. bin)
+    assert(oslo.run{ "install", "-m", "755", "target/release/" .. NAME, bin .. "/" .. NAME }.ok,
+           "could not install to " .. bin)
+    print(("installed %s"):format(bin .. "/" .. NAME))
+    -- Last, and part of the install rather than a step to remember: a binary newer than the
+    -- config it reads is how a setting that shipped with it silently does nothing.
+    make.run("configs")
+  end,
+}
+
+-- `config/*` becomes `~/.config/balthasar/*`, keeping the tree. `sources/` and `harness/` are
+-- directories a person adds files to, and flattening them here would make an installed
+-- configuration a different shape from the one in the checkout.
+make.recipe{
+  name = "configs",
+  desc = ("install config/ to %s"):format(CONFIG),
+  run = function()
+    -- `capture` and `.out`: without it oslo streams the output to the terminal and hands back
+    -- nothing, so this listed the files on screen and copied none of them.
+    local found = oslo.run{ "find", "config", "-type", "f", "-name", "*.lua", capture = true }
+    assert(found.ok, "could not list config/")
+    local copied = 0
+    for file in (found.out or ""):gmatch("[^\n]+") do
+      local into = CONFIG .. "/" .. file:gsub("^config/", "")
+      assert(oslo.run{ "mkdir", "-p", (into:match("^(.*)/[^/]*$")) }.ok, "could not create " .. into)
+      assert(oslo.run{ "install", "-m", "644", file, into }.ok, "could not install " .. file)
+      copied = copied + 1
+    end
+    print(("%d files -> %s"):format(copied, CONFIG))
+  end,
+}
 
 make.recipe{ name = "build-host", desc = "the binary for this machine, dynamic",
              run = function()

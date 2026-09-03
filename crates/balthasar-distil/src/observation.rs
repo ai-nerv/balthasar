@@ -18,6 +18,12 @@ pub enum Role {
     Assistant,
     /// A tool answering.
     Tool,
+    /// Somebody else — a sibling session, or a role this build does not know.
+    ///
+    /// Unknown roles land here rather than on [`Role::User`], because the rules that read a
+    /// person's turns mint the strongest witness there is. A harness that grows a role balthasar
+    /// has not heard of should lose an extraction, never gain an imperative.
+    Other,
 }
 
 /// What kind of turn it is.
@@ -35,6 +41,26 @@ pub enum Kind {
     ToolResult,
     /// A summary standing in for turns that left the window.
     Summary,
+    /// The person's own turn, where a harness names it rather than leaving it prose.
+    User,
+    /// Another session speaking, carried into this one.
+    ///
+    /// Text somebody else's run produced. It is worth keeping and worth quoting, and it is not
+    /// the person of *this* session asking for anything.
+    From,
+    /// A branch point — a count of what it keeps, not something anybody said.
+    Branch,
+}
+
+impl Kind {
+    /// Whether a turn of this kind can carry an instruction from the person.
+    ///
+    /// [`Kind::From`] is another session's words and [`Kind::Branch`] is bookkeeping; neither is
+    /// this person telling this session to remember something.
+    #[must_use]
+    pub fn can_instruct(self) -> bool {
+        !matches!(self, Self::From | Self::Branch)
+    }
 }
 
 /// One turn, as balthasar sees it.

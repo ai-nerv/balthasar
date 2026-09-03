@@ -33,7 +33,32 @@ balthasar.source("magi", {
     if not e then return nil end
 
     if e.type == "user" then
-      return { cursor = r.cursor, role = "user", kind = "prose", text = e.text or "" }
+      -- `aside` is context the model sees and nobody is shown. It is not the person speaking,
+      -- so it stays out of the text the imperative rules read.
+      return { cursor = r.cursor, role = "user", kind = "user", text = e.text or "" }
+    end
+
+    -- Another session speaking. Carried so it can be quoted and searched, and marked so the
+    -- rules that mint a 1.0 imperative never read it as this person asking for something.
+    if e.type == "from" then
+      return {
+        cursor = r.cursor, role = "other", kind = "from",
+        text = e.text or "",
+      }
+    end
+
+    -- A branch point: a count of what it keeps, not something anybody said. Kept so the
+    -- cursors either side of it stay where magi put them.
+    if e.type == "branch" then
+      return { cursor = r.cursor, role = "other", kind = "branch", text = "" }
+    end
+
+    -- magi's own summary standing in for what it replaced.
+    if e.type == "compaction" then
+      return {
+        cursor = r.cursor, role = "other", kind = "summary",
+        text = e.summary or "",
+      }
     end
 
     if e.type == "assistant" then
