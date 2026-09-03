@@ -36,6 +36,13 @@ pub enum WireError {
     /// The peer went away.
     #[error("the peer closed the connection")]
     Closed,
+    /// The peer is still there and has not asked for anything.
+    ///
+    /// A read timeout that expired between frames. Distinct from every other variant because it
+    /// is not a failure: a caller holding a connection open across a long pause is the shape
+    /// this protocol is built for, and treating the silence as a closure hangs up on it.
+    #[error("nothing said yet")]
+    Idle,
 }
 
 /// One call, as it arrives.
@@ -157,6 +164,11 @@ pub fn send(to: &mut impl Write, body: &[u8]) -> Result<(), WireError> {
 }
 
 /// Read one frame.
+///
+/// [`WireError::Idle`] when a read timeout expired with nothing of a frame received. That is a
+/// caller sitting quietly rather than a caller that has gone, and it is the only expiry worth
+/// resuming from: one that lands part-way through a frame has already dropped bytes the next
+/// read would take for a header.
 pub fn recv(from: &mut impl Read) -> Result<Vec<u8>, WireError> {
     let mut header = [0_u8; 4];
     exactly(from, &mut header)?;
@@ -167,6 +179,17 @@ pub fn recv(from: &mut impl Read) -> Result<Vec<u8>, WireError> {
     let mut body = vec![0_u8; n];
     exactly(from, &mut body)?;
     Ok(body)
+}
+
+/// Whether an error is a read timeout rather than a broken stream.
+///
+/// Both kinds occur: a socket with `SO_RCVTIMEO` reports `WouldBlock` on some platforms and
+/// `TimedOut` on others, and neither says anything about the peer being gone.
+fn expired(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
 }
 
 /// Fill a buffer, however many reads that takes.
@@ -181,6 +204,9 @@ fn exactly(from: &mut impl Read, into: &mut [u8]) -> Result<(), WireError> {
             Ok(0) => return Err(WireError::Closed),
             Ok(n) => have += n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            // Only at the start. Part-way through, the bytes already taken cannot be put back,
+            // so resuming would read the rest of this frame as the next one.
+            Err(e) if expired(&e) && have == 0 => return Err(WireError::Idle),
             Err(e) => return Err(WireError::Io(e)),
         }
     }
@@ -190,6 +216,54 @@ fn exactly(from: &mut impl Read, into: &mut [u8]) -> Result<(), WireError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reader that times out instead of answering, after handing over `first`.
+    struct Slow {
+        first: Vec<u8>,
+        at: usize,
+    }
+
+    impl Read for Slow {
+        fn read(&mut self, into: &mut [u8]) -> std::io::Result<usize> {
+            if self.at >= self.first.len() {
+                return Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "quiet"));
+            }
+            let n = (self.first.len() - self.at).min(into.len());
+            into[..n].copy_from_slice(&self.first[self.at..self.at + n]);
+            self.at += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn a_peer_that_has_said_nothing_is_idle_rather_than_gone() {
+        // The bug this exists for: a caller holding a connection open between turns said
+        // nothing for thirty seconds, the read expired, and the server hung up on it. The next
+        // thing it tried to record came back as a broken pipe, and it had no way back.
+        let mut quiet = Slow {
+            first: Vec::new(),
+            at: 0,
+        };
+        assert!(matches!(recv(&mut quiet), Err(WireError::Idle)));
+    }
+
+    #[test]
+    fn a_wait_that_expired_mid_frame_is_not_resumable() {
+        // Two bytes of a header are gone and cannot be put back, so carrying on would read the
+        // rest of this frame as the start of the next one. Only a boundary is resumable.
+        let mut torn = Slow {
+            first: vec![0, 0],
+            at: 0,
+        };
+        assert!(matches!(recv(&mut torn), Err(WireError::Io(_))));
+    }
+
+    #[test]
+    fn a_peer_that_closed_is_gone_rather_than_idle() {
+        // The other side of the same question, and what actually ends a connection now.
+        let mut closed: &[u8] = &[];
+        assert!(matches!(recv(&mut closed), Err(WireError::Closed)));
+    }
 
     #[test]
     fn a_frame_survives_the_round_trip() {

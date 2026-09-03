@@ -46,6 +46,13 @@ pub fn tool_descriptor() -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
+/// How long a read waits before looking up.
+///
+/// Not a deadline on the caller. A wait that expires is asked again — see [`Listener::serve`] —
+/// so this only decides how often a connection with nothing on it comes up for air, which is
+/// what keeps the wait interruptible rather than what limits it.
+const QUIET: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// A bound socket.
 pub struct Listener {
     listener: UnixListener,
@@ -84,9 +91,24 @@ impl Listener {
 
     /// Serve until something stops us.
     ///
-    /// One connection at a time, and each connection may carry many calls. balthasar is asked
-    /// several times per turn, unlike a control socket that is polled occasionally, so the
-    /// handle is held rather than reconnected — the sibling shape, and the reason to prefer it.
+    /// Each connection may carry many calls, and a caller holds one for as long as it is
+    /// working: a harness is asked several times per turn, unlike a control socket that is
+    /// polled occasionally, so the handle is held rather than reconnected.
+    ///
+    /// **Quiet is not gone.** A caller that has said nothing for a while is the ordinary state
+    /// of a harness between turns — the pause while somebody reads the last answer and decides
+    /// what to ask next is minutes, not seconds. There used to be a thirty-second read timeout
+    /// here, so that a peer which connected and said nothing could not hold the only slot; but
+    /// it could not tell a caller that is *idle* from one that is *gone*, and so it hung up on
+    /// the ordinary one. The caller found its handle broken on the next thing it tried to
+    /// record, which for a harness is the turn that just finished.
+    ///
+    /// The timeout is still set, and is what keeps the wait interruptible; what changed is that
+    /// expiring means *ask again*. A peer that has really gone closes its end, and that arrives
+    /// as end-of-file — [`frame::WireError::Closed`] — which is what ends a connection now.
+    ///
+    /// # Errors
+    /// When the listener itself fails.
     pub fn serve(&self, mut answer: impl FnMut(&Peer, Request) -> Reply) -> std::io::Result<()> {
         for incoming in self.listener.incoming() {
             let Ok(mut stream) = incoming else { continue };
@@ -102,11 +124,16 @@ impl Listener {
                 continue;
             }
 
-            // Bounded, so a peer that connects and says nothing does not hold the loop.
-            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+            let _ = stream.set_read_timeout(Some(QUIET));
             loop {
-                let Ok(body) = frame::recv(&mut stream) else {
-                    break;
+                let body = match frame::recv(&mut stream) {
+                    Ok(body) => body,
+                    // Nothing said, and nothing half-said: the peer is still there and has
+                    // simply not asked for anything yet. Only a wait that began at a frame
+                    // boundary is resumable -- one that expired mid-frame has lost bytes the
+                    // next read would misread as a header.
+                    Err(frame::WireError::Idle) => continue,
+                    Err(_) => break,
                 };
                 let reply = match serde_json::from_slice::<Request>(&body) {
                     Ok(request) => answer(&peer, request),
