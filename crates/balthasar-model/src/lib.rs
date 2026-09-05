@@ -21,6 +21,7 @@ mod id;
 mod lifecycle;
 mod memory;
 mod relation;
+pub mod scratch;
 mod skill;
 mod strength;
 mod temporal;

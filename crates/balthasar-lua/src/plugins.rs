@@ -167,12 +167,10 @@ fn packages(pack: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use balthasar_model::scratch::Scratch;
 
-    fn scratch(name: &str) -> PathBuf {
-        let at = std::env::temp_dir().join(format!("balthasar-rtp-{name}"));
-        let _ = std::fs::remove_dir_all(&at);
-        std::fs::create_dir_all(&at).expect("mkdir");
-        at
+    fn scratch(name: &str) -> Scratch {
+        Scratch::new("balthasar-rtp", name)
     }
 
     fn touch(path: &Path) {
@@ -196,7 +194,6 @@ mod tests {
             given: None,
         });
         assert!(files[0].0.ends_with("init.lua"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -220,7 +217,6 @@ mod tests {
             "{}",
             last.display()
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -241,7 +237,6 @@ mod tests {
             .map(|(p, _)| p.file_name().unwrap_or_default().to_string_lossy().into())
             .collect();
         assert_eq!(names, ["aaa.lua", "bbb.lua", "ccc.lua"]);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -260,12 +255,11 @@ mod tests {
         let files = runtimepath(&Roots {
             config: Some(config),
             site: None,
-            project: Some(root.clone()),
+            project: Some(root.to_path_buf()),
             given: Some(given.clone()),
         });
         assert_eq!(files.last().expect("something").0, given, "{files:?}");
         assert!(files.last().expect("something").1, "and trusted to declare");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -283,7 +277,6 @@ mod tests {
             given: Some(root.join("nothing-was-written-here.lua")),
         });
         assert_eq!(files.len(), 1, "{files:?}");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -293,7 +286,7 @@ mod tests {
         let files = runtimepath(&Roots {
             config: None,
             site: None,
-            project: Some(root.clone()),
+            project: Some(root.to_path_buf()),
             given: None,
         });
         assert_eq!(files.len(), 1);
@@ -301,7 +294,6 @@ mod tests {
             !files[0].1,
             "a file that arrived with git clone may not declare"
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

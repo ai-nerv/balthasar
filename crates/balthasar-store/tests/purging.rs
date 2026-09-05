@@ -4,6 +4,8 @@
 //! retrieval cannot recover what was removed. That is what this file is: not "did the row go"
 //! but "is every path back to it closed".
 
+use balthasar_model::scratch::Scratch;
+
 use balthasar_model::{
     Body, Derivation, Family, Memory, NoteKind, Relation, ScopeId, SessionId, Tier, View, Witness,
     WitnessId, WitnessKind,
@@ -345,14 +347,13 @@ fn forgetting_a_run_closes_all_three_of_its_hiding_places() {
     // scratch it never promoted. Clearing one and calling it forgotten would answer "delete the
     // key I pasted" with the key still on disk — so this checks all three, and checks that a
     // neighbouring run keeps everything of its own.
-    let home = std::env::temp_dir().join(format!("balthasar-forget-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&home);
+    let home = Scratch::new("balthasar-forget", "one");
     let doomed = SessionId::new("01DOOMED");
     let bystander = SessionId::new("01SAFE");
 
     let mut store = Store::ephemeral().expect("a store");
     let mut held = balthasar_store::Transcript::ephemeral().expect("a transcript");
-    let mut pad = balthasar_store::Scratchpad::at(&home);
+    let mut pad = balthasar_store::Scratchpad::at(home.to_path_buf());
 
     for (session, secret) in [(&doomed, SECRET), (&bystander, "nothing to hide")] {
         store
@@ -406,7 +407,6 @@ fn forgetting_a_run_closes_all_three_of_its_hiding_places() {
     // The neighbour is untouched, which is the half a purge gets wrong by being too eager.
     assert_eq!(held.replay(&bystander).expect("replay").len(), 1);
     assert!(pad.path_of(&bystander).is_file());
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -415,8 +415,7 @@ fn a_purged_secret_is_not_still_in_the_file() {
     // the file. SQLite does not zero a freed page by default: the row leaves the table, every
     // query says the secret is gone, and `strings store.db` prints it. `secure_delete` is what
     // makes the yes in "delete the key I pasted" true.
-    let path = std::env::temp_dir().join(format!("balthasar-secure-{}.db", std::process::id()));
-    let _ = std::fs::remove_file(&path);
+    let path = Scratch::file("balthasar-secure", "one", "store.db");
 
     let id = {
         let mut store = Store::open(&path).expect("store");

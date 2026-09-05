@@ -327,6 +327,7 @@ pub fn config_home() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use balthasar_model::scratch::Scratch;
 
     #[test]
     fn a_key_is_recognised_by_its_shape() {
@@ -339,9 +340,7 @@ mod tests {
 
     #[test]
     fn a_glob_matches_by_prefix_and_extension() {
-        let dir = std::env::temp_dir().join("balthasar-glob-test");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir = Scratch::new("balthasar-glob-test", "one");
         for name in ["a.jsonl", "b.jsonl", "notes.md"] {
             std::fs::write(dir.join(name), "x").expect("write");
         }
@@ -351,7 +350,6 @@ mod tests {
             found[0].ends_with("a.jsonl"),
             "sorted, so a report is reproducible"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -275,13 +275,11 @@ pub fn forget() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use balthasar_model::scratch::{Scratch, ScratchFile};
 
     /// A place of this test's own, so tests running together do not delete each other's.
-    fn mine(name: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("balthasar-setup-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir.join("given.lua")
+    fn mine(name: &str) -> ScratchFile {
+        Scratch::file("balthasar-setup", name, "given.lua")
     }
 
     #[test]

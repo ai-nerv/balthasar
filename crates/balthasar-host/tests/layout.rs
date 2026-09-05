@@ -3,19 +3,17 @@
 //! The contract the storage restructure exists for: a session's scratch is in that session's
 //! own file, so removing one run removes one directory and nothing else.
 
+use balthasar_model::scratch::Scratch;
+
 use balthasar_host::{Answering, Door, answer};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{ScopeId, SessionId, floor};
 use balthasar_store::{Scratchpad, Store, Transcript};
-use std::path::PathBuf;
 
 const NOW: balthasar_model::Timestamp = 1_756_000_000;
 
-fn scratch(name: &str) -> PathBuf {
-    let at = std::env::temp_dir().join(format!("balthasar-layout-{name}"));
-    let _ = std::fs::remove_dir_all(&at);
-    std::fs::create_dir_all(&at).expect("mkdir");
-    at
+fn scratch(name: &str) -> Scratch {
+    Scratch::new("balthasar-layout", name)
 }
 
 struct Held {
@@ -120,7 +118,6 @@ fn what_a_run_says_lands_in_that_runs_own_file() {
         held.store.all().expect("all").is_empty(),
         "and the project's store stayed out of it"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -139,7 +136,6 @@ fn a_run_that_only_asks_leaves_no_directory_behind() {
 
     assert!(reply.ok, "{reply:?}");
     assert!(held.scratch.runs().is_empty(), "looking created nothing");
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -162,7 +158,6 @@ fn a_run_can_find_what_it_was_just_told() {
         1,
         "its own scratch answered: {reply:?}"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -186,7 +181,6 @@ fn one_run_does_not_see_anothers_scratch() {
         0,
         "the other run’s scratch stayed its own: {reply:?}"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -208,7 +202,6 @@ fn deleting_one_run_is_deleting_one_directory() {
         held.scratch.path_of(&two).is_file(),
         "the neighbour survived"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -222,7 +215,6 @@ fn a_durable_memory_still_goes_to_the_project() {
     assert!(reply.ok, "{reply:?}");
     assert_eq!(held.store.all().expect("all").len(), 1);
     assert!(held.scratch.runs().is_empty(), "no run owns it");
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// What a reply says about one field.
@@ -268,7 +260,6 @@ fn a_peer_may_archive_the_run_it_is_in_but_not_remove_it() {
         held.scratch.path_of(&run).is_file(),
         "archiving keeps every word of it"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -294,7 +285,6 @@ fn the_owner_removing_a_run_reaches_all_three_of_its_files() {
         held.scratch.path_of(&neighbour).is_file(),
         "and the neighbour kept everything of its own"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -315,5 +305,4 @@ fn forgetting_a_run_nobody_has_heard_of_is_refused() {
         reply.error.unwrap_or_default().contains("no run called"),
         "and said why"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }

@@ -4,6 +4,8 @@
 //! test honest about the claim it is testing — that a harness is a *file* — and it keeps
 //! `gate-independent` able to stay strict, since no Rust file here names one.
 
+use balthasar_model::scratch::{Scratch, ScratchFile};
+
 use balthasar_distil::{Ingest, ingest};
 use balthasar_lua::{Engine, Settings};
 use balthasar_model::{ScopeId, Tier, Timestamp, WitnessKind};
@@ -45,11 +47,8 @@ fn shipped() -> (Engine, Vec<String>) {
 }
 
 /// A journal in the shape the shipped adapter reads, written to a real file.
-fn journal(name: &str, lines: &[String]) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("balthasar-ingest-{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let path = dir.join("session.jsonl");
+fn journal(name: &str, lines: &[String]) -> ScratchFile {
+    let path = Scratch::file("balthasar-ingest", name, "session.jsonl");
     std::fs::write(&path, lines.join("\n")).expect("write");
     path
 }

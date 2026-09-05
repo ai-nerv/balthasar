@@ -398,16 +398,14 @@ fn git_common_dir(from: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use balthasar_model::scratch::Scratch;
 
     /// A scratch directory nothing else is using.
     ///
     /// Named after the test rather than shared, because two tests tidying up one tree race
     /// each other and the loser fails somewhere unrelated.
-    fn scratch(name: &str) -> PathBuf {
-        let at = std::env::temp_dir().join(format!("balthasar-paths-{name}"));
-        let _ = std::fs::remove_dir_all(&at);
-        std::fs::create_dir_all(&at).expect("mkdir");
-        at
+    fn scratch(name: &str) -> Scratch {
+        Scratch::new("balthasar-paths", name)
     }
 
     #[test]
@@ -474,7 +472,6 @@ mod tests {
 
         make_home(&root.join(HOME)).expect("make");
         assert!(is_home(&root.join(HOME)));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -497,7 +494,6 @@ mod tests {
             let under = shared.join("balthasar-ceiling-probe");
             std::fs::create_dir_all(&under).expect("mkdir");
             assert_eq!(nearest_home(&under), None);
-            let _ = std::fs::remove_dir_all(&under);
         }
     }
 
@@ -516,7 +512,6 @@ mod tests {
             package.to_string_lossy()
         );
         assert_eq!(scope_of(&root).as_str(), root.to_string_lossy());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -530,7 +525,6 @@ mod tests {
 
         assert!(path.starts_with(&root), "{}", path.display());
         assert_eq!(path, root.join("balthasar/balthasar/project.db"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -553,7 +547,6 @@ mod tests {
             after.join(relative),
             "the store moved with the project"
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -567,7 +560,6 @@ mod tests {
 
         assert_eq!(scope_of(&deep), scope_of(&root));
         assert_eq!(scope_of(&deep).as_str(), root.to_string_lossy());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -586,7 +578,6 @@ mod tests {
         .expect("write");
 
         assert_eq!(scope_of(&tree), scope_of(&work));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -628,7 +619,6 @@ mod tests {
             one.parent().and_then(Path::parent),
             two.parent().and_then(Path::parent)
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -676,7 +666,6 @@ mod tests {
             vec!["harness", "oslo"],
             "a directory with no store is not a tool"
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -697,6 +686,5 @@ mod tests {
             std::fs::read_to_string(home.join(".gitignore")).expect("read"),
             "mine\n"
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

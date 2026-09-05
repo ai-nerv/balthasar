@@ -243,15 +243,13 @@ impl Scratchpad {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use balthasar_model::scratch::Scratch;
     use balthasar_model::{Body, Memory, NoteKind, ScopeId, Tier, Witness, WitnessKind};
 
     const NOW: balthasar_model::Timestamp = 1_700_000_000;
 
-    fn scratch(name: &str) -> PathBuf {
-        let at = std::env::temp_dir().join(format!("balthasar-pad-{name}"));
-        let _ = std::fs::remove_dir_all(&at);
-        std::fs::create_dir_all(&at).expect("mkdir");
-        at
+    fn scratch(name: &str) -> Scratch {
+        Scratch::new("balthasar-pad", name)
     }
 
     fn note(text: &str, session: &SessionId) -> Memory {
@@ -290,25 +288,23 @@ mod tests {
         // Otherwise a week of sessions is a week of empty directories, and `runs()` counts
         // them as runs with scratch to consolidate.
         let home = scratch("empty");
-        let mut pad = Scratchpad::at(&home);
+        let mut pad = Scratchpad::at(home.to_path_buf());
         let quiet = SessionId::new("01K5X8");
 
         assert!(pad.peek(&quiet).expect("peek").is_none());
         assert!(!pad.path_of(&quiet).exists(), "looking did not create it");
         assert!(pad.runs().is_empty());
-        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
     fn a_run_gets_its_own_file_on_its_first_write() {
         let home = scratch("first-write");
-        let mut pad = Scratchpad::at(&home);
+        let mut pad = Scratchpad::at(home.to_path_buf());
         let run = SessionId::new("01K5X8");
         kept(&mut pad, &run, "it deploys to fly");
 
         assert!(pad.path_of(&run).is_file());
         assert_eq!(pad.runs().len(), 1);
-        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -316,7 +312,7 @@ mod tests {
         // The property the whole restructure is for: deleting one run cannot catch a
         // neighbour, because a neighbour is not in the file.
         let home = scratch("two-runs");
-        let mut pad = Scratchpad::at(&home);
+        let mut pad = Scratchpad::at(home.to_path_buf());
         let one = SessionId::new("01K5X8");
         let two = SessionId::new("01K5XB");
         kept(&mut pad, &one, "mine");
@@ -327,13 +323,12 @@ mod tests {
 
         std::fs::remove_dir_all(crate::session_dir_in(&home, &one)).expect("rm");
         assert_eq!(pad.runs().len(), 1, "the neighbour survived");
-        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
     fn what_is_carried_across_arrives_as_the_projects() {
         let home = scratch("carry");
-        let mut pad = Scratchpad::at(&home);
+        let mut pad = Scratchpad::at(home.to_path_buf());
         let run = SessionId::new("01K5X8");
         let mut project = Store::ephemeral().expect("open");
         let held = kept(&mut pad, &run, "the deploy target is fly.io");
@@ -344,14 +339,13 @@ mod tests {
         let landed = project.all().expect("all");
         assert_eq!(landed.len(), 1);
         assert_eq!(landed[0].tier, Tier::Fact, "it stopped being one run's own");
-        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
     fn a_carried_memory_stops_being_the_runs_to_offer() {
         // Otherwise `balthasar promote` keeps offering the same memory after it has crossed.
         let home = scratch("carried-once");
-        let mut pad = Scratchpad::at(&home);
+        let mut pad = Scratchpad::at(home.to_path_buf());
         let run = SessionId::new("01K5X8");
         let mut project = Store::ephemeral().expect("open");
         let held = kept(&mut pad, &run, "the deploy target is fly.io");
@@ -367,7 +361,6 @@ mod tests {
                 .is_empty(),
             "it crossed"
         );
-        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -375,7 +368,7 @@ mod tests {
         // What makes the two writes safe without a transaction spanning them: a crash between
         // them costs a repeat, and a repeat is a reinforcement.
         let home = scratch("carry-twice");
-        let mut pad = Scratchpad::at(&home);
+        let mut pad = Scratchpad::at(home.to_path_buf());
         let run = SessionId::new("01K5X8");
         let mut project = Store::ephemeral().expect("open");
         let held = kept(&mut pad, &run, "the deploy target is fly.io");
@@ -385,7 +378,6 @@ mod tests {
         Scratchpad::carry(&mut project, store, held, said_by(&run), NOW).expect("again");
 
         assert_eq!(project.all().expect("all").len(), 1, "one memory, not two");
-        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -393,12 +385,11 @@ mod tests {
         let home = scratch("reopen");
         let run = SessionId::new("01K5X8");
         {
-            let mut pad = Scratchpad::at(&home);
+            let mut pad = Scratchpad::at(home.to_path_buf());
             kept(&mut pad, &run, "held");
         }
-        let mut pad = Scratchpad::at(&home);
+        let mut pad = Scratchpad::at(home.to_path_buf());
         let store = pad.peek(&run).expect("peek").expect("it wrote before");
         assert_eq!(store.all().expect("all").len(), 1);
-        let _ = std::fs::remove_dir_all(&home);
     }
 }

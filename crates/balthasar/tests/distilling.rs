@@ -5,6 +5,8 @@
 //! which walks a *harness's* journal files. This plants a run the way `observe` would and asks
 //! the shipped binary whether the project learned from it.
 
+use balthasar_model::scratch::Scratch;
+
 use balthasar_model::SessionId;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -82,9 +84,7 @@ fn balthasar(store: &Path, args: &[&str]) -> String {
 
 #[test]
 fn a_run_streamed_into_balthasar_teaches_the_project() {
-    let at = std::env::temp_dir().join(format!("balthasar-distil-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&at);
-    std::fs::create_dir_all(&at).expect("workspace");
+    let at = Scratch::new("balthasar-distil", "one");
     let session = SessionId::new("01LIVE");
     let store = planted(&at, &session);
 
@@ -108,17 +108,13 @@ fn a_run_streamed_into_balthasar_teaches_the_project() {
     // Reading again is free and teaches nothing new.
     let again = balthasar(&store, &["distil", "--now", "--json"]);
     assert!(again.contains("\"runs\":0"), "{again}");
-
-    let _ = std::fs::remove_dir_all(&at);
 }
 
 #[test]
 fn consolidating_reads_the_runs_before_looking_for_what_they_share() {
     // The pass runs on a timer, so this is the path that actually fires in practice. Nobody
     // should have to know `balthasar distil` exists for a live run to be read.
-    let at = std::env::temp_dir().join(format!("balthasar-sleep-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&at);
-    std::fs::create_dir_all(&at).expect("workspace");
+    let at = Scratch::new("balthasar-sleep", "one");
     let store = planted(&at, &SessionId::new("01SLEEP"));
 
     let done = balthasar(&store, &["consolidate", "--now", "--json"]);
@@ -126,5 +122,4 @@ fn consolidating_reads_the_runs_before_looking_for_what_they_share() {
 
     let found = balthasar(&store, &["recall", "deploy"]);
     assert!(found.contains("fly.io"), "{found}");
-    let _ = std::fs::remove_dir_all(&at);
 }
