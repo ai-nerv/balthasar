@@ -51,6 +51,9 @@ impl Engine {
             config: Rc::new(RefCell::new(Config::default())),
             logged: Rc::new(RefCell::new(Vec::new())),
         };
+        // Before anything is installed and long before anything is read. This VM runs a project's
+        // own file, which balthasar did not write and cannot vouch for -- see `sandbox`.
+        crate::sandbox::apply(&mut engine.lua);
         engine.install();
         engine
     }
