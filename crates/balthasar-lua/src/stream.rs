@@ -34,6 +34,48 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 /// A connected socket, shared between a handle's methods.
 type Handle = Rc<RefCell<Option<UnixStream>>>;
 
+/// Whether `path` is a socket a config may dial.
+///
+/// **This user's own socket directories and nothing else.** This primitive used to call
+/// `UnixStream::connect` on whatever it was handed, so any Lua a config could reach could open
+/// any socket this user can: a sibling's control socket, a container runtime's.
+///
+/// Narrowed rather than gated, because there is nothing here to gate with. This VM has no
+/// permission seam, and a config file is read before anything that could ask a person exists —
+/// which is exactly the window an untrusted project file runs in. Every legitimate caller is
+/// already inside these roots: the family puts its sockets under `$XDG_RUNTIME_DIR`, falling
+/// back to the temporary directory when that is unset.
+///
+/// Lexical, on a normalised path: `..` is resolved first, so a name cannot climb out of the
+/// directory it appears to be in.
+fn dialable(path: &std::path::Path) -> bool {
+    roots().iter().any(|root| under(path, root))
+}
+
+/// Where this user's sockets may live. Both roots, because the family uses either.
+fn roots() -> Vec<std::path::PathBuf> {
+    let mut out = vec![std::env::temp_dir()];
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
+        out.push(std::path::PathBuf::from(runtime));
+    }
+    out
+}
+
+/// Whether `path`, once `..` is resolved, is inside `root`.
+fn under(path: &std::path::Path, root: &std::path::Path) -> bool {
+    let mut out = std::path::PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out.starts_with(root)
+}
+
 /// Build the `stream` table.
 pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
     let stream = Table::new(&ctx);
@@ -45,6 +87,20 @@ pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
             return Ok(CallbackReturn::Return);
         };
         let path = String::from_utf8_lossy(path.as_bytes()).into_owned();
+
+        // Refused as an ordinary answer, the way a failed connect already is: `nil` and a reason
+        // the caller can put on screen. Raising would make a config that probed for an absent
+        // sibling die instead of carrying on without it.
+        if !dialable(std::path::Path::new(&path)) {
+            stack.replace(
+                ctx,
+                (
+                    Value::Nil,
+                    "a socket outside this user's runtime directory is not this VM's to open",
+                ),
+            );
+            return Ok(CallbackReturn::Return);
+        }
 
         let timeout = match timeout {
             Value::Integer(ms) if ms > 0 => Duration::from_millis(ms as u64),
