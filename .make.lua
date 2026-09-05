@@ -296,7 +296,7 @@ for _, gate in ipairs(GATES) do
   make.recipe{
     name = name, desc = desc,
     run = function()
-      local ran = oslo.run{ "sh", "scripts/" .. name .. ".sh" }
+      local ran = oslo.run{ "scripts/" .. name .. ".sh" }
       assert(ran.ok, name .. " failed")
     end,
   }
@@ -319,7 +319,7 @@ make.recipe{
   name = "gate-no-llm",
   desc = "the suite passes with no key, no network, no embeddings",
   run = function()
-    local ran = oslo.run{ "sh", "scripts/gate-no-llm.sh" }
+    local ran = oslo.run{ "scripts/gate-no-llm.sh" }
     assert(ran.ok, "gate-no-llm failed")
   end,
 }
