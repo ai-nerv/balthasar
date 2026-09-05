@@ -182,7 +182,8 @@ impl Scratchpad {
                 (when, path)
             })
             .collect();
-        held.sort_by(|a, b| b.0.cmp(&a.0));
+        // Newest first, so the key is reversed rather than the comparison.
+        held.sort_by_key(|(when, _)| std::cmp::Reverse(*when));
         held.into_iter().take(cap).map(|(_, path)| path).collect()
     }
 

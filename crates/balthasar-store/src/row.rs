@@ -78,8 +78,10 @@ pub fn floats(blob: &[u8]) -> Option<Vec<f32>> {
         return None;
     }
     Some(
-        blob.chunks_exact(4)
-            .map(|four| f32::from_le_bytes([four[0], four[1], four[2], four[3]]))
+        blob.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|four| f32::from_le_bytes(*four))
             .collect(),
     )
 }
