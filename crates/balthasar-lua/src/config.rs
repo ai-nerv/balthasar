@@ -87,16 +87,31 @@ impl Config {
 pub struct Registered {
     entries: HashMap<(String, String), serde_json::Value>,
     order: Vec<(String, String)>,
+    /// Every `(registrar, id)` written since this was last cleared.
+    ///
+    /// What a file *did*, rather than what the result looks like afterwards. A privileged
+    /// declaration is mostly callbacks, and callbacks are kept in the VM rather than in
+    /// `entries` -- so two sources differing only in what their functions do are byte-identical
+    /// here, and comparing before with after cannot see a replacement at all.
+    touched: Vec<(String, String)>,
 }
 
 impl Registered {
     /// Record a declaration, replacing any earlier one with the same identity.
     pub fn insert(&mut self, registrar: &str, id: &str, value: serde_json::Value) {
         let key = (registrar.to_owned(), id.to_owned());
+        self.touched.push(key.clone());
         if !self.entries.contains_key(&key) {
             self.order.push(key.clone());
         }
         self.entries.insert(key, value);
+    }
+
+    /// Forget what has been written since the last call, and answer what it was.
+    ///
+    /// Called around each file so a refusal can name what *that* file declared.
+    pub fn take_touched(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.touched)
     }
 
     /// Every identity registered against one registrar, in declaration order.

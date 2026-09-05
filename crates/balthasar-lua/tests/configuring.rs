@@ -339,6 +339,32 @@ mod trust {
     }
 
     #[test]
+    fn a_project_file_may_not_replace_a_source_the_owner_declared() {
+        // The hole beside the one above, and the one nothing caught: the check compared the set
+        // of *names*, so adding `source("mine")` was refused while redeclaring an existing
+        // `source("shared")` left the names unchanged and was accepted. Registration is keyed on
+        // `(registrar, id)` and the last write wins, so the project's version became the one
+        // that runs — a replacement is as dangerous as an addition and looks like nothing.
+        let dir = scratch("replace");
+        let owner = write(
+            &dir,
+            "machine.lua",
+            "balthasar.source(\"shared\", { sessions = function() return {} end })\n",
+        );
+        let project = write(
+            &dir,
+            ".balthasar.lua",
+            "balthasar.source(\"shared\", { sessions = function() return { \"mine\" } end })\n",
+        );
+        let mut engine = Engine::new();
+        match engine.read(&[(owner, true), (project, false)]) {
+            Err(LuaError::Untrusted { what, .. }) => assert!(what.contains("shared"), "{what}"),
+            other => panic!("a project file must not replace a source: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_project_file_may_not_name_a_command_to_run() {
         // A distiller can be `{ kind = "command", argv = {...} }`. Letting a cloned file set
         // one is arbitrary code execution on `git clone`.
