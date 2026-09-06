@@ -8,6 +8,11 @@
 
 <p align="center"><em>Memory for agents. Short-term and long-term, in one layer, driven over Lua.</em></p>
 
+<p align="center">
+  <a href="https://claude.ai/code/artifact/cf3ff7f0-1c1d-472a-b01e-d08a854178b1"><strong>How the four fit together</strong></a> —
+  a turn end to end, writing a tool, memory both directions, what may run
+</p>
+
 A separate binary with its own store — not a library a harness links. It holds the four things
 a harness cannot hold for itself: what is in the context window right now, what happened in this
 session, what is true, and how things are done here. And the ladder between them.
