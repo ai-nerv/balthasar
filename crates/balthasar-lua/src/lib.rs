@@ -24,6 +24,7 @@ mod engine;
 mod handler;
 mod helpers;
 mod plugins;
+mod sandbox;
 mod settings;
 pub mod setup;
 mod stream;

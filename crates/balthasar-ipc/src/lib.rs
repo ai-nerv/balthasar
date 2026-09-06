@@ -12,6 +12,6 @@ mod frame;
 mod peer;
 mod serve;
 
-pub use frame::{Fault, MAX_FRAME, Reply, Request, WireError, recv, send};
+pub use frame::{FAMILY, Fault, MAX_FRAME, Reply, Request, WireError, recv, send};
 pub use peer::Peer;
 pub use serve::{Listener, socket_dir, socket_path, tool_descriptor};

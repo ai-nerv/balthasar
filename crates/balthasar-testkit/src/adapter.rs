@@ -212,12 +212,10 @@ fn leak(held: String) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use balthasar_model::scratch::Scratch;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let at = std::env::temp_dir().join(format!("balthasar-adapter-{name}"));
-        let _ = std::fs::remove_dir_all(&at);
-        std::fs::create_dir_all(&at).expect("mkdir");
-        at
+    fn scratch(name: &str) -> Scratch {
+        Scratch::new("balthasar-adapter", name)
     }
 
     #[test]

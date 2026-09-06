@@ -25,7 +25,12 @@ DERIVED='entity memory_fts turn_fts'
 TELEMETRY='recall_run recall_candidate injection injection_memory action_use action_memory outcome'
 
 fail=0
-grep -rn 'DELETE FROM' crates --include='*.rs' | grep -v "^$PURGE:" > /tmp/balthasar-deletes.txt || true
+# `mktemp`, not a fixed path. This is the only gate that writes anything, and a predictable name
+# under a world-writable directory is both a collision between two jobs on one runner and a
+# symlink somebody else can plant.
+deletes=$(mktemp)
+trap 'rm -f "$deletes"' EXIT HUP INT TERM
+grep -rn 'DELETE FROM' crates --include='*.rs' | grep -v "^$PURGE:" > "$deletes" || true
 
 while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -45,8 +50,7 @@ while IFS= read -r line; do
         echo "  $line" >&2
         fail=1
     fi
-done < /tmp/balthasar-deletes.txt
-rm -f /tmp/balthasar-deletes.txt
+done < "$deletes"
 
 # The ledger's carve-out is for retention only. A delete against a memory table from inside the
 # ledger file would pass the check above, so it is named separately here.

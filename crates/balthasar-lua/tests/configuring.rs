@@ -1,5 +1,7 @@
 //! M2: the config API, as a configuration author would meet it.
 
+use balthasar_model::scratch::Scratch;
+
 use balthasar_lua::{Engine, LuaError, Settings};
 
 fn run(source: &str) -> Engine {
@@ -296,11 +298,8 @@ mod trust {
     use super::*;
     use std::path::PathBuf;
 
-    fn scratch(name: &str) -> PathBuf {
-        let at = std::env::temp_dir().join(format!("balthasar-trust-{name}"));
-        let _ = std::fs::remove_dir_all(&at);
-        std::fs::create_dir_all(&at).expect("mkdir");
-        at
+    fn scratch(name: &str) -> Scratch {
+        Scratch::new("balthasar-trust", name)
     }
 
     fn write(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
@@ -317,7 +316,6 @@ mod trust {
         let mut engine = Engine::new();
         engine.read(&[(file, false)]).expect("choosing is allowed");
         assert_eq!(engine.config().number("inject_floor"), Some(0.6));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -335,7 +333,31 @@ mod trust {
             Err(LuaError::Untrusted { what, .. }) => assert!(what.contains("source"), "{what}"),
             other => panic!("a project file must not declare a source: {other:?}"),
         }
-        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_project_file_may_not_replace_a_source_the_owner_declared() {
+        // The hole beside the one above, and the one nothing caught: the check compared the set
+        // of *names*, so adding `source("mine")` was refused while redeclaring an existing
+        // `source("shared")` left the names unchanged and was accepted. Registration is keyed on
+        // `(registrar, id)` and the last write wins, so the project's version became the one
+        // that runs — a replacement is as dangerous as an addition and looks like nothing.
+        let dir = scratch("replace");
+        let owner = write(
+            &dir,
+            "machine.lua",
+            "balthasar.source(\"shared\", { sessions = function() return {} end })\n",
+        );
+        let project = write(
+            &dir,
+            ".balthasar.lua",
+            "balthasar.source(\"shared\", { sessions = function() return { \"mine\" } end })\n",
+        );
+        let mut engine = Engine::new();
+        match engine.read(&[(owner, true), (project, false)]) {
+            Err(LuaError::Untrusted { what, .. }) => assert!(what.contains("shared"), "{what}"),
+            other => panic!("a project file must not replace a source: {other:?}"),
+        }
     }
 
     #[test]
@@ -353,7 +375,6 @@ mod trust {
             Err(LuaError::Untrusted { what, .. }) => assert!(what.contains("distiller"), "{what}"),
             other => panic!("a project file must not name a command: {other:?}"),
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -367,7 +388,6 @@ mod trust {
             engine.read(&[(file, false)]),
             Err(LuaError::Untrusted { .. })
         ));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -381,7 +401,6 @@ mod trust {
         let mut engine = Engine::new();
         engine.read(&[(file, true)]).expect("the owner may declare");
         assert_eq!(engine.config().all("source").len(), 1);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -396,7 +415,6 @@ mod trust {
         let mut engine = Engine::new();
         engine.read(&[(file, true)]).expect("load");
         assert_eq!(engine.config().all("section").len(), 1);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -419,7 +437,6 @@ mod trust {
         let mut engine = Engine::new();
         engine.read(&[(file, true)]).expect("load");
         assert_eq!(engine.config().all("section").len(), 1);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -430,7 +447,6 @@ mod trust {
         let file = write(&dir, "init.lua", "balthasar.inject_floor = = =\n");
         let mut engine = Engine::new();
         assert!(engine.read(&[(file, true)]).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

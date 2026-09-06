@@ -9,6 +9,7 @@ description = "balthasar's store: SQLite, and the only place a memory is written
 [dependencies]
 balthasar-model.workspace = true
 rusqlite.workspace = true
+rustix = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

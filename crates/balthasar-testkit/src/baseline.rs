@@ -293,7 +293,18 @@ mod tests {
         // §8.9's last acceptance bullet. Traversal, relationship views and the ledger have all
         // been added to this path since the budget was set; a change that made any of them
         // unbounded would show up here rather than as a slow afternoon.
-        let held = baseline();
+        //
+        // **The fastest of three runs, not one.** The budget is about the algorithm, and the
+        // doc on it says so — "not to police a few hundred microseconds on a busy machine". One
+        // run says otherwise: this failed at 6.26ms during a `make verify`, which compiles four
+        // crates while it measures, and passed on its own moments later. Load makes *a* run
+        // slow; an unbounded query makes *every* run slow, so taking the best of several keeps
+        // the whole of the signal and drops the whole of the noise.
+        let best = (0..3)
+            .map(|_| baseline())
+            .min_by(|a, b| a.recall_p95_ms.total_cmp(&b.recall_p95_ms))
+            .expect("three runs");
+        let held = best;
         assert!(
             held.recall_p95_ms < RECALL_P95_BUDGET_MS,
             "p95 {:.2}ms is over the declared {RECALL_P95_BUDGET_MS}ms budget",

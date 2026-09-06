@@ -4,6 +4,8 @@
 //! the command finds all three — which is a different thing, and the half that breaks when a
 //! path is computed twice in two places.
 
+use balthasar_model::scratch::Scratch;
+
 use balthasar_model::{Body, Memory, NoteKind, ScopeId, SessionId, Tier};
 use balthasar_store::mint;
 use std::path::{Path, PathBuf};
@@ -80,9 +82,7 @@ fn anywhere(at: &Path) -> bool {
 
 #[test]
 fn forgetting_a_run_leaves_none_of_it_on_disk() {
-    let at = std::env::temp_dir().join(format!("balthasar-cli-forget-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&at);
-    std::fs::create_dir_all(&at).expect("workspace");
+    let at = Scratch::new("balthasar-cli-forget", "one");
     let session = SessionId::new("01DOOMED");
     let (memory, transcript, runs) = planted(&at, &session);
 
@@ -113,16 +113,13 @@ fn forgetting_a_run_leaves_none_of_it_on_disk() {
             place.display()
         );
     }
-    let _ = std::fs::remove_dir_all(&at);
 }
 
 #[test]
 fn forgetting_a_run_nobody_has_heard_of_says_so() {
     // A typo must not report a successful purge of nothing: the next thing somebody does is
     // stop looking for the run they meant.
-    let at = std::env::temp_dir().join(format!("balthasar-cli-typo-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&at);
-    std::fs::create_dir_all(&at).expect("workspace");
+    let at = Scratch::new("balthasar-cli-typo", "one");
     let (memory, _, _) = planted(&at, &SessionId::new("01REAL"));
 
     let ran = Command::new(env!("CARGO_BIN_EXE_balthasar"))
@@ -143,5 +140,4 @@ fn forgetting_a_run_nobody_has_heard_of_says_so() {
         "and said why: {}",
         String::from_utf8_lossy(&ran.stderr)
     );
-    let _ = std::fs::remove_dir_all(&at);
 }

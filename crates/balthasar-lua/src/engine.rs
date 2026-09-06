@@ -51,6 +51,9 @@ impl Engine {
             config: Rc::new(RefCell::new(Config::default())),
             logged: Rc::new(RefCell::new(Vec::new())),
         };
+        // Before anything is installed and long before anything is read. This VM runs a project's
+        // own file, which balthasar did not write and cannot vouch for -- see `sandbox`.
+        crate::sandbox::apply(&mut engine.lua);
         engine.install();
         engine
     }
@@ -327,6 +330,9 @@ impl Engine {
     pub fn read(&mut self, files: &[(std::path::PathBuf, bool)]) -> Result<(), LuaError> {
         for (path, trusted) in files {
             let before = self.snapshot();
+            // Cleared here so what the run records belongs to this file and not to the one
+            // before it.
+            self.config.borrow_mut().registered.take_touched();
             self.run_file(path)?;
             if !trusted {
                 self.refuse_declarations(path, &before)?;
@@ -376,20 +382,28 @@ impl Engine {
         path: &Path,
         before: &(Registered, Vec<Option<serde_json::Value>>),
     ) -> Result<(), LuaError> {
-        let (registered, settings) = before;
-        let now = self.config.borrow().registered.clone();
-        for registrar in PRIVILEGED {
-            let added: Vec<String> = now
-                .ids(registrar)
-                .into_iter()
-                .filter(|id| registered.one(registrar, id).is_none())
-                .collect();
-            if let Some(first) = added.first() {
-                return Err(LuaError::Untrusted {
-                    file: path.display().to_string(),
-                    what: format!("balthasar.{registrar}(\"{first}\")"),
-                });
-            }
+        let (_, settings) = before;
+        // **What the file declared, not what the result looks like afterwards.** This used to
+        // compare the set of *names* before and after, so a file could not *add* a source but
+        // could silently *replace* one: registration is keyed on `(registrar, id)` and the last
+        // write wins, so redeclaring `source("slack")` left the names unchanged, passed, and
+        // became the source that runs. Proved with a probe against the real `Engine`, which
+        // returned `Ok(())`.
+        //
+        // Comparing *values* is not enough either, and that is the subtler half. A source is
+        // mostly callbacks; the registrar keeps the JSON projection here and leaves the real
+        // table — functions and all — in the VM. Two sources differing only in what their
+        // functions do are byte-identical in `entries`. So the question is not what changed but
+        // whether this file touched a privileged registrar at all, which is what it records.
+        let touched = self.config.borrow_mut().registered.take_touched();
+        if let Some((registrar, id)) = touched
+            .iter()
+            .find(|(registrar, _)| PRIVILEGED.contains(&registrar.as_str()))
+        {
+            return Err(LuaError::Untrusted {
+                file: path.display().to_string(),
+                what: format!("balthasar.{registrar}(\"{id}\")"),
+            });
         }
         for (index, name) in PRIVILEGED_SETTINGS.iter().enumerate() {
             let was = settings.get(index).and_then(Option::as_ref);

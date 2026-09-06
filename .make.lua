@@ -283,12 +283,14 @@ make.alias("c", "compile")
 -- xtra/ ended up with a 2,000-line file and a store that deletes.
 
 local GATES = {
+  { "gate-cycles",       "no two modules depend on each other" },
   { "gate-file-size",    "no .rs over 800 lines" },
   { "gate-no-delete",    "nothing is deleted outside purge.rs" },
   { "gate-independent",  "no Rust file names a harness" },
   { "gate-witnessed",    "every asserted memory answers for itself" },
   { "gate-untrusted",    "untrusted content cannot become durable instruction" },
   { "gate-no-exec",      "balthasar describes procedures and never runs them" },
+  { "gate-wire",         "one way of saying a thing crosses a boundary" },
 }
 
 for _, gate in ipairs(GATES) do
@@ -296,7 +298,7 @@ for _, gate in ipairs(GATES) do
   make.recipe{
     name = name, desc = desc,
     run = function()
-      local ran = oslo.run{ "sh", "scripts/" .. name .. ".sh" }
+      local ran = oslo.run{ "scripts/" .. name .. ".sh" }
       assert(ran.ok, name .. " failed")
     end,
   }
@@ -306,12 +308,14 @@ make.recipe{
   name = "gates",
   desc = "every architectural gate",
   deps = {
+    "gate-cycles",
     "gate-file-size",
     "gate-no-delete",
     "gate-independent",
     "gate-witnessed",
     "gate-untrusted",
     "gate-no-exec",
+    "gate-wire",
   },
 }
 
@@ -319,14 +323,53 @@ make.recipe{
   name = "gate-no-llm",
   desc = "the suite passes with no key, no network, no embeddings",
   run = function()
-    local ran = oslo.run{ "sh", "scripts/gate-no-llm.sh" }
+    local ran = oslo.run{ "scripts/gate-no-llm.sh" }
     assert(ran.ok, "gate-no-llm failed")
+  end,
+}
+
+
+-- Runs the whole suite a second time, under a `TMPDIR` of its own, and asserts the directory is
+-- empty afterwards. Its own recipe rather than one of the `gates` above, because those are greps
+-- that finish instantly and this one costs a full test run — and because a failure here is a
+-- leaking test, not a violated rule about how the code is written.
+make.recipe{
+  name = "gate-hermetic",
+  desc = "the suite leaves nothing behind in the temporary directory",
+  run = function()
+    local ran = oslo.run{ "scripts/gate-hermetic.sh" }
+    assert(ran.ok, "gate-hermetic failed")
+  end,
+}
+
+-- Every dependency a manifest declares is one the code actually uses.
+--
+-- Nine were not, across this family: an edge in `Cargo.toml`, in the lockfile and in every
+-- diagram drawn from them, and nowhere in the source. See the note in `Cargo.toml` for why this
+-- rather than the `unused_crate_dependencies` lint.
+make.recipe{
+  name = "machete",
+  desc = "no dependency nothing uses",
+  run = function()
+    -- Through the dev shell when it is not already on the path. `make` is run from a plain
+    -- terminal as often as from inside `nix develop`, and a check that quietly did not run
+    -- because a tool was missing is worse than one that is slow: CI would then be the only
+    -- place it happened, which is the arrangement this milestone exists to end.
+    local direct = oslo.run{ "cargo", "machete", capture = true }
+    if direct.ok then return end
+    local said = (direct.out or "") .. (direct.err or "")
+    if not said:find("no such command") then
+      print(said)
+      error("cargo machete failed")
+    end
+    local shelled = oslo.run{ "nix", "develop", "--command", "cargo", "machete" }
+    assert(shelled.ok, "cargo machete failed")
   end,
 }
 
 make.recipe{
   name = "verify",
   desc = "the whole local gate",
-  deps = { "fmt-check", "check", "test", "clippy", "rustdoc", "gates", "gate-no-llm" },
+  deps = { "fmt-check", "check", "test", "clippy", "rustdoc", "gates", "gate-hermetic", "machete", "gate-no-llm" },
 }
 make.alias("v", "verify")

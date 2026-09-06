@@ -1,6 +1,12 @@
-# balthasar
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="misc/balthasar-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="misc/balthasar.svg">
+    <img src="misc/balthasar.svg" alt="balthasar" width="180">
+  </picture>
+</p>
 
-Memory for agents. Short-term and long-term, in one layer, driven over Lua.
+<p align="center"><em>Memory for agents. Short-term and long-term, in one layer, driven over Lua.</em></p>
 
 A separate binary with its own store — not a library a harness links. It holds the four things
 a harness cannot hold for itself: what is in the context window right now, what happened in this
@@ -197,10 +203,71 @@ The gates are not advisory:
 | `gate-witnessed` | every asserted memory answers for itself |
 | `gate-untrusted` | untrusted content cannot become durable instruction |
 | `gate-no-exec` | balthasar describes procedures and never runs them |
+| `gate-cycles` | no two top-level modules depend on each other |
+| `gate-hermetic` | the suite leaves nothing behind in `$TMPDIR` |
+| `gate-wire` | one way of saying a thing crosses a boundary |
 | `gate-no-llm` | the suite passes with no key, no network, no embeddings |
 
 The last one is the load-bearing one. A model makes balthasar better; its absence never makes balthasar
 fail, and the only way that stays true is to prove it on every run rather than remember it.
+
+## Talking to it
+
+Four-byte big-endian length, then a JSON body — the same shape the rest of the family speaks.
+Every reply carries `family`, which says which revision of the wire it is written in: a reader
+refuses a number it does not know and tolerates one it predates.
+
+```
+->  {"call":"recall","args":["deploy",{"limit":5}]}
+<-  {"ok":true,"family":1,"n":1,"result":[[{"id":"…","text":"…","asserted":true,…}]]}
+```
+
+`asserted` is the distinction the whole design turns on, handed over rather than left for a
+caller to work out from a number and a threshold it would have to be told. Above the floor a
+memory is current truth; below it, it is still there, still searchable, still explained by `why`,
+and no longer stated as fact — which is what lets a harness say "you told me this in March, it
+may be stale" instead of repeating it flatly.
+
+The `client` verb hands over the Lua library that speaks all this, as source. A consumer keeping
+its own copy is a consumer whose copy goes stale — and one did, silently, for a whole machine.
+
+```lua
+local balthasar = load(source)(transport)
+local mem = balthasar.connect()
+for _, m in ipairs(mem.recall("build command")) do print(m.text, m.confidence) end
+```
+
+## How this family talks
+
+Three transports, two shapes, one encoding — written out because it was written out nowhere, and
+five wires had grown five ways to say the same thing.
+
+| Transport | When | Framing |
+|---|---|---|
+| **argv** | a question with an answer and nothing to hold open | one JSON object on stdout |
+| **pipe** | a parent and the child it started | newline-delimited JSON, both directions |
+| **socket** | anything may knock | four bytes of big-endian length, then JSON |
+
+JSON is on all three. It is the *encoding*, not a transport.
+
+A **call** is answered; an **event** is not:
+
+```
+->  {"call":"status","args":[]}
+<-  {"ok":true,"family":1,"n":1,"result":[{"busy":false}]}
+
+    {"event":"listening","at":"…"}
+```
+
+`result` is a **list** and `n` says how long it is: a sibling that unpacked a bare value would
+read an answer as nothing at all. `family` says which revision the reply is written in — a reader
+refuses a number it does not know and tolerates one it predates. A refused call is a *reply*, not
+a dropped connection.
+
+**The tag key is `event`, everywhere, in both directions**, and `gate-wire` refuses any other.
+The failure it prevents is silent: two of these wires exist as byte-identical copies in two
+repositories, so when two spellings drift nothing fails and no test goes red — the surface simply
+stops being answered.
 
 ## Requirements
 

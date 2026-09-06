@@ -14,7 +14,6 @@ default = []
 dense = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:serde_json"]
 
 [dependencies]
-balthasar-model.workspace = true
 thiserror.workspace = true
 
 candle-core = { version = "0.9", optional = true, default-features = false }

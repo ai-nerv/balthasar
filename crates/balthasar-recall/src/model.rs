@@ -139,6 +139,7 @@ pub const MINIMUM: usize = 200;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use balthasar_model::scratch::Scratch;
 
     fn a_model() -> Model {
         Model {
@@ -217,15 +218,15 @@ mod tests {
     fn every_way_of_having_no_model_is_the_same_way() {
         // A caller gets `None` and uses the rules. There is no error to handle, because a policy
         // the turn path had to handle errors from would be one the turn path depends on.
-        let missing = std::env::temp_dir().join("balthasar-no-such-model-9f3a.json");
-        let _ = std::fs::remove_file(&missing);
+        let dir = Scratch::new("balthasar-model", "none");
+        let missing = dir.join("absent.json");
         assert!(Model::load(&missing).is_none());
 
-        let junk = std::env::temp_dir().join("balthasar-junk-model.json");
+        let junk = dir.join("junk.json");
         std::fs::write(&junk, "not json at all").expect("write");
         assert!(Model::load(&junk).is_none());
 
-        let weak = std::env::temp_dir().join("balthasar-weak-model.json");
+        let weak = dir.join("weak.json");
         let mut held = a_model();
         held.holdout_auc = 0.4;
         held.save(&weak).expect("save");
@@ -233,18 +234,14 @@ mod tests {
             Model::load(&weak).is_none(),
             "a bad model is the same as no model"
         );
-
-        let _ = std::fs::remove_file(&junk);
-        let _ = std::fs::remove_file(&weak);
     }
 
     #[test]
     fn a_good_model_survives_a_round_trip() {
-        let at = std::env::temp_dir().join("balthasar-good-model.json");
+        let at = Scratch::file("balthasar-model", "good", "model.json");
         let held = a_model();
         held.save(&at).expect("save");
         assert_eq!(Model::load(&at).expect("load"), held);
-        let _ = std::fs::remove_file(&at);
     }
 
     #[test]

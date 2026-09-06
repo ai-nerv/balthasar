@@ -90,7 +90,14 @@ impl Distil for Spawned {
         };
         // Asked of `$PATH` rather than by running it. A reachability check that executed the
         // thing would spend a model call finding out whether it could make one.
-        which(program).is_some()
+        let found = which(program).is_some();
+        if !found {
+            // The only place this is said. A distiller nobody can reach is not an error — the
+            // rules still run and the session still remembers — so the config that named a
+            // program that is not installed otherwise looks exactly like no config at all.
+            balthasar_model::noted!("distil: {program} is not on $PATH");
+        }
+        found
     }
 
     fn complete(&self, prompt: &str, budget: Budget) -> Result<String, DistilFailure> {

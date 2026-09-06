@@ -55,7 +55,11 @@ pub fn data_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(home).join(".local/share/balthasar");
     }
-    std::env::temp_dir().join("balthasar")
+    // Per user, the way the socket directory already is (`balthasar-ipc/src/serve.rs:18`). The
+    // temporary directory is shared: a fixed name there is the first caller's to own, and every
+    // later one either fails or writes its memory into somebody else's directory.
+    let uid = rustix::process::getuid().as_raw();
+    std::env::temp_dir().join(format!("balthasar-{uid}"))
 }
 
 /// Which tool a memory belongs to.
@@ -320,14 +324,46 @@ pub fn scope_of(cwd: &Path) -> ScopeId {
 }
 
 /// The closest ancestor holding a store home, if any.
+///
+/// **The walk stops at the first shared directory rather than at the filesystem root.** A store
+/// home is a claim about who owns a subtree, and `/tmp`, `/home` and `/` are owned by everybody:
+/// a `.store` in one of them says nothing about the project underneath it. Without the ceiling a
+/// single leftover `/tmp/balthasar/.store` made `/tmp` itself resolve as a store home, so every
+/// directory under it — every test fixture, and every session of every other user on the machine
+/// — was silently reparented into one scope. It was found by four tests failing for a reason
+/// that had nothing to do with what they were asserting.
 fn nearest_home(from: &Path) -> Option<PathBuf> {
     let mut at = from;
     loop {
+        if is_shared(at) {
+            return None;
+        }
         if is_home(&at.join(HOME)) {
             return Some(at.to_owned());
         }
         at = at.parent()?;
     }
+}
+
+/// Whether `dir` is a directory nobody in particular owns, and so cannot scope a project.
+///
+/// The temporary directory, the parent of a home directory, and the filesystem root. Compared by
+/// path rather than by mode: a sticky world-writable bit is the usual signal, but `/home` has
+/// neither and is just as shared, and a mode check would also make the answer depend on how this
+/// machine happens to be set up.
+fn is_shared(dir: &Path) -> bool {
+    if dir.parent().is_none() {
+        return true;
+    }
+    if dir == std::env::temp_dir() {
+        return true;
+    }
+    std::env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .as_deref()
+        .and_then(Path::parent)
+        .is_some_and(|above| dir == above)
 }
 
 /// The repository a directory is in, walking up.
@@ -362,16 +398,14 @@ fn git_common_dir(from: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use balthasar_model::scratch::Scratch;
 
     /// A scratch directory nothing else is using.
     ///
     /// Named after the test rather than shared, because two tests tidying up one tree race
     /// each other and the loser fails somewhere unrelated.
-    fn scratch(name: &str) -> PathBuf {
-        let at = std::env::temp_dir().join(format!("balthasar-paths-{name}"));
-        let _ = std::fs::remove_dir_all(&at);
-        std::fs::create_dir_all(&at).expect("mkdir");
-        at
+    fn scratch(name: &str) -> Scratch {
+        Scratch::new("balthasar-paths", name)
     }
 
     #[test]
@@ -438,7 +472,29 @@ mod tests {
 
         make_home(&root.join(HOME)).expect("make");
         assert!(is_home(&root.join(HOME)));
-        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_store_home_in_a_shared_directory_scopes_nothing() {
+        // The bug this closes: a leftover `.store` in the temporary directory made *every* path
+        // under it resolve to one scope — every fixture in this file, and on a shared machine
+        // every other user's sessions too. Four tests in this module were failing for that
+        // reason and none of them was about it.
+        //
+        // Asserted against the real temporary directory rather than a fixture, because the
+        // property is about which directories nobody owns.
+        let shared = std::env::temp_dir();
+        assert!(is_shared(&shared), "{}", shared.display());
+        assert!(is_shared(std::path::Path::new("/")));
+
+        // A marked home directly in it is still refused, which is the whole point.
+        let planted = shared.join(HOME);
+        if is_home(&planted) {
+            assert_eq!(nearest_home(&shared), None);
+            let under = shared.join("balthasar-ceiling-probe");
+            std::fs::create_dir_all(&under).expect("mkdir");
+            assert_eq!(nearest_home(&under), None);
+        }
     }
 
     #[test]
@@ -456,7 +512,6 @@ mod tests {
             package.to_string_lossy()
         );
         assert_eq!(scope_of(&root).as_str(), root.to_string_lossy());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -470,7 +525,6 @@ mod tests {
 
         assert!(path.starts_with(&root), "{}", path.display());
         assert_eq!(path, root.join("balthasar/balthasar/project.db"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -493,7 +547,6 @@ mod tests {
             after.join(relative),
             "the store moved with the project"
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -507,7 +560,6 @@ mod tests {
 
         assert_eq!(scope_of(&deep), scope_of(&root));
         assert_eq!(scope_of(&deep).as_str(), root.to_string_lossy());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -526,7 +578,6 @@ mod tests {
         .expect("write");
 
         assert_eq!(scope_of(&tree), scope_of(&work));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -568,7 +619,6 @@ mod tests {
             one.parent().and_then(Path::parent),
             two.parent().and_then(Path::parent)
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -616,7 +666,6 @@ mod tests {
             vec!["harness", "oslo"],
             "a directory with no store is not a tool"
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -637,6 +686,5 @@ mod tests {
             std::fs::read_to_string(home.join(".gitignore")).expect("read"),
             "mine\n"
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 }
