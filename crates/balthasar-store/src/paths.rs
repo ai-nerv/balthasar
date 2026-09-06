@@ -366,6 +366,27 @@ fn is_shared(dir: &Path) -> bool {
         .is_some_and(|above| dir == above)
 }
 
+/// Whether a checkout rooted at `dir` would sweep in directories that have nothing to do with it.
+///
+/// The shared directories, and a home directory as well. `is_shared` is the ceiling for a store
+/// somebody *made* — `balthasar init` is a deliberate act and should win wherever it was run,
+/// including in a home directory. A `.git` is not that: it is inferred, and the two places a
+/// repository most often sits without meaning to own everything below it are exactly these.
+///
+/// Found by looking: this machine had both a `/tmp/.git` and a `$HOME/.git`, the second being an
+/// ordinary dotfiles repository. Between them, every directory that was not itself a checkout —
+/// every scratch directory, every unpacked tarball — resolved to one of two enormous scopes and
+/// shared one memory. A test that ran four sessions in four temporary directories was really
+/// running them in one, and the failure looked like a resume that lost the conversation.
+fn too_broad(dir: &Path) -> bool {
+    if is_shared(dir) {
+        return true;
+    }
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .is_some_and(|home| dir == Path::new(&home))
+}
+
 /// The repository a directory is in, walking up.
 ///
 /// Reads `.git` when it is a file, because that is what a worktree has: a pointer at the real
@@ -374,6 +395,9 @@ fn is_shared(dir: &Path) -> bool {
 fn git_common_dir(from: &Path) -> Option<PathBuf> {
     let mut at = from;
     loop {
+        if too_broad(at) {
+            return None;
+        }
         let dot = at.join(".git");
         if dot.is_dir() {
             return Some(at.to_owned());
@@ -686,5 +710,47 @@ mod tests {
             std::fs::read_to_string(home.join(".gitignore")).expect("read"),
             "mine\n"
         );
+    }
+
+    #[test]
+    fn a_repository_in_a_shared_directory_scopes_nothing() {
+        // The same bug as the one above, in the other walk. A `.git` at the top of the temporary
+        // directory -- or in a home directory, which is what a dotfiles repository is -- made
+        // every directory below it resolve to that one root. The ceiling was added to the store
+        // walk when this was found there, and the git walk was left with none.
+        let shared = std::env::temp_dir();
+        assert!(too_broad(&shared), "{}", shared.display());
+
+        let under = shared.join("balthasar-git-ceiling-probe");
+        std::fs::create_dir_all(&under).expect("mkdir");
+        // Whatever this machine happens to have at the top of its temporary directory, a
+        // directory under it scopes to itself and not to that.
+        assert_eq!(git_common_dir(&under), None);
+        assert_eq!(scope_of(&under).as_str(), under.to_string_lossy());
+        let _ = std::fs::remove_dir(&under);
+    }
+
+    #[test]
+    fn a_home_directory_is_too_broad_to_be_a_project() {
+        // A repository at `$HOME` is a dotfiles repository, not the project an unrelated
+        // subdirectory belongs to. Distinguished from `is_shared`, which stays as it was: a
+        // store somebody ran `balthasar init` to create is deliberate and wins wherever it sits,
+        // including here.
+        let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) else {
+            return;
+        };
+        let home = std::path::Path::new(&home);
+        assert!(too_broad(home), "{}", home.display());
+        assert!(!is_shared(home), "an explicit store here would still count");
+    }
+
+    #[test]
+    fn a_real_checkout_is_still_found() {
+        // The ceiling must not cost the thing the walk is for.
+        let root = scratch("checkout");
+        std::fs::create_dir_all(root.join(".git")).expect("mkdir");
+        let deep = root.join("crates/thing/src");
+        std::fs::create_dir_all(&deep).expect("mkdir");
+        assert_eq!(git_common_dir(&deep).as_deref(), Some(&*root));
     }
 }
