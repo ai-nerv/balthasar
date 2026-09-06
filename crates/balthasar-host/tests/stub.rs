@@ -153,9 +153,9 @@ fn the_stub_says_so_when_nothing_is_listening() {
 
 #[test]
 fn the_library_that_speaks_this_surface_comes_back_over_the_wire() {
-    // **A consumer keeping its own copy is a consumer whose copy goes stale**, and one did:
-    // magi's copy of this file predated a fix, so every session on that machine silently had no
-    // memory tools and nothing anywhere said why. `balthasar lua-api` prints the same source,
+    // **A consumer keeping its own copy is a consumer whose copy goes stale**, and one did: a
+    // harness had a copy of this file that predated a fix, so every session on that machine
+    // silently had no memory tools and nothing anywhere said why. `balthasar lua-api` prints the same source,
     // which is enough for a host that can shell out and useless to a sandboxed VM that cannot.
     let (path, _thread) = serving("client", &[]);
     let source = through_the_stub(&path, r#"select(1, mem:call("client"))"#);

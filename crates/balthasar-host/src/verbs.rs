@@ -17,9 +17,9 @@ pub const SURFACE: &[Verb] = &[
     // Beside `verbs` on purpose, and for the same reason: `verbs` says what this surface speaks
     // and this hands over the library that speaks it. `balthasar lua-api` prints the same source,
     // which is enough for a host that can shell out and useless to a sandboxed VM that cannot —
-    // and a consumer keeping its own copy is a consumer whose copy goes stale. One did: magi's
-    // copy predated a fix, so every session on that machine silently had no memory tools and
-    // nothing said why.
+    // and a consumer keeping its own copy is a consumer whose copy goes stale. One did: a
+    // harness had a copy that predated a fix, so every session on that machine silently had no
+    // memory tools and nothing said why.
     Verb {
         name: "client",
         writes: false,
