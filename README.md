@@ -205,6 +205,7 @@ The gates are not advisory:
 | `gate-no-exec` | balthasar describes procedures and never runs them |
 | `gate-cycles` | no two top-level modules depend on each other |
 | `gate-hermetic` | the suite leaves nothing behind in `$TMPDIR` |
+| `gate-wire` | one way of saying a thing crosses a boundary |
 | `gate-no-llm` | the suite passes with no key, no network, no embeddings |
 
 The last one is the load-bearing one. A model makes balthasar better; its absence never makes balthasar
@@ -235,6 +236,38 @@ local balthasar = load(source)(transport)
 local mem = balthasar.connect()
 for _, m in ipairs(mem.recall("build command")) do print(m.text, m.confidence) end
 ```
+
+## How this family talks
+
+Three transports, two shapes, one encoding — written out because it was written out nowhere, and
+five wires had grown five ways to say the same thing.
+
+| Transport | When | Framing |
+|---|---|---|
+| **argv** | a question with an answer and nothing to hold open | one JSON object on stdout |
+| **pipe** | a parent and the child it started | newline-delimited JSON, both directions |
+| **socket** | anything may knock | four bytes of big-endian length, then JSON |
+
+JSON is on all three. It is the *encoding*, not a transport.
+
+A **call** is answered; an **event** is not:
+
+```
+->  {"call":"status","args":[]}
+<-  {"ok":true,"family":1,"n":1,"result":[{"busy":false}]}
+
+    {"event":"listening","at":"…"}
+```
+
+`result` is a **list** and `n` says how long it is: a sibling that unpacked a bare value would
+read an answer as nothing at all. `family` says which revision the reply is written in — a reader
+refuses a number it does not know and tolerates one it predates. A refused call is a *reply*, not
+a dropped connection.
+
+**The tag key is `event`, everywhere, in both directions**, and `gate-wire` refuses any other.
+The failure it prevents is silent: two of these wires exist as byte-identical copies in two
+repositories, so when two spellings drift nothing fails and no test goes red — the surface simply
+stops being answered.
 
 ## Requirements
 

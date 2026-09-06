@@ -290,6 +290,7 @@ local GATES = {
   { "gate-witnessed",    "every asserted memory answers for itself" },
   { "gate-untrusted",    "untrusted content cannot become durable instruction" },
   { "gate-no-exec",      "balthasar describes procedures and never runs them" },
+  { "gate-wire",         "one way of saying a thing crosses a boundary" },
 }
 
 for _, gate in ipairs(GATES) do
@@ -314,6 +315,7 @@ make.recipe{
     "gate-witnessed",
     "gate-untrusted",
     "gate-no-exec",
+    "gate-wire",
   },
 }
 
