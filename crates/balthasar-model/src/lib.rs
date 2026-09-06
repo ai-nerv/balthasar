@@ -20,6 +20,7 @@ mod habit;
 mod id;
 mod lifecycle;
 mod memory;
+pub mod noted;
 mod relation;
 pub mod scratch;
 mod skill;
