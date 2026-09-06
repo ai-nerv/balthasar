@@ -62,10 +62,8 @@ dependencies = [
 name = "balthasar-buffer"
 version = "0.1.0"
 dependencies = [
- "balthasar-model",
  "balthasar-store",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -105,7 +103,6 @@ dependencies = [
 name = "balthasar-embed"
 version = "0.1.0"
 dependencies = [
- "balthasar-model",
  "candle-core",
  "candle-nn",
  "candle-transformers",
@@ -122,11 +119,8 @@ dependencies = [
  "balthasar-ipc",
  "balthasar-lua",
  "balthasar-model",
- "balthasar-recall",
  "balthasar-store",
- "serde",
  "serde_json",
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -168,7 +162,6 @@ dependencies = [
  "balthasar-store",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
 ]
 
 [[package]]
