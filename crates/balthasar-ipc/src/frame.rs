@@ -69,11 +69,31 @@ pub enum Fault {
     Failed,
 }
 
+/// Which revision of the family wire this speaks.
+///
+/// **There was no version anywhere, in four implementations that already disagree.** This reply
+/// makes `n` optional and carries a `fault`; melchior's always sends `n` and has never had a
+/// fault. Both are "the family wire". A consumer meeting an unexpected shape today learns about
+/// it as a missing field at the point of use, which reads as the peer being broken rather than
+/// as the peer being a different version.
+///
+/// Carried on the reply rather than negotiated, because there is already a handshake: every
+/// client asks `verbs` before it asks anything else, so the first answer of every connection
+/// says what it is talking to and nothing extra crosses the wire.
+///
+/// The number is duplicated in each sibling for the same reason the types are — a shared crate
+/// would be a dependency between repositories, and this family has none. It is bumped when a
+/// consumer that does not know about a change would misread a reply, not when a field is added
+/// that an older reader ignores.
+pub const FAMILY: u16 = 1;
+
 /// One answer, as it goes back.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Reply {
     /// Whether the call was answered.
     pub ok: bool,
+    /// Which revision of the wire this reply is written in. See [`FAMILY`].
+    pub family: u16,
     /// How many values came back.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub n: Option<usize>,
@@ -98,6 +118,7 @@ impl Reply {
     pub fn one(value: serde_json::Value) -> Self {
         Self {
             ok: true,
+            family: FAMILY,
             n: Some(1),
             result: Some(vec![value]),
             error: None,
@@ -110,6 +131,7 @@ impl Reply {
     pub fn none() -> Self {
         Self {
             ok: true,
+            family: FAMILY,
             n: Some(0),
             result: Some(Vec::new()),
             error: None,
@@ -126,6 +148,7 @@ impl Reply {
     pub fn refused(why: impl Into<String>) -> Self {
         Self {
             ok: false,
+            family: FAMILY,
             n: None,
             result: None,
             error: Some(why.into()),
@@ -142,6 +165,7 @@ impl Reply {
     pub fn failed(why: impl Into<String>) -> Self {
         Self {
             ok: false,
+            family: FAMILY,
             n: None,
             result: None,
             error: Some(why.into()),
