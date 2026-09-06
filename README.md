@@ -203,10 +203,38 @@ The gates are not advisory:
 | `gate-witnessed` | every asserted memory answers for itself |
 | `gate-untrusted` | untrusted content cannot become durable instruction |
 | `gate-no-exec` | balthasar describes procedures and never runs them |
+| `gate-cycles` | no two top-level modules depend on each other |
+| `gate-hermetic` | the suite leaves nothing behind in `$TMPDIR` |
 | `gate-no-llm` | the suite passes with no key, no network, no embeddings |
 
 The last one is the load-bearing one. A model makes balthasar better; its absence never makes balthasar
 fail, and the only way that stays true is to prove it on every run rather than remember it.
+
+## Talking to it
+
+Four-byte big-endian length, then a JSON body — the same shape the rest of the family speaks.
+Every reply carries `family`, which says which revision of the wire it is written in: a reader
+refuses a number it does not know and tolerates one it predates.
+
+```
+->  {"call":"recall","args":["deploy",{"limit":5}]}
+<-  {"ok":true,"family":1,"n":1,"result":[[{"id":"…","text":"…","asserted":true,…}]]}
+```
+
+`asserted` is the distinction the whole design turns on, handed over rather than left for a
+caller to work out from a number and a threshold it would have to be told. Above the floor a
+memory is current truth; below it, it is still there, still searchable, still explained by `why`,
+and no longer stated as fact — which is what lets a harness say "you told me this in March, it
+may be stale" instead of repeating it flatly.
+
+The `client` verb hands over the Lua library that speaks all this, as source. A consumer keeping
+its own copy is a consumer whose copy goes stale — and one did, silently, for a whole machine.
+
+```lua
+local balthasar = load(source)(transport)
+local mem = balthasar.connect()
+for _, m in ipairs(mem.recall("build command")) do print(m.text, m.confidence) end
+```
 
 ## Requirements
 
