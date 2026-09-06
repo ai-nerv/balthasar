@@ -38,6 +38,13 @@ pub struct ApiArgs {
     verb: String,
     /// Its arguments, each as JSON.
     args: Vec<String>,
+    /// Answer in CBOR rather than JSON.
+    ///
+    /// The same option `needs` and `configure` take, and the same one melchior's `ask` takes.
+    /// This door answered in JSON alone, so a caller that had asked every other door in the
+    /// family for CBOR had to keep a JSON parser for this one.
+    #[arg(long)]
+    cbor: bool,
 }
 
 /// Ask the kernel to end this process when whoever started it ends.
@@ -199,7 +206,8 @@ pub fn api(
         Err(why) => Reply::refused(why.to_string()),
     };
 
-    println!("{}", serde_json::to_string(&reply)?);
+    let mut out = std::io::stdout().lock();
+    crate::coordinated::emit(&mut out, args.cbor, &serde_json::to_value(&reply)?);
     Ok(())
 }
 
