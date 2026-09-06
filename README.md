@@ -1,6 +1,12 @@
-# balthasar
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="misc/balthasar-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="misc/balthasar.svg">
+    <img src="misc/balthasar.svg" alt="balthasar" width="180">
+  </picture>
+</p>
 
-Memory for agents. Short-term and long-term, in one layer, driven over Lua.
+<p align="center"><em>Memory for agents. Short-term and long-term, in one layer, driven over Lua.</em></p>
 
 A separate binary with its own store — not a library a harness links. It holds the four things
 a harness cannot hold for itself: what is in the context window right now, what happened in this
