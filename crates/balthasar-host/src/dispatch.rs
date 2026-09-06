@@ -96,6 +96,9 @@ pub fn answer_with(
                 )
                 .collect::<Vec<_>>()
         )),
+        // Shipped in the binary, identical for every session, and it says nothing about *this*
+        // one — so it is as safe to answer as `verbs` and is answered the same way.
+        "client" => Reply::one(serde_json::json!(balthasar_lua::CLIENT)),
         "status" => status(at),
         "recall" => recall(at, request),
         "why" => why(at, request),

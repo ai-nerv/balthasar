@@ -8,6 +8,9 @@ description = "balthasar's verbs: what another program may ask, and what it may 
 
 [dependencies]
 balthasar-buffer.workspace = true
+# For `CLIENT`: the library that speaks this surface, served from the server so a consumer
+# cannot hold a stale copy of it. One did.
+balthasar-lua.workspace = true
 balthasar-ipc.workspace = true
 balthasar-model.workspace = true
 balthasar-store.workspace = true
