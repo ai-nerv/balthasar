@@ -82,6 +82,7 @@ dependencies = [
  "balthasar-testkit",
  "ciborium",
  "clap",
+ "rustix",
  "serde",
  "serde_json",
 ]

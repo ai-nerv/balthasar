@@ -17,6 +17,18 @@ pub struct ServeArgs {
     /// A name, when more than one balthasar should be reachable at once.
     #[arg(long, default_value = "default")]
     instance: String,
+
+    /// End this when the process with this id ends, and let the kernel be what enforces it.
+    ///
+    /// The caller names itself rather than being inferred, because "who started me" is a
+    /// question with no reliable answer once the answer has changed: an orphan has already been
+    /// handed to whatever reaps on this machine, and that is init on some and the user's own
+    /// session manager on others. A pid to compare against is the same test on both.
+    ///
+    /// Absent by default: a balthasar started at a terminal or by a unit file is meant to
+    /// outlive the thing that typed the command, and would otherwise leave with the shell.
+    #[arg(long, value_name = "PID")]
+    tied: Option<u32>,
 }
 
 /// Answer one question and exit.
@@ -28,6 +40,35 @@ pub struct ApiArgs {
     args: Vec<String>,
 }
 
+/// Ask the kernel to end this process when whoever started it ends.
+///
+/// `PR_SET_PDEATHSIG`, and it has to be the kernel because of the case that matters: nothing
+/// runs in a process that is killed outright, so a caller cannot be relied on to take its own
+/// children with it. A cleanup on the way out covers the exits that have a way out. This covers
+/// the rest — a panic, a `kill -9`, an OOM — which are exactly the ones that leave a memory
+/// layer running with nobody to answer.
+///
+/// The signal only watches from the moment it is set, so a caller that died in the window
+/// between the spawn and this call is a death nothing was ever sent for — and without the check
+/// below this would serve forever, watching a parent that had already gone. Asking whether the
+/// caller is still our parent settles that, and settles the other gap too: the signal arrives
+/// when the *thread* that spawned this exits rather than the whole process.
+///
+/// Against the pid the caller gave rather than against whatever `getppid` said a moment ago,
+/// which was the version that did not work: an orphan is reparented before it gets here, so the
+/// value read first and the value read second are the same reaper, and the comparison passed
+/// while the caller was already dead.
+fn tie_to_caller(caller: u32) -> anyhow::Result<()> {
+    rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))?;
+    let ours = rustix::process::getppid().is_some_and(|parent| {
+        u32::try_from(parent.as_raw_nonzero().get()).is_ok_and(|pid| pid == caller)
+    });
+    if !ours {
+        std::process::exit(0);
+    }
+    Ok(())
+}
+
 /// Start listening.
 pub fn serve(
     store_path: Option<&Path>,
@@ -37,6 +78,9 @@ pub fn serve(
     floors: balthasar_lua::Floors,
     loaded: &mut crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
+    if let Some(caller) = args.tied {
+        tie_to_caller(caller)?;
+    }
     let listener = Listener::bind(&args.instance)?;
     // Written whether or not anybody connects: a caller that finds no socket falls back to
     // spawning, and it can only do that if we left it an absolute path to spawn.

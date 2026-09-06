@@ -23,6 +23,7 @@ balthasar-lua.workspace = true
 balthasar-store.workspace = true
 balthasar-testkit.workspace = true
 anyhow.workspace = true
+rustix.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
