@@ -35,6 +35,26 @@ report, the other is a sibling to carry on without.
 **A newer `family` is refused by name; an older one is not.** A reply with no `family` at all is
 from before the field existed and is accepted.
 
+**`verbs` also carries `surface`.** Two numbers, because they change for different reasons and a
+consumer cares about different halves:
+
+| | what it versions | who reads it |
+|---|---|---|
+| `family` | the wire between these programs — the reply shape, the encodings, which verbs exist | a sibling, or anything speaking to one |
+| `surface` | what a plugin file is written against — the registrar names, the fields each declaration owes, what a callback is handed | a third party's extension |
+
+Both go up only when something already published stops working. Adding a registrar, a field, an
+event or a verb moves neither; renaming one, removing one, or changing what a field means moves
+the one it belongs to. `surface` appears on `verbs` and nowhere else, because it is a fact about
+the program rather than about the reply.
+
+**`result` is the rows, and `n` is how many there are.** A verb that lists things puts each thing
+in `result` as its own value; it does not put the whole listing in as one value that is a list.
+`"result": [[…]]` with `"n": 1` is the mistake, and it is invisible from one side — casper sent
+every listing it had that way while the other three sent theirs flat, and the coordinator reading
+them one row at a time found an array where a declaration belonged and concluded casper declared
+nothing at all. `gate-family.sh` checks this now.
+
 ---
 
 ## The floor — every program answers these
@@ -85,6 +105,88 @@ pipe gets. CBOR is the same shape as bytes, for a caller that is not going to re
 On a socket nothing is negotiated: a body says which encoding it is in its first byte — JSON's
 top level is `{` or `[`, CBOR's map or array is `0x80`–`0xBF`, and the ranges do not overlap — so
 a reply goes back in whichever the call arrived in.
+
+---
+
+## Extending one — the same directories everywhere
+
+All four are Lua at the edges, and all four discover what is installed the same way. It is
+neovim's runtimepath, unchanged, because twenty years of real plugins have been written against it
+and most people arriving already know it:
+
+```text
+  <config>/plugin/*.lua                 alphabetical, each on its own
+  <data>/<program>/site/pack/*/start/*/plugin/*.lua      installed packages
+  <config>/after/plugin/*.lua           the last word
+```
+
+Where `<config>` is `$XDG_CONFIG_HOME/<program>` and `<data>` is `$XDG_DATA_HOME`. Each program
+runs its own shipped declarations first, then this, then whatever a coordinator handed it — and
+**every registrar replaces by name**, so the order *is* the precedence: `after/` is how a person
+overrides something a package they installed declared.
+
+Naming a file explicitly still works and is still the auditable case: magi's `magi.load`,
+casper's `load` setting, melchior's `apis.lua` and `providers.lua`. Discovery is for what is
+*installed*, because requiring an edit to somebody's own `init.lua` to enable a package makes
+every package a merge conflict.
+
+**A discovered file cannot spawn a process.** The sandbox is applied to the VM before any file
+runs, in all four, so what arrives by being installed is held to the same rule as what arrives by
+being named. What a *tool* runs is a separate question, and it goes through the declared runner.
+
+**A file that raises costs itself and nothing else.** Somebody else's package failing is reported
+and skipped; a program's own configuration failing is fatal, because a config that will not parse
+has not expressed an intention.
+
+Balthasar wrote this first and it lived there alone for a while, described as one program's
+arrangement rather than the family's. The copies are copies on purpose — a shared crate between
+these four is the dependency the whole arrangement exists to prevent.
+
+---
+
+## Installed packages — acknowledged, or they do not run
+
+A file you put in your own `plugin/` directory runs on sight. A package under
+`<data>/<program>/site/pack/` does not, until you have said it may:
+
+```
+<program> acknowledge
+```
+
+That writes `<config>/installed.json` — every installed file and the SHA-256 of what it held when
+you agreed to it. A file whose digest does not match, or that is not in the manifest at all, is
+**not run**, and the program says which one and what to type. Acknowledging replaces the manifest
+rather than merging into it, so removing a package forgets it.
+
+**Fail-closed, and only for what somebody else wrote.** Confirming your own configuration is a
+prompt nobody reads — it trains people to say yes. A package is code that arrived by being fetched
+and can change under you between one run and the next, which is the case where an acknowledgement
+means something. A manifest that will not parse reads as empty, which holds everything back rather
+than letting everything through.
+
+This is the ten percent of a package manager worth having. Fetching is `git clone`; the idea is
+the lockfile.
+
+---
+
+## Client libraries — from the program that implements them
+
+`client` prints one plain-Lua file: what another program needs in order to talk to this one. A
+consumer runs it and holds the result; it never keeps a copy of its own.
+
+**Nobody vendors anybody's.** The library and the surface it talks to are one thing, and a copy
+goes stale silently: magi shipped 631 lines of balthasar's, and a copy that had fallen behind
+removed every memory tool from every session on a machine without saying anything. magi asks now,
+at config load, and a sibling that is not installed lends nothing — which is right, because the
+tools its library would declare could not have worked anyway.
+
+A program whose surface is not reached from a Lua VM still answers: casper prints a refusal
+saying so in as many words, because "there is none, and here is why" is parseable and silence is
+not.
+
+The libraries for `oslo` and `hexe` are the exception and the last copies left: neither answers
+`client` yet, and both live outside these repositories. They are kept byte-identical wherever they
+appear, which is the second-best thing to not copying them.
 
 ---
 

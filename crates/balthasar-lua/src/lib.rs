@@ -17,6 +17,7 @@
 //! `on.` is asked; `did.` is told. Nothing else in the API takes a function, so there is no
 //! third contract to remember.
 
+pub mod acknowledged;
 mod client;
 mod config;
 mod convert;
@@ -35,7 +36,7 @@ pub use engine::Engine;
 pub use engine::{PRIVILEGED, PRIVILEGED_SETTINGS, REGISTRARS, SPECS};
 pub use handler::{ASKED, TOLD};
 pub use helpers::glob_paths;
-pub use plugins::{Roots, Trust, runtimepath, vouched_for};
+pub use plugins::{Roots, Trust, installed, runtimepath, vouched_for};
 pub use settings::{Budget, Decay, Floors, Ledger, Settings, Weights};
 
 /// What went wrong while reading a configuration.

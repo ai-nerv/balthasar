@@ -43,6 +43,41 @@ pub fn needs(args: &NeedsArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Acknowledge the installed packages.
+#[derive(Debug, Parser)]
+pub struct AcknowledgeArgs {
+    /// Answer in JSON. The default, and accepted so every sibling takes the same flags.
+    #[arg(long)]
+    pub json: bool,
+    /// Answer in CBOR rather than JSON.
+    #[arg(long)]
+    pub cbor: bool,
+}
+
+/// Acknowledge the installed packages, so their declarations may run.
+///
+/// A file in your own `plugin/` directory runs on sight: you put it there, and a prompt about
+/// your own configuration is one nobody reads. A package under `site/pack/` is somebody else's
+/// code that arrived by being fetched, so it runs once you have said it may — and stops running
+/// again the moment it changes. Fetching is `git clone`; this is the lockfile.
+///
+/// # Errors
+/// Never — a manifest that cannot be written comes back as a refusal, which is a reply.
+pub fn acknowledge(args: &AcknowledgeArgs) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let mut out = std::io::stdout().lock();
+    match crate::loaded::trust(&cwd) {
+        Ok(files) => {
+            let taken: Vec<serde_json::Value> = files
+                .iter()
+                .map(|path| serde_json::json!({ "acknowledged": path.display().to_string() }))
+                .collect();
+            reply(&mut out, args.cbor, &taken);
+        }
+        Err(why) => refuse(&mut out, args.cbor, &why),
+    }
+    Ok(())
+}
 /// Read config Lua on stdin, apply it, and say what it did.
 pub fn configure(args: &ConfigureArgs) -> anyhow::Result<()> {
     let mut out = std::io::stdout().lock();
@@ -67,6 +102,20 @@ pub fn configure(args: &ConfigureArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The revision of the *registrar* surface — what a third party writes against.
+///
+/// Separate from `balthasar_ipc::FAMILY`, because they change for different reasons and a consumer
+/// cares about different halves. `family` is the wire between these programs: the reply shape, the
+/// encodings, which verbs exist. `surface` is what somebody's plugin file is written against: the
+/// registrar names, the fields each declaration owes, and what a callback is handed.
+///
+/// **It goes up when something already published stops working.** Adding a registrar, a field, or
+/// a handler does not move it — a file written against 1 keeps running. Renaming one, removing
+/// one, or changing what a field means does, and that is the number a plugin checks if it wants to
+/// refuse rather than fail halfway.
+///
+/// Reported on `verbs`, beside `family`. See EXTENDING.md.
+const SURFACE: u16 = 1;
 fn reply<T: serde::Serialize>(out: &mut impl Write, cbor: bool, values: &[T]) {
     let body = serde_json::json!({
         "ok": true,
@@ -219,7 +268,16 @@ pub fn verbs(args: &VerbsArgs) -> anyhow::Result<()> {
         })
     }));
 
+    // The one verb that says which registrar surface this program offers -- a fact about the
+    // program, not about the reply, so it rides on the self-description and nowhere else.
+    let body = serde_json::json!({
+        "ok": true,
+        "family": balthasar_ipc::FAMILY,
+        "surface": SURFACE,
+        "n": listed.len(),
+        "result": listed,
+    });
     let mut out = std::io::stdout().lock();
-    reply(&mut out, args.cbor, &listed);
+    emit(&mut out, args.cbor, &body);
     Ok(())
 }

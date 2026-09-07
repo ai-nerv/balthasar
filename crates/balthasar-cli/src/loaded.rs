@@ -43,9 +43,17 @@ impl Loaded {
         let roots = Roots::discovered(cwd);
         let mut files = balthasar_lua::runtimepath(&roots);
 
+        // **A package runs when you have said it may, and not before.** Your own files run on
+        // sight; this holds back what arrived under `site/pack/` by being fetched until it has
+        // been acknowledged, and again the moment it changes. `balthasar trust` is where you say
+        // so. See `balthasar_lua::acknowledged`.
+        let held = withheld(&roots);
+        files.retain(|(path, _)| !held.contains(path));
+
         // Trust is decided after the owner's own files have run, because `balthasar.trusted` is one
         // of the things they set. A project file listed under it may declare like any other.
         let mut engine = Engine::new();
+
         let owned: Vec<(std::path::PathBuf, bool)> =
             files.iter().filter(|(_, t)| *t).cloned().collect();
         engine.read(&owned)?;
@@ -239,4 +247,58 @@ impl Loaded {
     pub fn log(&self) -> Vec<String> {
         self.engine.config().log
     }
+}
+
+/// Installed package files that are not cleared to run.
+///
+/// Named rather than silently dropped: a package that does not run and does not say so is a
+/// package somebody spends an afternoon debugging.
+fn withheld(roots: &Roots) -> std::collections::BTreeSet<std::path::PathBuf> {
+    let Some(config) = &roots.config else {
+        return std::collections::BTreeSet::new();
+    };
+    let known =
+        balthasar_lua::acknowledged::recorded(&balthasar_lua::acknowledged::manifest_in(config));
+    let mut held = std::collections::BTreeSet::new();
+    for path in balthasar_lua::installed(roots) {
+        let Ok(source) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if balthasar_lua::acknowledged::cleared(&known, &path, &source) {
+            continue;
+        }
+        eprintln!(
+            "balthasar: {}; run `balthasar acknowledge` to clear it",
+            balthasar_lua::acknowledged::Held {
+                path: path.clone(),
+                known: balthasar_lua::acknowledged::seen(&known, &path),
+            }
+        );
+        held.insert(path);
+    }
+    held
+}
+
+/// Acknowledge every installed package, so it may run.
+///
+/// # Errors
+/// When the manifest cannot be written — a read-only configuration directory, most likely.
+pub fn trust(cwd: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+    let roots = Roots::discovered(cwd);
+    let Some(config) = roots.config.clone() else {
+        return Err("no configuration directory to write a manifest in".to_owned());
+    };
+    let files: Vec<(std::path::PathBuf, String)> = balthasar_lua::installed(&roots)
+        .into_iter()
+        .filter_map(|path| {
+            std::fs::read_to_string(&path)
+                .ok()
+                .map(|source| (path, source))
+        })
+        .collect();
+    balthasar_lua::acknowledged::acknowledge(
+        &balthasar_lua::acknowledged::manifest_in(&config),
+        &files,
+    )?;
+    Ok(files.into_iter().map(|(path, _)| path).collect())
 }

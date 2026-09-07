@@ -44,6 +44,15 @@ case "$verbs" in
   *) bad "family" "the reply carries no contract revision" ;;
 esac
 
+# `surface` is the revision of what a *third party* writes against, which moves for different
+# reasons: adding a registrar or a field does not touch it, renaming or removing one does. Five
+# registrars were published, dead and unversioned for most of this project's life; a number that
+# a plugin can check is what closes that window deliberately rather than by accident.
+case "$verbs" in
+  *'"surface":'*) say "surface" "declares a registrar surface revision" ;;
+  *) bad "surface" "nothing says what a third party is writing against" ;;
+esac
+
 client=$("$prog" client 2>/dev/null || "$prog" lua-api 2>/dev/null || true)
 case "$client" in
   # A program whose surface is not reached from Lua still answers: "there is none, and here is

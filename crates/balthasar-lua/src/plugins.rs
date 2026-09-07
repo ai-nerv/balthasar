@@ -3,6 +3,17 @@
 //! neovim's model, unchanged: a runtimepath of roots, `plugin/` run at startup, `lua/` required
 //! on demand, `after/` last. Twenty years of real plugins have been written against it and most
 //! people arriving already know it. Deviating buys nothing and costs everyone the transfer.
+//!
+//! **This is the family's answer, and it was written here first.** Every sibling has the same
+//! roots in the same order now — `plugin/`, then installed packages under `pack/*/start/*`, then
+//! `after/`; see `FAMILY.md`. For a while it lived only here and was described as one program's
+//! arrangement, which meant the one program a person could extend by dropping a file in a
+//! directory was the one nobody would think to look at for it. The copies are copies on purpose:
+//! a shared crate between these repositories is the dependency the whole arrangement exists to
+//! prevent.
+//!
+//! The sandbox is what makes discovery safe to have. It applies in every sibling's VM now, so a
+//! file that arrives by being installed rather than by being named still cannot spawn a process.
 
 use std::path::{Path, PathBuf};
 
@@ -322,5 +333,58 @@ mod tests {
             given: None,
         });
         assert!(files.is_empty());
+    }
+}
+
+/// Every installed package file, as against the owner's own.
+///
+/// The distinction the trust manifest is about, and the one [`runtimepath`]'s boolean cannot
+/// carry: that says whether a file may *declare*, and both of these may. This says who wrote it.
+/// A file in your own `plugin/` directory is one you put there, and asking you to confirm your own
+/// configuration is a prompt nobody reads. A package under `site/pack/` arrived by being fetched
+/// and can change under you between one run and the next.
+///
+/// See [`crate::acknowledged`].
+#[must_use]
+pub fn installed(roots: &Roots) -> Vec<PathBuf> {
+    let Some(site) = &roots.site else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for package in packages(&site.join("pack")) {
+        out.extend(lua_files(&package.join("plugin")));
+    }
+    out
+}
+
+#[cfg(test)]
+mod installed_tests {
+    use super::*;
+    use balthasar_model::scratch::Scratch;
+
+    #[test]
+    fn only_what_came_from_site_counts_as_installed() {
+        let root = Scratch::new("balthasar-rtp", "installed");
+        let config = root.join("config");
+        let site = root.join("site");
+        for at in ["plugin/mine.lua", "after/plugin/also-mine.lua"] {
+            let path = config.join(at);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            std::fs::write(&path, "-- nothing\n").expect("write");
+        }
+        let theirs = site.join("pack/vendor/start/thing/plugin/theirs.lua");
+        std::fs::create_dir_all(theirs.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&theirs, "-- nothing\n").expect("write");
+
+        let roots = Roots {
+            config: Some(config),
+            site: Some(site),
+            project: None,
+            given: None,
+        };
+        assert_eq!(runtimepath(&roots).len(), 3, "all three are read");
+        let installed = installed(&roots);
+        assert_eq!(installed.len(), 1, "{installed:?}");
+        assert!(installed[0].ends_with("theirs.lua"));
     }
 }

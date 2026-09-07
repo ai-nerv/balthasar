@@ -108,6 +108,8 @@ enum What {
     Needs(coordinated::NeedsArgs),
     /// Take configuration from a coordinator, as Lua on stdin.
     Configure(coordinated::ConfigureArgs),
+    /// Acknowledge the installed packages, so their declarations may run.
+    Acknowledge(coordinated::AcknowledgeArgs),
     /// Carry what recurred across sessions into the project's memory. Shows first.
     Consolidate(consolidate::Args),
     /// Fade what has not been needed. Shows first; `--now` applies.
@@ -198,6 +200,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Some(What::Sessions(args)) => sessions::run(where_, &scope, &tool, args),
         Some(What::Needs(args)) => coordinated::needs(args),
         Some(What::Configure(args)) => coordinated::configure(args),
+        Some(What::Acknowledge(args)) => coordinated::acknowledge(args),
         Some(What::Consolidate(args)) => consolidate::run(where_, &scope, &tool, args, &mut loaded),
         Some(What::Decay(args)) => decay::run(where_, &scope, &tool, args),
         Some(What::Export(args)) => transfer::export(where_, &scope, &tool, args),

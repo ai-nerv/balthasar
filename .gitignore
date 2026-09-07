@@ -26,6 +26,6 @@ compile_commands.json
 
 # Stores a test run left behind. balthasar makes one wherever it is started, and the
 # repository is not where it belongs.
-/.store/
+/.store
 /magi/
 /balthasar/
