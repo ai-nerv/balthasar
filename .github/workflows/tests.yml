@@ -72,7 +72,7 @@ jobs:
               # attributable to one of them rather than to "the gates".
               */gate-no-llm.sh|*/gate-hermetic.sh) continue ;;
               # Needs a built binary rather than a grep over the source; its own step, below.
-              */gate-family.sh) continue ;;|*/gate-hermetic.sh) continue ;;
+              */gate-family.sh) continue ;;
             esac
             printf '\n== %s\n' "$g"
             nix develop --command "$g"
