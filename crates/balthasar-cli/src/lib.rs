@@ -141,8 +141,13 @@ enum What {
     /// Measure whether memory earns its place: does session k+1 stop rediscovering things.
     Eval(eval::Args),
     /// Print the client library another program loads to talk to balthasar.
-    #[command(name = "lua-api")]
+    ///
+    /// `client` is the family's name for it; `lua-api` is what this program called it first, and
+    /// both stay — see FAMILY.md.
+    #[command(name = "lua-api", alias = "client")]
     LuaApi,
+    /// Every verb this program answers, on each of its doors.
+    Verbs(coordinated::VerbsArgs),
 }
 
 /// Run, and answer with what the shell should exit on.
@@ -209,6 +214,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Some(What::Serve(args)) => serve::serve(where_, &scope, &tool, args, floors, &mut loaded),
         Some(What::Api(args)) => serve::api(where_, &scope, &tool, args, floors, &mut loaded),
         Some(What::Eval(args)) => eval::run(args),
+        Some(What::Verbs(args)) => coordinated::verbs(args),
         Some(What::LuaApi) => {
             serve::lua_api();
             Ok(())

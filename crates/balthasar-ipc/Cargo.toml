@@ -7,6 +7,7 @@ publish.workspace = true
 description = "balthasar's socket: the family's framing, and who is on the other end"
 
 [dependencies]
+ciborium.workspace = true
 rustix = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true

@@ -168,3 +168,58 @@ mod tests {
         assert_eq!(from_json, from_cbor, "one shape, two encodings");
     }
 }
+
+/// What `verbs` takes.
+#[derive(Debug, Parser)]
+pub struct VerbsArgs {
+    /// Answer in JSON. The default, and accepted so every sibling takes the same flags.
+    #[arg(long)]
+    pub json: bool,
+    /// Answer in CBOR rather than JSON.
+    #[arg(long)]
+    pub cbor: bool,
+}
+
+/// Every verb this program answers, on each of its doors.
+///
+/// **The command line half is read off clap rather than listed.** A hand-kept list is a second
+/// place for the surface to live, and the family contract's own rule — everything advertised is
+/// dispatched — is then a thing somebody has to remember rather than something that cannot be
+/// otherwise. Derived, it cannot drift: a subcommand that exists is advertised, and one that is
+/// advertised exists, because they are the same list.
+///
+/// The socket half is [`balthasar_host::SURFACE`], which is written out by hand for the
+/// opposite and equally good reason: reading that file tells you what a peer can ask of your
+/// memory, and a surface you have to run something to learn is one nobody audits.
+///
+/// # Errors
+/// When the answer cannot be written.
+pub fn verbs(args: &VerbsArgs) -> anyhow::Result<()> {
+    use clap::CommandFactory;
+
+    let mut listed: Vec<serde_json::Value> = crate::Cli::command()
+        .get_subcommands()
+        .map(|sub| {
+            serde_json::json!({
+                "verb": sub.get_name(),
+                "about": sub.get_about().map(|a| a.to_string()).unwrap_or_default(),
+                "door": "cli",
+            })
+        })
+        .collect();
+    listed.extend(balthasar_host::SURFACE.iter().map(|verb| {
+        serde_json::json!({
+            // `verb` is the family's field. `name` rides along for one revision because the
+            // socket has always answered with it and a reply is not worth breaking over a word.
+            "verb": verb.name,
+            "name": verb.name,
+            "about": verb.about,
+            "writes": verb.writes,
+            "door": "socket",
+        })
+    }));
+
+    let mut out = std::io::stdout().lock();
+    reply(&mut out, args.cbor, &listed);
+    Ok(())
+}

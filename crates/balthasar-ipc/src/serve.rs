@@ -125,29 +125,45 @@ impl Listener {
             }
 
             let _ = stream.set_read_timeout(Some(QUIET));
-            loop {
-                let body = match frame::recv(&mut stream) {
-                    Ok(body) => body,
-                    // Nothing said, and nothing half-said: the peer is still there and has
-                    // simply not asked for anything yet. Only a wait that began at a frame
-                    // boundary is resumable -- one that expired mid-frame has lost bytes the
-                    // next read would misread as a header.
-                    Err(frame::WireError::Idle) => continue,
-                    Err(_) => break,
-                };
-                let reply = match serde_json::from_slice::<Request>(&body) {
-                    Ok(request) => answer(&peer, request),
-                    Err(why) => Reply::refused(format!("that is not a request: {why}")),
-                };
-                let Ok(encoded) = serde_json::to_vec(&reply) else {
-                    break;
-                };
-                if frame::send(&mut stream, &encoded).is_err() {
-                    break;
-                }
-            }
+            converse(&mut stream, &peer, &mut answer);
         }
         Ok(())
+    }
+}
+
+/// Answer one connection's calls until it closes.
+///
+/// Split from the accept loop so that what happens *on* a connection can be tested without one:
+/// [`Listener::serve`] never returns by design, so a test that drove it through a real socket
+/// could set up the exchange and then had nothing to wait on.
+fn converse(
+    stream: &mut UnixStream,
+    peer: &Peer,
+    answer: &mut impl FnMut(&Peer, Request) -> Reply,
+) {
+    loop {
+        let body = match frame::recv(stream) {
+            Ok(body) => body,
+            // Nothing said, and nothing half-said: the peer is still there and has simply not
+            // asked for anything yet. Only a wait that began at a frame boundary is resumable --
+            // one that expired mid-frame has lost bytes the next read would misread as a header.
+            Err(frame::WireError::Idle) => continue,
+            Err(_) => break,
+        };
+        // Answered in the encoding it was asked in. Read from the body's first byte rather than
+        // negotiated, so a caller that has never heard of CBOR is unaffected and one that has
+        // needs to say nothing in advance.
+        let wire = crate::Wire::of(&body);
+        let reply = match wire.read::<Request>(&body) {
+            Ok(request) => answer(peer, request),
+            Err(why) => Reply::refused(format!("that is not a request: {why}")),
+        };
+        let Ok(encoded) = wire.write(&reply) else {
+            break;
+        };
+        if frame::send(stream, &encoded).is_err() {
+            break;
+        }
     }
 }
 
@@ -181,6 +197,48 @@ mod tests {
             path.display()
         );
         assert!(path.to_string_lossy().ends_with("api@default.sock"));
+    }
+
+    #[test]
+    fn a_connection_is_answered_in_whatever_it_was_asked_in() {
+        // Both encodings through the real connection loop, over a real socket. The property is
+        // not that CBOR encodes -- `encoding` settles that -- but that a server nobody told
+        // anything answers a CBOR caller in CBOR and a JSON caller in JSON, on one connection
+        // type, with no flag and no handshake between them.
+        use std::io::{Read, Write};
+
+        for wire in [crate::Wire::Json, crate::Wire::Cbor] {
+            let (mut client, mut server) = UnixStream::pair().expect("pair");
+            let peer = Peer::of(&server).expect("the kernel names us");
+
+            let serving = std::thread::spawn(move || {
+                let mut answer = |_p: &Peer, request: Request| {
+                    Reply::one(serde_json::json!(format!("heard {}", request.call)))
+                };
+                converse(&mut server, &peer, &mut answer);
+            });
+
+            let asked = wire
+                .write(&serde_json::json!({ "call": "verbs", "args": [] }))
+                .expect("encode");
+            let mut framed = (asked.len() as u32).to_be_bytes().to_vec();
+            framed.extend_from_slice(&asked);
+            client.write_all(&framed).expect("write");
+
+            let mut header = [0_u8; 4];
+            client.read_exact(&mut header).expect("header");
+            let mut body = vec![0_u8; u32::from_be_bytes(header) as usize];
+            client.read_exact(&mut body).expect("body");
+
+            assert_eq!(crate::Wire::of(&body), wire, "answered in another encoding");
+            let reply: serde_json::Value = wire.read(&body).expect("decode");
+            assert_eq!(reply["ok"], serde_json::json!(true));
+            assert_eq!(reply["result"][0], serde_json::json!("heard verbs"));
+
+            // Closing our end is what ends the conversation, which is what lets this join.
+            drop(client);
+            serving.join().expect("the server thread ended");
+        }
     }
 
     #[test]
