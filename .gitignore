@@ -23,3 +23,9 @@ __pycache__/
 compile_commands.json
 .complog
 .quickfix
+
+# Stores a test run left behind. balthasar makes one wherever it is started, and the
+# repository is not where it belongs.
+/.store/
+/magi/
+/balthasar/
