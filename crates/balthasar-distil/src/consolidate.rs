@@ -113,6 +113,7 @@ pub fn consolidate(
     // unchanged — what changed is that a claim gets to arrive at it in more than one wording.
     let groups = crate::merge(found)
         .into_iter()
+        .map(one_witness_per_session)
         .filter(|akin| akin.cluster.sessions.len() >= DISTINCT_SESSIONS);
 
     for akin in groups {
@@ -137,6 +138,29 @@ pub fn consolidate(
         }
     }
     Ok(report)
+}
+
+/// One session, one witness, however many agents of it said the thing.
+///
+/// A run's scratch is per agent now, so one claim reaches this from as many files as the run had
+/// subagents — and five subagents quoting each other are not five confirmations. They share a
+/// context, a prompt and usually each other's output, which is exactly the relationship CALLUS
+/// exists to look past: it counts *unrelated* runs.
+///
+/// The same reasoning the schema applies to `domain`, where ten sessions quoting one document
+/// count as one source — witness diversity is only diversity if the witnesses could disagree.
+/// Deliberately conservative: the cost of collapsing too far is a claim that waits for a third
+/// run, and the cost of not collapsing far enough is a project that promotes whatever one run
+/// with enough subagents said twice.
+fn one_witness_per_session(mut akin: crate::Akin) -> crate::Akin {
+    let mut distinct: Vec<SessionId> = Vec::with_capacity(akin.cluster.sessions.len());
+    for session in akin.cluster.sessions.drain(..) {
+        if !distinct.contains(&session) {
+            distinct.push(session);
+        }
+    }
+    akin.cluster.sessions = distinct;
+    akin
 }
 
 /// Carry one recurring claim into the project's own memory.
@@ -238,6 +262,46 @@ mod tests {
         // One session repeating a thing is a person being emphatic. Raising this would make a
         // memory layer that learns nothing from a project worked on twice.
         assert_eq!(DISTINCT_SESSIONS, 2);
+    }
+
+    fn cluster(sessions: &[&str]) -> crate::Akin {
+        crate::Akin {
+            cluster: balthasar_store::Cluster {
+                sources: Vec::new(),
+                text: "we always use make".to_owned(),
+                hash: balthasar_model::content_hash("we always use make"),
+                sessions: sessions.iter().map(|s| SessionId::new(*s)).collect(),
+                first_seen: 0,
+            },
+            near: false,
+        }
+    }
+
+    #[test]
+    fn five_agents_of_one_run_are_one_witness() {
+        // Scratch is per agent, so one claim arrives from as many files as the run had
+        // subagents. Counting those as five confirmations would promote whatever a single run
+        // with enough subagents said, and subagents of one run share a context and each other's
+        // output — they are the least independent witnesses there are.
+        let one = one_witness_per_session(cluster(&["01ONE", "01ONE", "01ONE", "01ONE", "01ONE"]));
+        assert_eq!(one.cluster.sessions.len(), 1);
+        assert!(
+            one.cluster.sessions.len() < DISTINCT_SESSIONS,
+            "and one run is not corroboration"
+        );
+    }
+
+    #[test]
+    fn two_runs_still_corroborate_however_many_agents_they_had() {
+        // The bar is unchanged. Collapsing agents must not collapse the thing the ladder is
+        // for: two unrelated runs that both saw it.
+        let two = one_witness_per_session(cluster(&["01ONE", "01TWO", "01ONE"]));
+        assert_eq!(
+            two.cluster.sessions,
+            vec![SessionId::new("01ONE"), SessionId::new("01TWO")],
+            "in the order they were first seen"
+        );
+        assert!(two.cluster.sessions.len() >= DISTINCT_SESSIONS);
     }
 
     #[test]

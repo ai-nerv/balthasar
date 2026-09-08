@@ -6,31 +6,26 @@
 //! person rather than to whichever project they last opened.
 //!
 //! ```text
-//! <project>/balthasar/<tool>/project.db          the checkout's memory, for that tool
-//! <project>/balthasar/<tool>/<session>/memory.db that run's scratch
-//! <project>/balthasar/<tool>/<session>/transcript.db
-//! ~/.local/share/balthasar/<tool>/global.db      yours, everywhere
+//! <project>/balthasar/<tool>/project.db                   the checkout's memory, for that tool
+//! <project>/balthasar/<tool>/<session>/<agent>/memory.db  that agent's scratch, in that run
+//! ~/.local/share/balthasar/<tool>/global.db               yours, everywhere
 //! ```
+//!
+//! **The agent segment goes no higher than scratch.** Several agents in one run keep separate
+//! scratch so that one subagent's working notes are not another's; `project.db` and the
+//! scrollback stay shared, because promotion from scratch to project fact is the whole ladder
+//! and a per-agent project store would reintroduce the amnesia the ladder exists to fix.
 //!
 //! Two rules hold here and are load-bearing elsewhere. **The store lives in the project**, so
 //! renaming a checkout moves its memory rather than orphaning it. And **every name that becomes
-//! a path component is validated**, because tool names arrive from the kernel and session names
-//! arrive from a harness: neither is this crate's to trust.
+//! a path component is validated**, because tool names arrive from the kernel while session and
+//! agent names arrive from a harness: none of them is this crate's to trust.
 
-use balthasar_model::{ScopeId, SessionId};
+use balthasar_model::{AgentId, ScopeId, SessionId};
 use std::path::{Path, PathBuf};
 
 /// The directory a project keeps its memory in.
 pub const HOME: &str = "balthasar";
-
-/// What marks one as balthasar's rather than a directory that happens to be called `balthasar`.
-///
-/// Without it, any directory containing a subdirectory named `balthasar` would be mistaken for a
-/// project root — including the parent of balthasar's own checkout, which is how this was found.
-const MARKER: &str = ".store";
-
-/// What goes in the marker: enough to tell a later layout that this is an earlier one.
-const MARKER_BODY: &str = "balthasar store layout 1\n";
 
 /// Kept out of a checkout by default. Sessions are churn and belong to whoever ran them; a
 /// project's own memory is a decision rather than a default, so it is offered commented out.
@@ -168,18 +163,23 @@ pub fn project_home(scope: &ScopeId) -> Option<PathBuf> {
 
 /// Whether `dir` is a store home rather than a directory that shares its name.
 fn is_home(dir: &Path) -> bool {
-    dir.join(MARKER).is_file()
+    crate::layout::is_home(dir)
 }
 
 /// Create a store home, marking it and keeping it out of the checkout.
 ///
 /// Idempotent, and never overwrites an existing `.gitignore`: whether to commit `project.db` is
 /// a decision, and having made it once it should not be unmade by the next write.
+///
+/// It never rewrites an existing marker either, and that is the stronger rule of the two: the
+/// marker says which layout a tree is in, and a function that runs on the way into every store
+/// must not be what relabels an old tree as a new one. Moving a tree forward is
+/// [`crate::layout`]'s, and it says so by writing the marker itself.
 pub fn make_home(home: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(home)?;
-    let marker = home.join(MARKER);
+    let marker = home.join(crate::layout::MARKER);
     if !marker.exists() {
-        std::fs::write(&marker, MARKER_BODY)?;
+        std::fs::write(&marker, crate::layout::marker_body())?;
     }
     let ignore = home.join(".gitignore");
     if !ignore.exists() {
@@ -200,34 +200,34 @@ pub fn scope_path(scope: &ScopeId, tool: &Tool) -> PathBuf {
     home_of(scope).join(tool.as_str()).join("project.db")
 }
 
-/// The directory holding one run's scratch and scrollback.
+/// The directory holding one agent's scratch, in one run.
 #[must_use]
-pub fn session_dir(scope: &ScopeId, tool: &Tool, session: &SessionId) -> PathBuf {
-    session_dir_in(&home_of(scope).join(tool.as_str()), session)
+pub fn session_dir(scope: &ScopeId, tool: &Tool, session: &SessionId, agent: &AgentId) -> PathBuf {
+    session_dir_in(&home_of(scope).join(tool.as_str()), session, agent)
 }
 
-/// One run.s directory under a tool.s home.
+/// One agent's directory under a tool's home.
 ///
-/// The half a scratchpad needs: it holds one tool.s home and opens runs beneath it, without
+/// The half a scratchpad needs: it holds one tool's home and opens runs beneath it, without
 /// having to carry a scope around to recompute what it already knows.
 #[must_use]
-pub fn session_dir_in(home: &Path, session: &SessionId) -> PathBuf {
-    home.join(session_stem(session.as_str()))
+pub fn session_dir_in(home: &Path, session: &SessionId, agent: &AgentId) -> PathBuf {
+    run_dir_in(home, session).join(path_stem(agent.as_str()))
 }
 
-/// One run's scratch.
-#[must_use]
-pub fn session_path(scope: &ScopeId, tool: &Tool, session: &SessionId) -> PathBuf {
-    session_dir(scope, tool, session).join("memory.db")
-}
-
-/// One run's scrollback.
+/// One whole run's directory under a tool's home, every agent of it included.
 ///
-/// Beside that run's scratch and never inside it: a transcript is orders of magnitude larger
-/// than the memories distilled from it, and sharing a file would make every recall walk past it.
+/// What forgetting a run removes. A person who says "forget that session" means all of it, and
+/// an agent is a subdivision of a run rather than something that outlives one.
 #[must_use]
-pub fn session_transcript_path(scope: &ScopeId, tool: &Tool, session: &SessionId) -> PathBuf {
-    session_dir(scope, tool, session).join("transcript.db")
+pub fn run_dir_in(home: &Path, session: &SessionId) -> PathBuf {
+    home.join(path_stem(session.as_str()))
+}
+
+/// One agent's scratch.
+#[must_use]
+pub fn session_path(scope: &ScopeId, tool: &Tool, session: &SessionId, agent: &AgentId) -> PathBuf {
+    session_dir(scope, tool, session, agent).join("memory.db")
 }
 
 /// Which tools have durable memory in `scope`, in a stable order.
@@ -255,14 +255,15 @@ pub fn tools_in(scope: &ScopeId) -> Vec<Tool> {
     found
 }
 
-/// A session name as a directory name.
+/// A harness-supplied name as a directory name.
 ///
-/// Session identities come from a harness, so this is a boundary rather than a nicety: `..` is
-/// a name a harness could reasonably produce and must never become a path component. A name
-/// that survives intact is used as it is, and one that does not carries a digest so two mangled
-/// names do not land on one directory.
-fn session_stem(session: &str) -> String {
-    let safe: String = session
+/// Both segments of a run's path go through here — the session and the agent — because both
+/// come from a harness, and that is a different trust class from [`Tool`], whose name the
+/// kernel supplies. `..` is a name a harness could reasonably produce for either and must never
+/// become a path component. A name that survives intact is used as it is, and one that does not
+/// carries a digest so two mangled names do not land on one directory.
+fn path_stem(name: &str) -> String {
+    let safe: String = name
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
@@ -273,11 +274,11 @@ fn session_stem(session: &str) -> String {
         })
         .take(64)
         .collect();
-    let usable = safe == session && !safe.is_empty() && safe != "." && safe != "..";
+    let usable = safe == name && !safe.is_empty() && safe != "." && safe != "..";
     if usable {
         return safe;
     }
-    let digest = balthasar_model::content_hash(session);
+    let digest = balthasar_model::content_hash(name);
     let head: String = safe.chars().filter(|c| *c != '-').take(16).collect();
     if head.is_empty() {
         format!("session-{}", &digest[..12])
@@ -466,7 +467,7 @@ mod tests {
         // A session identity is whatever a harness calls its run. `..` is a name a harness
         // could plausibly produce and must never become a path component.
         for hostile in ["..", ".", "../../etc", "a/b"] {
-            let stem = session_stem(hostile);
+            let stem = path_stem(hostile);
             assert!(!stem.contains('/'), "{hostile} -> {stem}");
             assert_ne!(stem, "..", "{hostile}");
             assert_ne!(stem, ".", "{hostile}");
@@ -474,15 +475,33 @@ mod tests {
     }
 
     #[test]
+    fn an_agent_name_is_held_to_the_same_boundary_as_a_session_name() {
+        // An agent name arrives from the same place a session name does — a harness — so it
+        // belongs to that trust class and not to `Tool`'s, which the kernel supplies. A
+        // subagent called `..` must not be able to write into the run above it.
+        let home = Path::new("/w/p/balthasar/harness");
+        let run = SessionId::new("01K5X8ZQ");
+        let hostile = session_dir_in(home, &run, &AgentId::new("../../etc"));
+
+        assert_eq!(
+            hostile.parent(),
+            Some(run_dir_in(home, &run).as_path()),
+            "it stayed inside its run: {hostile:?}"
+        );
+        let leaf = hostile.file_name().expect("a name").to_string_lossy();
+        assert!(leaf != ".." && leaf != "." && !leaf.contains('/'), "{leaf}");
+    }
+
+    #[test]
     fn two_mangled_session_names_do_not_share_a_directory() {
         // Without the digest, every unusual name would collapse onto one directory and two
         // runs would overwrite each other's scrollback.
-        assert_ne!(session_stem("a/b"), session_stem("a:b"));
+        assert_ne!(path_stem("a/b"), path_stem("a:b"));
     }
 
     #[test]
     fn an_ordinary_session_name_is_left_alone() {
-        assert_eq!(session_stem("01K5X8ZQ"), "01K5X8ZQ");
+        assert_eq!(path_stem("01K5X8ZQ"), "01K5X8ZQ");
     }
 
     #[test]
@@ -646,27 +665,34 @@ mod tests {
     }
 
     #[test]
-    fn a_run_keeps_its_scratch_and_its_scrollback_in_one_directory() {
-        // So that deleting one run is deleting one directory.
+    fn every_agent_of_a_run_keeps_its_scratch_under_that_run() {
+        // So that deleting one run is still deleting one directory, however many agents it
+        // had, and so that one subagent's working notes are not another's.
         let scope = ScopeId::new("/balthasar-no-such-root-9f3a/p");
         let tool = Tool::default();
         let run = SessionId::new("01K5X8ZQ");
-        let dir = session_dir(&scope, &tool, &run);
+        let one = session_dir(&scope, &tool, &run, &AgentId::main());
+        let two = session_dir(&scope, &tool, &run, &AgentId::new("reviewer"));
 
-        assert_eq!(session_path(&scope, &tool, &run), dir.join("memory.db"));
+        assert_ne!(one, two, "two agents, two directories");
+        assert_eq!(one.parent(), two.parent(), "and one run above them");
         assert_eq!(
-            session_transcript_path(&scope, &tool, &run),
-            dir.join("transcript.db")
+            session_path(&scope, &tool, &run, &AgentId::main()),
+            one.join("memory.db")
         );
     }
 
     #[test]
-    fn a_session_directory_sits_beside_the_project_store_it_promotes_into() {
+    fn a_run_directory_sits_beside_the_project_store_it_promotes_into() {
+        // The project's store is shared by every agent of every run: promotion from scratch to
+        // a project fact is the ladder, and a per-agent project store would have none.
         let scope = ScopeId::new("/balthasar-no-such-root-9f3a/p");
         let tool = Tool::default();
         let run = SessionId::new("01K5X8ZQ");
         assert_eq!(
-            session_dir(&scope, &tool, &run).parent(),
+            session_dir(&scope, &tool, &run, &AgentId::main())
+                .parent()
+                .and_then(Path::parent),
             scope_path(&scope, &tool).parent()
         );
     }

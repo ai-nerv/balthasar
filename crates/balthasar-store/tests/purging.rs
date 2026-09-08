@@ -7,8 +7,8 @@
 use balthasar_model::scratch::Scratch;
 
 use balthasar_model::{
-    Body, Derivation, Family, Memory, NoteKind, Relation, ScopeId, SessionId, Tier, View, Witness,
-    WitnessId, WitnessKind,
+    AgentId, Body, Derivation, Family, Memory, NoteKind, Relation, ScopeId, SessionId, Tier, View,
+    Witness, WitnessId, WitnessKind,
 };
 use balthasar_store::{Reach, Recall, Store, mint};
 
@@ -382,7 +382,7 @@ fn forgetting_a_run_closes_all_three_of_its_hiding_places() {
             NOW,
         );
         scratch.session = Some(session.clone());
-        pad.of(session)
+        pad.of(session, &AgentId::main())
             .expect("scratch")
             .keep_scratch(scratch)
             .expect("keep");
@@ -400,13 +400,62 @@ fn forgetting_a_run_closes_all_three_of_its_hiding_places() {
         "what it said is gone"
     );
     assert!(
-        !pad.path_of(&doomed).exists(),
+        !pad.path_of(&doomed, &AgentId::main()).exists(),
         "and what it thought but never promoted is gone with it"
     );
 
     // The neighbour is untouched, which is the half a purge gets wrong by being too eager.
     assert_eq!(held.replay(&bystander).expect("replay").len(), 1);
-    assert!(pad.path_of(&bystander).is_file());
+    assert!(pad.path_of(&bystander, &AgentId::main()).is_file());
+}
+
+#[test]
+fn forgetting_a_run_takes_every_agent_of_it() {
+    // A run has as many scratch files as it had subagents, and the person saying "forget that
+    // session" means the run. Removing the directory one file happened to sit in would leave
+    // every sibling's copy of the same pasted key on disk — which is the answer this whole
+    // file exists to make impossible.
+    let home = Scratch::new("balthasar-forget", "agents");
+    let doomed = SessionId::new("01DOOMED");
+    let bystander = SessionId::new("01SAFE");
+    let mut pad = balthasar_store::Scratchpad::at(home.to_path_buf());
+
+    for (session, agent) in [
+        (&doomed, "main"),
+        (&doomed, "reviewer"),
+        (&doomed, "tester"),
+        (&bystander, "main"),
+    ] {
+        let mut scratch = Memory::new(
+            mint(NOW),
+            Tier::Scratch,
+            scope(),
+            Body::note(SECRET, NoteKind::Observation),
+            NOW,
+        );
+        scratch.session = Some(session.clone());
+        pad.of(session, &AgentId::new(agent))
+            .expect("scratch")
+            .keep_scratch(scratch)
+            .expect("keep");
+    }
+    assert_eq!(pad.agents_of(&doomed).len(), 3, "three agents wrote");
+
+    assert!(balthasar_store::purge_scratch(&mut pad, &doomed).expect("scratch"));
+
+    assert!(
+        pad.agents_of(&doomed).is_empty(),
+        "no agent of that run kept a copy"
+    );
+    assert!(
+        !balthasar_store::run_dir_in(&home, &doomed).exists(),
+        "and the run's whole directory went with it"
+    );
+    assert_eq!(
+        pad.agents_of(&bystander),
+        vec![AgentId::main()],
+        "the neighbouring run is untouched"
+    );
 }
 
 #[test]

@@ -3,8 +3,8 @@
 use crate::{Door, verbs};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{
-    Body, Memory, MemoryId, NoteKind, ScopeId, SessionId, Tier, Timestamp, Witness, WitnessId,
-    WitnessKind,
+    AgentId, Body, Memory, MemoryId, NoteKind, ScopeId, SessionId, Tier, Timestamp, Witness,
+    WitnessId, WitnessKind,
 };
 use balthasar_store::{Recall, Store, mint};
 
@@ -27,6 +27,17 @@ pub struct Answering<'a> {
     pub scratch: Option<&'a mut balthasar_store::Scratchpad>,
     /// Which project.
     pub scope: ScopeId,
+    /// Which agent inside a run this connection belongs to.
+    ///
+    /// **Pinned here and never a call argument.** It is fixed when the connection is accepted,
+    /// the same way [`Tool`] is, and for the same reason: a name a caller could vary per call
+    /// is a name a caller can vary to somebody else's, and reading a sibling subagent's scratch
+    /// by asking for it is the whole of what the agent dimension is supposed to prevent. A
+    /// harness that names no agent gets [`AgentId::main`], which is one directory per run and
+    /// exactly the arrangement that existed before agents did.
+    ///
+    /// [`Tool`]: balthasar_store::Tool
+    pub agent: AgentId,
     /// The moment.
     pub now: Timestamp,
     /// Where assertion begins.
@@ -51,8 +62,11 @@ impl Answering<'_> {
         &mut self,
         session: &SessionId,
     ) -> Result<&mut Store, balthasar_store::StoreError> {
+        // The pinned agent, taken from this connection rather than from the call: which file a
+        // write lands in is not something the caller gets to say.
+        let agent = self.agent.clone();
         match self.scratch.as_mut() {
-            Some(pad) => pad.of(session),
+            Some(pad) => pad.of(session, &agent),
             None => Ok(self.store),
         }
     }
@@ -171,8 +185,11 @@ fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
         .and_then(serde_json::Value::as_str)
         .map(SessionId::new)
     {
+        // This agent's own scratch and no sibling's. A subagent that could search the scratch
+        // of the others in its run would have the separation on disk and none in the answers.
+        let agent = at.agent.clone();
         let own = match at.scratch.as_mut() {
-            Some(pad) => pad.peek(&run).and_then(|held| match held {
+            Some(pad) => pad.peek(&run, &agent).and_then(|held| match held {
                 Some(store) => store.recall(&ask),
                 None => Ok(Vec::new()),
             }),
@@ -527,10 +544,11 @@ fn forget_run(at: &mut Answering<'_>, door: &Door, handle: &str, purge: bool) ->
     // nothing — the caller's next move is to stop looking for the run it meant.
     let known = turns > 0
         || !promoted.is_empty()
+        // Any agent of it, because a run one subagent wrote scratch for is a run that happened.
         || at
             .scratch
-            .as_mut()
-            .is_some_and(|pad| pad.path_of(&session).is_file());
+            .as_ref()
+            .is_some_and(|pad| !pad.agents_of(&session).is_empty());
     if !known {
         return Reply::refused(format!("no run called '{handle}'"));
     }
@@ -584,10 +602,20 @@ fn archive_run(
     let mut archived = 0;
     let mut left = 0;
 
-    if let Some(Ok(Some(own))) = at.scratch.as_mut().map(|pad| pad.peek(session)) {
-        for id in own.owned_by(session).unwrap_or_default() {
-            if own.archive(&id, now).is_ok() {
-                archived += 1;
+    // Every agent of the run, not only the one asking. Archiving a run is a statement about the
+    // run, and one that left a sibling subagent's scratch asserting itself would have stopped
+    // half of what somebody asked to be stopped.
+    let agents = at
+        .scratch
+        .as_ref()
+        .map(|pad| pad.agents_of(session))
+        .unwrap_or_default();
+    for agent in &agents {
+        if let Some(Ok(Some(own))) = at.scratch.as_mut().map(|pad| pad.peek(session, agent)) {
+            for id in own.owned_by(session).unwrap_or_default() {
+                if own.archive(&id, now).is_ok() {
+                    archived += 1;
+                }
             }
         }
     }

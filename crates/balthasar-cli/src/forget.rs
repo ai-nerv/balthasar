@@ -147,7 +147,12 @@ fn run_session(
             archived += 1;
         }
         let mut pad = balthasar_store::Scratchpad::at(crate::runs_under(store_path, scope, tool));
-        if let Some(own) = pad.peek(&session)? {
+        // Every agent of the run. Archiving what one subagent thought and leaving its siblings
+        // asserting the same thing is half an answer to "stop asserting what that run learned".
+        for agent in pad.agents_of(&session) {
+            let Some(own) = pad.peek(&session, &agent)? else {
+                continue;
+            };
             for id in own.owned_by(&session)? {
                 own.archive(&id, at)?;
                 archived += 1;

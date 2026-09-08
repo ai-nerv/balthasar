@@ -60,7 +60,7 @@ fn planted(at: &Path, session: &SessionId) -> (PathBuf, PathBuf, PathBuf) {
         NOW,
     );
     scratch.session = Some(session.clone());
-    pad.of(session)
+    pad.of(session, &balthasar_model::AgentId::main())
         .expect("pad")
         .keep_scratch(scratch)
         .expect("keep");

@@ -50,6 +50,7 @@ macro_rules! text_id {
 text_id!(MemoryId, "One memory, anywhere in the store.");
 text_id!(WitnessId, "One piece of evidence for one memory.");
 text_id!(SessionId, "One run of a harness, as that harness names it.");
+text_id!(AgentId, "One agent inside a run, as that harness names it.");
 text_id!(
     ScopeId,
     "Which store a memory lives in. `global`, or a stable name for a project."
@@ -66,6 +67,29 @@ impl ScopeId {
     #[must_use]
     pub fn is_global(&self) -> bool {
         self.as_str() == "global"
+    }
+}
+
+impl AgentId {
+    /// The one every run has, and the one an older store's scratch was written by.
+    ///
+    /// Reserved: a harness naming its own agent `main` is naming this one, which is the answer
+    /// a person would expect and the only one that keeps a migrated tree readable.
+    pub const MAIN: &'static str = "main";
+
+    /// The agent a run belongs to when nothing says otherwise.
+    ///
+    /// A harness that has never heard of subagents keeps one directory per run, as it did
+    /// before there was an agent dimension at all.
+    #[must_use]
+    pub fn main() -> Self {
+        Self::new(Self::MAIN)
+    }
+}
+
+impl Default for AgentId {
+    fn default() -> Self {
+        Self::main()
     }
 }
 
@@ -113,6 +137,14 @@ mod tests {
         let a = MemoryId::minted(1_700_000_000_000, 1);
         let b = MemoryId::minted(1_700_000_000_000, 2);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_run_with_nothing_said_about_agents_belongs_to_main() {
+        // What every store written before there was an agent dimension is migrated into, so
+        // the name has to keep meaning the same thing.
+        assert_eq!(AgentId::default(), AgentId::main());
+        assert_eq!(AgentId::main().as_str(), "main");
     }
 
     #[test]

@@ -103,19 +103,22 @@ impl Store {
 /// The third place a run lives. Its memories are in the project store, its turns are in the
 /// scrollback, and everything it thought but never promoted is in a directory of its own —
 /// which is where a pasted key would still be sitting after the other two were cleared.
+///
+/// **The run's directory, not one agent's.** This used to take the parent of one scratch file,
+/// which was the run's directory when a run had exactly one file and is one subagent's the
+/// moment it has several — so "forget that session" would have left every other agent's copy
+/// of the key on disk. A run is the unit somebody forgets; an agent is a subdivision of one.
 pub fn purge_scratch(
     pad: &mut crate::Scratchpad,
     session: &balthasar_model::SessionId,
 ) -> Result<bool, StoreError> {
-    let path = pad.path_of(session);
-    let Some(dir) = path.parent() else {
-        return Ok(false);
-    };
+    let dir = crate::run_dir_in(pad.home(), session);
     if !dir.is_dir() {
         return Ok(false);
     }
-    // Before removing the file, not after: an open connection to a file that has stopped
-    // existing is a store that answers questions out of a deleted inode.
+    // Before removing the files, not after: an open connection to a file that has stopped
+    // existing is a store that answers questions out of a deleted inode. Every agent of the
+    // run, because every one of their files is about to stop existing.
     pad.close(session);
     std::fs::remove_dir_all(dir).map_err(|why| StoreError::Foreign(why.to_string()))?;
     Ok(true)

@@ -1,34 +1,47 @@
-//! One run's scratch, in its own file.
+//! One agent's scratch, in its own file.
 //!
 //! A session's memories are the session's own until something on the ladder carries them
 //! across, so they live in that run's directory rather than as rows in the project's store
 //! wearing a `session` column. What that buys is deletion: removing one run is removing one
 //! directory, and it takes the scrollback with it.
 //!
+//! **The agent is the second half of the key.** Several agents work inside one run, and one
+//! subagent's working notes are not another's to read — so scratch is `<session>/<agent>` and
+//! an agent's identity is pinned to its connection rather than passed per call. What the agents
+//! of a run share is the project's store, which is the ladder: scratch is private, a promoted
+//! fact is everybody's.
+//!
 //! What it costs is that promotion crosses a database boundary, which is [`Scratchpad::carry`].
 //! There is no transaction spanning the two files and there does not need to be — see the note
 //! there.
 
 use crate::{Store, StoreError};
-use balthasar_model::SessionId;
+use balthasar_model::{AgentId, SessionId};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Every run's scratch under one tool's home, opened as it is needed.
+/// Every agent's scratch under one tool's home, opened as it is needed.
 ///
 /// Held open for as long as the process is: a session writes many times, and reopening the file
 /// per turn would be paying SQLite's setup cost for nothing.
 pub struct Scratchpad {
     home: PathBuf,
-    open: HashMap<SessionId, Store>,
+    open: HashMap<(SessionId, AgentId), Store>,
 }
 
 impl Scratchpad {
     /// Scratch beneath a tool's home — `<project>/balthasar/<tool>`.
+    ///
+    /// Brings an older tree forward on the way in, which is the only moment anything looks at
+    /// the whole of it. A failure to move leaves every file where it is rather than half a
+    /// tree in each shape: the scratch is then invisible until the next process tries again,
+    /// which is recoverable, and losing it is not.
     #[must_use]
     pub fn at(home: impl Into<PathBuf>) -> Self {
+        let home = home.into();
+        let _ = crate::layout::bring_forward(&home);
         Self {
-            home: home.into(),
+            home,
             open: HashMap::new(),
         }
     }
@@ -39,60 +52,97 @@ impl Scratchpad {
         &self.home
     }
 
-    /// Where `session` keeps its scratch.
+    /// Where one agent of `session` keeps its scratch.
     #[must_use]
-    pub fn path_of(&self, session: &SessionId) -> PathBuf {
-        crate::session_dir_in(&self.home, session).join("memory.db")
+    pub fn path_of(&self, session: &SessionId, agent: &AgentId) -> PathBuf {
+        crate::session_dir_in(&self.home, session, agent).join("memory.db")
     }
 
-    /// The store holding `session`'s scratch, creating it if this is that run's first write.
+    /// The store holding this agent's scratch, creating it on its first write.
     ///
     /// Creation is deliberately here and not at session start: a harness that opens a session
     /// and says nothing should leave nothing behind, and an `balthasar/` tree full of empty
     /// directories is what the alternative looks like after a week.
-    pub fn of(&mut self, session: &SessionId) -> Result<&mut Store, StoreError> {
-        if !self.open.contains_key(session) {
-            let store = Store::open(&self.path_of(session))?;
-            self.open.insert(session.clone(), store);
+    pub fn of(&mut self, session: &SessionId, agent: &AgentId) -> Result<&mut Store, StoreError> {
+        let key = (session.clone(), agent.clone());
+        if !self.open.contains_key(&key) {
+            let store = Store::open(&self.path_of(session, agent))?;
+            self.open.insert(key.clone(), store);
         }
         self.open
-            .get_mut(session)
+            .get_mut(&key)
             .ok_or_else(|| StoreError::Foreign("session".to_owned()))
     }
 
-    /// The store holding `session`'s scratch, if that run has ever written.
+    /// The store holding this agent's scratch, if it has ever written.
     ///
     /// For readers. A recall must not bring a run's directory into being merely by looking for
     /// it, which is what [`Scratchpad::of`] would do.
-    pub fn peek(&mut self, session: &SessionId) -> Result<Option<&mut Store>, StoreError> {
-        if !self.open.contains_key(session) && !self.path_of(session).is_file() {
+    pub fn peek(
+        &mut self,
+        session: &SessionId,
+        agent: &AgentId,
+    ) -> Result<Option<&mut Store>, StoreError> {
+        let key = (session.clone(), agent.clone());
+        if !self.open.contains_key(&key) && !self.path_of(session, agent).is_file() {
             return Ok(None);
         }
-        self.of(session).map(Some)
+        self.of(session, agent).map(Some)
     }
 
-    /// Let go of a run's store, so its file can be moved or removed.
+    /// Every agent that has left scratch behind in one run, in a stable order.
+    ///
+    /// From the directory rather than from a register, so an agent this process has never
+    /// spoken to is still found. Names that had to be mangled to be directories come back
+    /// mangled — enough to open the file, which is what every caller wants them for.
+    #[must_use]
+    pub fn agents_of(&self, session: &SessionId) -> Vec<AgentId> {
+        let Ok(entries) = std::fs::read_dir(crate::run_dir_in(&self.home, session)) else {
+            return Vec::new();
+        };
+        let mut found: Vec<AgentId> = entries
+            .flatten()
+            .filter(|e| e.path().join("memory.db").is_file())
+            .map(|e| AgentId::new(e.file_name().to_string_lossy().into_owned()))
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// Let go of every store a run has open, so its files can be moved or removed.
     ///
     /// Only [`purge`](crate::purge) has reason to call this: an open connection to a file that
-    /// is about to stop existing would hand the next caller a store backed by nothing.
+    /// is about to stop existing would hand the next caller a store backed by nothing. Every
+    /// agent of the run, because forgetting a run forgets all of it.
     pub(crate) fn close(&mut self, session: &SessionId) {
-        self.open.remove(session);
+        self.open.retain(|(held, _), _| held != session);
     }
 
-    /// Every run that has left scratch behind, oldest first.
+    /// Every scratch file under this home, oldest first.
     ///
-    /// Directory names are session names that survived being one, so this is the listing and
+    /// **Two levels, run then agent.** The layout gained an agent segment and this walk did
+    /// not, so it looked for `<session>/memory.db`, found none, and returned an empty vector —
+    /// `Ok`-shaped emptiness, not an error. Everything downstream reads this: decay, sweeping
+    /// and corroboration all stopped and every one of them reported success.
+    ///
+    /// Directory names are harness names that survived being one, so this is the listing and
     /// not the identities: a name that had to be mangled to be a directory cannot be turned
     /// back. Callers that need the identity open the store and read its session rows.
     #[must_use]
     pub fn runs(&self) -> Vec<PathBuf> {
-        let Ok(entries) = std::fs::read_dir(&self.home) else {
+        let Ok(runs) = std::fs::read_dir(&self.home) else {
             return Vec::new();
         };
-        let mut found: Vec<PathBuf> = entries
+        let mut found: Vec<PathBuf> = runs
             .flatten()
-            .map(|e| e.path().join("memory.db"))
-            .filter(|p| p.is_file())
+            .filter_map(|run| std::fs::read_dir(run.path()).ok())
+            .flat_map(|agents| {
+                agents
+                    .flatten()
+                    .map(|agent| agent.path().join("memory.db"))
+                    .filter(|path| path.is_file())
+                    .collect::<Vec<_>>()
+            })
             .collect();
         found.sort();
         found
@@ -275,8 +325,12 @@ mod tests {
     }
 
     fn kept(pad: &mut Scratchpad, run: &SessionId, text: &str) -> Memory {
+        kept_by(pad, run, &AgentId::main(), text)
+    }
+
+    fn kept_by(pad: &mut Scratchpad, run: &SessionId, agent: &AgentId, text: &str) -> Memory {
         let held = note(text, run);
-        let store = pad.of(run).expect("open");
+        let store = pad.of(run, agent).expect("open");
         store
             .remember(held.clone(), said_by(run), NOW)
             .expect("remember");
@@ -291,8 +345,11 @@ mod tests {
         let mut pad = Scratchpad::at(home.to_path_buf());
         let quiet = SessionId::new("01K5X8");
 
-        assert!(pad.peek(&quiet).expect("peek").is_none());
-        assert!(!pad.path_of(&quiet).exists(), "looking did not create it");
+        assert!(pad.peek(&quiet, &AgentId::main()).expect("peek").is_none());
+        assert!(
+            !pad.path_of(&quiet, &AgentId::main()).exists(),
+            "looking did not create it"
+        );
         assert!(pad.runs().is_empty());
     }
 
@@ -303,7 +360,7 @@ mod tests {
         let run = SessionId::new("01K5X8");
         kept(&mut pad, &run, "it deploys to fly");
 
-        assert!(pad.path_of(&run).is_file());
+        assert!(pad.path_of(&run, &AgentId::main()).is_file());
         assert_eq!(pad.runs().len(), 1);
     }
 
@@ -318,11 +375,100 @@ mod tests {
         kept(&mut pad, &one, "mine");
         kept(&mut pad, &two, "theirs");
 
-        assert_ne!(pad.path_of(&one), pad.path_of(&two));
+        assert_ne!(
+            pad.path_of(&one, &AgentId::main()),
+            pad.path_of(&two, &AgentId::main())
+        );
         assert_eq!(pad.runs().len(), 2);
 
-        std::fs::remove_dir_all(crate::session_dir_in(&home, &one)).expect("rm");
+        std::fs::remove_dir_all(crate::run_dir_in(&home, &one)).expect("rm");
         assert_eq!(pad.runs().len(), 1, "the neighbour survived");
+    }
+
+    #[test]
+    fn two_agents_of_one_run_do_not_share_a_file() {
+        // The isolation the agent segment is for. One subagent's working notes are not
+        // another's to read, and both of them are still one run to forget.
+        let home = scratch("two-agents");
+        let mut pad = Scratchpad::at(home.to_path_buf());
+        let run = SessionId::new("01K5X8");
+        let reader = AgentId::new("reader");
+        let writer = AgentId::new("writer");
+        kept_by(&mut pad, &run, &reader, "mine");
+        kept_by(&mut pad, &run, &writer, "theirs");
+
+        assert_ne!(pad.path_of(&run, &reader), pad.path_of(&run, &writer));
+        assert_eq!(pad.agents_of(&run), vec![reader.clone(), writer]);
+        assert_eq!(
+            pad.of(&run, &reader)
+                .expect("open")
+                .all()
+                .expect("all")
+                .len(),
+            1,
+            "an agent reads its own scratch and no other's"
+        );
+    }
+
+    #[test]
+    fn every_agent_of_every_run_is_a_run_to_consolidate() {
+        // The walk this had to gain, and the one whose absence is silent: the layout put an
+        // agent between a run and its file, so a one-level walk found nothing, returned an
+        // empty vector, and decay, sweeping and corroboration all stopped while reporting
+        // success. Two levels, and the count is the whole assertion.
+        let home = scratch("two-levels");
+        let mut pad = Scratchpad::at(home.to_path_buf());
+        let agents = [AgentId::main(), AgentId::new("reviewer")];
+        for run in ["01ONE", "01TWO", "01THREE"] {
+            for agent in &agents {
+                kept_by(&mut pad, &SessionId::new(run), agent, "it deploys to fly");
+            }
+        }
+
+        assert_eq!(pad.runs().len(), 6, "three runs of two agents each");
+        assert!(pad.runs().iter().all(|path| path.is_file()));
+        assert_eq!(
+            pad.weaken_all(NOW + 365 * 24 * 60 * 60).expect("weaken"),
+            6,
+            "decay reached every one of them"
+        );
+        assert!(
+            !pad.recurring("/w/p", 2, 0, 16)
+                .expect("recurring")
+                .is_empty(),
+            "and the ladder can see across them"
+        );
+    }
+
+    #[test]
+    fn a_run_written_before_agents_existed_is_still_found() {
+        // Migration through the door every caller comes in by. An old tree is one file per
+        // run; opening a scratchpad over it moves each into `main`, and the scratch a person
+        // wrote last week is readable this week rather than invisible.
+        let home = scratch("older-tree");
+        let old = home.join("01K5X8");
+        std::fs::create_dir_all(&old).expect("mkdir");
+        {
+            let mut store = Store::open(&old.join("memory.db")).expect("open");
+            let held = note("the deploy target is fly.io", &SessionId::new("01K5X8"));
+            store
+                .remember(held, said_by(&SessionId::new("01K5X8")), NOW)
+                .expect("remember");
+        }
+
+        let mut pad = Scratchpad::at(home.to_path_buf());
+        let run = SessionId::new("01K5X8");
+        assert_eq!(pad.runs().len(), 1, "the old file was brought forward");
+        assert_eq!(
+            pad.peek(&run, &AgentId::main())
+                .expect("peek")
+                .expect("it wrote before")
+                .all()
+                .expect("all")
+                .len(),
+            1,
+            "and it is the same scratch, not a new empty file"
+        );
     }
 
     #[test]
@@ -333,7 +479,7 @@ mod tests {
         let mut project = Store::ephemeral().expect("open");
         let held = kept(&mut pad, &run, "the deploy target is fly.io");
 
-        let store = pad.of(&run).expect("open");
+        let store = pad.of(&run, &AgentId::main()).expect("open");
         Scratchpad::carry(&mut project, store, held, said_by(&run), NOW).expect("carry");
 
         let landed = project.all().expect("all");
@@ -350,11 +496,11 @@ mod tests {
         let mut project = Store::ephemeral().expect("open");
         let held = kept(&mut pad, &run, "the deploy target is fly.io");
 
-        let store = pad.of(&run).expect("open");
+        let store = pad.of(&run, &AgentId::main()).expect("open");
         assert_eq!(store.uncrossed(&run).expect("uncrossed").len(), 1);
         Scratchpad::carry(&mut project, store, held, said_by(&run), NOW).expect("carry");
         assert!(
-            pad.of(&run)
+            pad.of(&run, &AgentId::main())
                 .expect("open")
                 .uncrossed(&run)
                 .expect("uncrossed")
@@ -373,7 +519,7 @@ mod tests {
         let mut project = Store::ephemeral().expect("open");
         let held = kept(&mut pad, &run, "the deploy target is fly.io");
 
-        let store = pad.of(&run).expect("open");
+        let store = pad.of(&run, &AgentId::main()).expect("open");
         Scratchpad::carry(&mut project, store, held.clone(), said_by(&run), NOW).expect("first");
         Scratchpad::carry(&mut project, store, held, said_by(&run), NOW).expect("again");
 
@@ -389,7 +535,10 @@ mod tests {
             kept(&mut pad, &run, "held");
         }
         let mut pad = Scratchpad::at(home.to_path_buf());
-        let store = pad.peek(&run).expect("peek").expect("it wrote before");
+        let store = pad
+            .peek(&run, &AgentId::main())
+            .expect("peek")
+            .expect("it wrote before");
         assert_eq!(store.all().expect("all").len(), 1);
     }
 }

@@ -20,6 +20,7 @@ mod decay;
 mod entity;
 mod episode;
 mod export;
+mod layout;
 mod mint;
 mod paths;
 mod purge;
@@ -42,8 +43,8 @@ pub use episode::Episode;
 pub use export::Row as TrainingRow;
 pub use mint::mint;
 pub use paths::{
-    HOME, Tool, data_dir, home_of, make_home, project_home, scope_of, scope_path, session_dir,
-    session_dir_in, session_path, session_transcript_path, tools_in,
+    HOME, Tool, data_dir, home_of, make_home, project_home, run_dir_in, scope_of, scope_path,
+    session_dir, session_dir_in, session_path, tools_in,
 };
 pub use purge::{
     Closure, closure_of, purge, purge_domain, purge_run, purge_scratch, purge_session,

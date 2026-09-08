@@ -143,6 +143,7 @@ pub fn serve(
             scrollback: Some(&mut held.scrollback),
             scratch: Some(&mut held.scratch),
             scope: scope.clone(),
+            agent: agent_of(peer),
             now: now(),
             inject_floor: floors.inject,
             live_floor: floors.live,
@@ -194,6 +195,7 @@ pub fn api(
                 scrollback: Some(&mut scrollback),
                 scratch: None,
                 scope: scope.clone(),
+                agent: agent_here(),
                 now: now(),
                 inject_floor: floors.inject,
                 live_floor: floors.live,
@@ -221,6 +223,50 @@ struct Opened {
     store: balthasar_store::Store,
     scrollback: balthasar_store::Transcript,
     scratch: balthasar_store::Scratchpad,
+}
+
+/// What a harness names its agent in, in the environment of the process that connects.
+const AGENT: &str = "BALTHASAR_AGENT";
+
+/// Which agent inside a run a connection belongs to.
+///
+/// Read from the peer's own environment rather than taken from a call, which is the same shape
+/// as `named_by_kernel` above and exists for the same reason: a dimension a caller can vary per
+/// call is not isolation, it is a parameter, and a subagent that could name a sibling's agent
+/// would read a sibling's scratch by asking for it. What can be varied here is the peer's own
+/// name for itself, which is no more than it already gets to decide by being that process.
+///
+/// A peer that names none is [`AgentId::main`] — one directory per run, exactly the arrangement
+/// that existed before there were agents, so a harness that has never heard of them is unchanged.
+fn agent_of(peer: &Peer) -> balthasar_model::AgentId {
+    let Ok(body) = std::fs::read(format!("/proc/{}/environ", peer.pid)) else {
+        return balthasar_model::AgentId::main();
+    };
+    let prefix = format!("{AGENT}=");
+    body.split(|byte| *byte == 0)
+        .filter_map(|entry| std::str::from_utf8(entry).ok())
+        .find_map(|entry| entry.strip_prefix(&prefix))
+        .map(str::trim)
+        .filter(|named| !named.is_empty())
+        .map_or_else(
+            balthasar_model::AgentId::main,
+            balthasar_model::AgentId::new,
+        )
+}
+
+/// Which agent this process itself is, for the door that has no peer.
+///
+/// `balthasar api` is one process answering one question for whoever ran it, so the environment
+/// to read is our own.
+fn agent_here() -> balthasar_model::AgentId {
+    std::env::var(AGENT)
+        .ok()
+        .map(|named| named.trim().to_owned())
+        .filter(|named| !named.is_empty())
+        .map_or_else(
+            balthasar_model::AgentId::main,
+            balthasar_model::AgentId::new,
+        )
 }
 
 /// Which tool a connection belongs to, as the kernel names it.

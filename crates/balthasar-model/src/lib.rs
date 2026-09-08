@@ -37,7 +37,7 @@ pub use claim::{claim_overlap, lead, same_claim, same_claim_different_value};
 pub use confidence::{Contradiction, of as confidence_of};
 pub use guard::{looks_like_injection, presentation_for, witness_for};
 pub use habit::{Avoidance, Environment, Polarity, Record, Standing};
-pub use id::{MemoryId, ScopeId, SessionId, WitnessId};
+pub use id::{AgentId, MemoryId, ScopeId, SessionId, WitnessId};
 pub use lifecycle::{episode_holds, is_stale, tempo};
 pub use memory::{Link, LinkRelation, Memory, Provenance, Through};
 pub use relation::{Derivation, Family, Relation, View};

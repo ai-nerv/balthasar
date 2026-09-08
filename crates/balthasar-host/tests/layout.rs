@@ -7,7 +7,7 @@ use balthasar_model::scratch::Scratch;
 
 use balthasar_host::{Answering, Door, answer};
 use balthasar_ipc::{Reply, Request};
-use balthasar_model::{ScopeId, SessionId, floor};
+use balthasar_model::{AgentId, ScopeId, SessionId, floor};
 use balthasar_store::{Scratchpad, Store, Transcript};
 
 const NOW: balthasar_model::Timestamp = 1_756_000_000;
@@ -37,6 +37,7 @@ impl Held {
             scrollback: Some(&mut self.scrollback),
             scratch: Some(&mut self.scratch),
             scope: ScopeId::new("/w/thing"),
+            agent: AgentId::main(),
             now: NOW,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
@@ -59,6 +60,7 @@ impl Held {
             scrollback: Some(&mut self.scrollback),
             scratch: Some(&mut self.scratch),
             scope: ScopeId::new("/w/thing"),
+            agent: AgentId::main(),
             now: NOW,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
@@ -71,6 +73,33 @@ impl Held {
                 uid: 1000,
                 program: Some("/usr/bin/some-harness".to_owned()),
             }),
+            &Request {
+                call: name.to_owned(),
+                args,
+            },
+        )
+    }
+
+    /// The same call, from another agent inside the same run.
+    ///
+    /// A second `Answering` rather than a second argument, because that is the only way a
+    /// second agent exists: the identity is pinned where a connection is accepted, and a test
+    /// that could pass it in the call would be testing something the wire cannot do.
+    fn agent_asks(&mut self, agent: &str, name: &str, args: Vec<serde_json::Value>) -> Reply {
+        let mut at = Answering {
+            store: &mut self.store,
+            scrollback: Some(&mut self.scrollback),
+            scratch: Some(&mut self.scratch),
+            scope: ScopeId::new("/w/thing"),
+            agent: AgentId::new(agent),
+            now: NOW,
+            inject_floor: floor::INJECT,
+            live_floor: floor::LIVE,
+            capture: false,
+        };
+        answer(
+            &mut at,
+            &Door::Owner,
             &Request {
                 call: name.to_owned(),
                 args,
@@ -111,7 +140,7 @@ fn what_a_run_says_lands_in_that_runs_own_file() {
 
     let run = SessionId::new("01RUN");
     assert!(
-        held.scratch.path_of(&run).is_file(),
+        held.scratch.path_of(&run, &AgentId::main()).is_file(),
         "the run got a file of its own"
     );
     assert!(
@@ -161,6 +190,88 @@ fn a_run_can_find_what_it_was_just_told() {
 }
 
 #[test]
+fn one_agent_does_not_see_anothers_scratch() {
+    // The reason scratch is per agent at all. Five subagents of one run each keep working
+    // notes, and one of them reading another's is how a plan that was abandoned in one branch
+    // comes back as a fact in the next.
+    let home = scratch("agent-isolated");
+    let mut held = Held::under(&home);
+    let wrote = held.agent_asks(
+        "explorer",
+        "remember",
+        vec![
+            serde_json::json!("I am about to try the staging box"),
+            serde_json::json!({ "session": "01RUN" }),
+        ],
+    );
+    assert!(wrote.ok, "{wrote:?}");
+
+    let mine = held.agent_asks(
+        "explorer",
+        "recall",
+        vec![
+            serde_json::json!("staging box"),
+            serde_json::json!({ "session": "01RUN" }),
+        ],
+    );
+    assert_eq!(Held::found(&mine), 1, "it finds its own: {mine:?}");
+
+    let theirs = held.agent_asks(
+        "reviewer",
+        "recall",
+        vec![
+            serde_json::json!("staging box"),
+            serde_json::json!({ "session": "01RUN" }),
+        ],
+    );
+    assert!(theirs.ok, "{theirs:?}");
+    assert_eq!(
+        Held::found(&theirs),
+        0,
+        "the sibling's scratch stayed its own: {theirs:?}"
+    );
+}
+
+#[test]
+fn naming_an_agent_in_a_call_reaches_nothing() {
+    // The isolation guarantee, stated as the thing that would take it away: if an agent could
+    // say which agent it was, it could say it was the one whose scratch it wanted to read. The
+    // identity is pinned to the connection, so the option below is not a parameter — it is
+    // ordinary text in a call that does not have one.
+    let home = scratch("agent-not-a-parameter");
+    let mut held = Held::under(&home);
+    let wrote = held.agent_asks(
+        "explorer",
+        "remember",
+        vec![
+            serde_json::json!("I am about to try the staging box"),
+            serde_json::json!({ "session": "01RUN" }),
+        ],
+    );
+    assert!(wrote.ok, "{wrote:?}");
+
+    let asked = held.agent_asks(
+        "reviewer",
+        "recall",
+        vec![
+            serde_json::json!("staging box"),
+            serde_json::json!({ "session": "01RUN", "agent": "explorer" }),
+        ],
+    );
+    assert!(asked.ok, "{asked:?}");
+    assert_eq!(
+        Held::found(&asked),
+        0,
+        "asking for a sibling's agent got a sibling's nothing: {asked:?}"
+    );
+    assert_eq!(
+        held.scratch.agents_of(&SessionId::new("01RUN")),
+        vec![AgentId::new("explorer")],
+        "and the call did not bring the named agent into being"
+    );
+}
+
+#[test]
 fn one_run_does_not_see_anothers_scratch() {
     // Session memories are the session's own. Two runs of one project share the project's
     // durable memory and nothing else.
@@ -194,12 +305,12 @@ fn deleting_one_run_is_deleting_one_directory() {
 
     let one = SessionId::new("01ONE");
     let two = SessionId::new("01TWO");
-    std::fs::remove_dir_all(balthasar_store::session_dir_in(&home, &one)).expect("rm");
+    std::fs::remove_dir_all(balthasar_store::run_dir_in(&home, &one)).expect("rm");
 
     assert_eq!(held.scratch.runs().len(), 1);
-    assert!(!held.scratch.path_of(&one).exists());
+    assert!(!held.scratch.path_of(&one, &AgentId::main()).exists());
     assert!(
-        held.scratch.path_of(&two).is_file(),
+        held.scratch.path_of(&two, &AgentId::main()).is_file(),
         "the neighbour survived"
     );
 }
@@ -245,7 +356,10 @@ fn a_peer_may_archive_the_run_it_is_in_but_not_remove_it() {
         ],
     );
     assert!(!refused.ok, "a peer may not remove a run");
-    assert!(held.scratch.path_of(&run).is_file(), "and nothing went");
+    assert!(
+        held.scratch.path_of(&run, &AgentId::main()).is_file(),
+        "and nothing went"
+    );
 
     let archived = held.peer_asks(
         "forget",
@@ -257,7 +371,7 @@ fn a_peer_may_archive_the_run_it_is_in_but_not_remove_it() {
     assert!(archived.ok, "{archived:?}");
     assert_eq!(field(&archived, "archived"), 1, "its own scratch stopped");
     assert!(
-        held.scratch.path_of(&run).is_file(),
+        held.scratch.path_of(&run, &AgentId::main()).is_file(),
         "archiving keeps every word of it"
     );
 }
@@ -280,9 +394,9 @@ fn the_owner_removing_a_run_reaches_all_three_of_its_files() {
     );
     assert!(gone.ok, "{gone:?}");
     assert_eq!(field(&gone, "scratch"), true, "its own file went");
-    assert!(!held.scratch.path_of(&run).exists());
+    assert!(!held.scratch.path_of(&run, &AgentId::main()).exists());
     assert!(
-        held.scratch.path_of(&neighbour).is_file(),
+        held.scratch.path_of(&neighbour, &AgentId::main()).is_file(),
         "and the neighbour kept everything of its own"
     );
 }

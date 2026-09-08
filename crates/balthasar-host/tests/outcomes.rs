@@ -65,6 +65,7 @@ impl Held {
             scrollback: None,
             scratch: None,
             scope: ScopeId::new("/w/thing"),
+            agent: balthasar_model::AgentId::main(),
             now: NOW,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
