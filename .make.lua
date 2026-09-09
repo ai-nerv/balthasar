@@ -283,6 +283,7 @@ make.alias("c", "compile")
 -- xtra/ ended up with a 2,000-line file and a store that deletes.
 
 local GATES = {
+  { "gate-comments",     "comments describe the code, they do not argue with it" },
   { "gate-cycles",       "no two modules depend on each other" },
   { "gate-file-size",    "no .rs over 800 lines" },
   { "gate-no-delete",    "nothing is deleted outside purge.rs" },
@@ -309,6 +310,7 @@ make.recipe{
   name = "gates",
   desc = "every architectural gate",
   deps = {
+    "gate-comments",
     "gate-cycles",
     "gate-file-size",
     "gate-no-delete",
