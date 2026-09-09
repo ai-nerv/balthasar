@@ -9,18 +9,13 @@ pub struct Window {
     pub size: u32,
     /// What the reply needs, plus what a summarising call would need to run.
     ///
-    /// Not decoration. Compacting costs a request of its own and that request needs room; a
-    /// plan that filled the window to the brim would leave the summarisation itself as the
-    /// thing that overflows.
+    /// Compacting costs a request of its own, and that request needs room.
     pub reserve: u32,
     /// The share of the window memory may claim for injection.
     pub inject: u32,
     /// A tool result larger than this is worth masking.
     pub mask_over: u32,
     /// How many recent turns are never touched.
-    ///
-    /// The detail still in play lives here — the file just read, the error just seen — and a
-    /// summary of it is always worse than having it.
     pub keep: usize,
     /// Roughly what a masked turn's replacement costs.
     pub masked_cost: u32,
@@ -42,9 +37,8 @@ impl Default for Window {
 impl Window {
     /// How many tokens the conversation itself may occupy.
     ///
-    /// Saturating, so a window smaller than its own reserve answers zero rather than wrapping
-    /// to four billion — which would tell a harness it had unlimited room on exactly the
-    /// configuration that has none.
+    /// Saturating, so a window smaller than its own reserve answers zero rather than wrapping to
+    /// four billion.
     #[must_use]
     pub fn target(&self) -> u32 {
         self.size
@@ -53,9 +47,6 @@ impl Window {
     }
 
     /// Whether a plan can possibly fit inside this window.
-    ///
-    /// A window whose reserve leaves no room for a conversation is a misconfiguration, and
-    /// saying so beats returning a plan that will be refused by the provider.
     #[must_use]
     pub fn is_workable(&self) -> bool {
         self.target() > 0
@@ -91,10 +82,7 @@ impl Shape {
         shape
     }
 
-    /// What fraction of the cost is tool output.
-    ///
-    /// The number that says whether masking will be enough. In a coding session it is usually
-    /// most of the window, which is why masking is tried first.
+    /// What fraction of the cost is tool output, which says whether masking will be enough.
     #[must_use]
     pub fn tool_share(&self) -> f64 {
         if self.used == 0 {
@@ -135,8 +123,6 @@ mod tests {
 
     #[test]
     fn a_window_smaller_than_its_reserve_says_so_rather_than_wrapping() {
-        // Unsaturated, this answers four billion — telling a harness it has unlimited room on
-        // exactly the configuration that has none.
         let window = Window {
             size: 100,
             reserve: 200,
@@ -161,8 +147,6 @@ mod tests {
 
     #[test]
     fn a_shape_says_how_much_of_the_window_is_tool_output() {
-        // The number that decides whether masking will be enough, and in a coding session it
-        // usually is.
         let shape = Shape::of(&[turn(1, "user", 100), turn(2, "tool", 900)], 40);
         assert!((shape.tool_share() - 0.9).abs() < 0.01);
     }
