@@ -168,13 +168,9 @@ fn is_home(dir: &Path) -> bool {
 
 /// Create a store home, marking it and keeping it out of the checkout.
 ///
-/// Idempotent, and never overwrites an existing `.gitignore`: whether to commit `project.db` is
-/// a decision, and having made it once it should not be unmade by the next write.
-///
-/// It never rewrites an existing marker either, and that is the stronger rule of the two: the
-/// marker says which layout a tree is in, and a function that runs on the way into every store
-/// must not be what relabels an old tree as a new one. Moving a tree forward is
-/// [`crate::layout`]'s, and it says so by writing the marker itself.
+/// Idempotent, and overwrites neither an existing `.gitignore` — whether to commit `project.db`
+/// is a decision — nor an existing marker: the marker says which layout a tree is in, and moving
+/// a tree forward is [`crate::layout`]'s to do and to record.
 pub fn make_home(home: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(home)?;
     let marker = home.join(crate::layout::MARKER);
@@ -326,17 +322,22 @@ pub fn scope_of(cwd: &Path) -> ScopeId {
 
 /// The closest ancestor holding a store home, if any.
 ///
-/// **The walk stops at the first shared directory rather than at the filesystem root.** A store
-/// home is a claim about who owns a subtree, and `/tmp`, `/home` and `/` are owned by everybody:
-/// a `.store` in one of them says nothing about the project underneath it. Without the ceiling a
-/// single leftover `/tmp/balthasar/.store` made `/tmp` itself resolve as a store home, so every
-/// directory under it — every test fixture, and every session of every other user on the machine
-/// — was silently reparented into one scope. It was found by four tests failing for a reason
-/// that had nothing to do with what they were asserting.
+/// The walk stops at the first shared directory, not at the filesystem root: `/tmp`, `/home` and
+/// `/` are owned by everybody, and a `.store` in one of them says nothing about the project
+/// underneath. One leftover `/tmp/balthasar/.store` otherwise reparents every path under `/tmp`
+/// into a single scope.
 fn nearest_home(from: &Path) -> Option<PathBuf> {
+    home_below(from, is_shared)
+}
+
+/// The walk itself, with the ceiling passed in so a test can put one where it can plant a home.
+///
+/// `is_shared` answers about `/tmp`, `/home` and `/`, and no test may write a store into any of
+/// those; taking the predicate is what lets the ceiling be proved rather than assumed.
+fn home_below(from: &Path, ceiling: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     let mut at = from;
     loop {
-        if is_shared(at) {
+        if ceiling(at) {
             return None;
         }
         if is_home(&at.join(HOME)) {
@@ -369,16 +370,9 @@ fn is_shared(dir: &Path) -> bool {
 
 /// Whether a checkout rooted at `dir` would sweep in directories that have nothing to do with it.
 ///
-/// The shared directories, and a home directory as well. `is_shared` is the ceiling for a store
-/// somebody *made* — `balthasar init` is a deliberate act and should win wherever it was run,
-/// including in a home directory. A `.git` is not that: it is inferred, and the two places a
-/// repository most often sits without meaning to own everything below it are exactly these.
-///
-/// Found by looking: this machine had both a `/tmp/.git` and a `$HOME/.git`, the second being an
-/// ordinary dotfiles repository. Between them, every directory that was not itself a checkout —
-/// every scratch directory, every unpacked tarball — resolved to one of two enormous scopes and
-/// shared one memory. A test that ran four sessions in four temporary directories was really
-/// running them in one, and the failure looked like a resume that lost the conversation.
+/// The shared directories, and a home directory too. A store somebody *made* with `balthasar
+/// init` should win wherever it was run, `is_shared` aside; an inferred `.git` should not, and a
+/// dotfiles repository in `$HOME` otherwise swallows every directory that is not a checkout.
 fn too_broad(dir: &Path) -> bool {
     if is_shared(dir) {
         return true;
@@ -518,26 +512,38 @@ mod tests {
     }
 
     #[test]
-    fn a_store_home_in_a_shared_directory_scopes_nothing() {
-        // The bug this closes: a leftover `.store` in the temporary directory made *every* path
-        // under it resolve to one scope — every fixture in this file, and on a shared machine
-        // every other user's sessions too. Four tests in this module were failing for that
-        // reason and none of them was about it.
-        //
-        // Asserted against the real temporary directory rather than a fixture, because the
-        // property is about which directories nobody owns.
-        let shared = std::env::temp_dir();
-        assert!(is_shared(&shared), "{}", shared.display());
+    fn the_shared_directories_are_the_ones_nobody_owns() {
+        assert!(is_shared(&std::env::temp_dir()));
         assert!(is_shared(std::path::Path::new("/")));
-
-        // A marked home directly in it is still refused, which is the whole point.
-        let planted = shared.join(HOME);
-        if is_home(&planted) {
-            assert_eq!(nearest_home(&shared), None);
-            let under = shared.join("balthasar-ceiling-probe");
-            std::fs::create_dir_all(&under).expect("mkdir");
-            assert_eq!(nearest_home(&under), None);
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        if let Some(above) = home.as_deref().and_then(Path::parent) {
+            assert!(is_shared(above), "{}", above.display());
         }
+    }
+
+    #[test]
+    fn a_store_home_in_a_shared_directory_scopes_nothing() {
+        // A leftover `.store` in the temporary directory otherwise resolves every path under it
+        // to one scope. The ceiling is passed in because proving it needs a marked home *above*
+        // one, and no test may write into the real `/tmp`; the earlier version asserted only on a
+        // machine that already had that leftover, so a clean checkout was green regardless.
+        let root = scratch("ceiling");
+        let shared = root.join("shared");
+        let under = shared.join("project");
+        std::fs::create_dir_all(&under).expect("mkdir");
+        make_home(&shared.join(HOME)).expect("make");
+
+        let stops = |dir: &Path| dir == shared;
+        assert_eq!(
+            home_below(&under, stops),
+            None,
+            "the walk passed the ceiling"
+        );
+        assert_eq!(home_below(&shared, stops), None);
+
+        // And the same tree with no ceiling does find it, so the `None` above is the ceiling
+        // rather than a home that was never there.
+        assert_eq!(home_below(&under, |_| false), Some(shared.clone()));
     }
 
     #[test]
