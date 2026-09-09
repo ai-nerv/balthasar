@@ -123,14 +123,13 @@ impl Listener {
     /// tries a connection first: if anything answers, this instance refuses rather than
     /// stealing the name.
     ///
-    /// **The neighbours' corpses go too.** Only this instance's own name was ever disproved, so
-    /// every balthasar that was killed outright left a file nobody would look at again — see
-    /// [`crate::swept`], which this is the one moment to call.
+    /// Only this instance's own name. The neighbours' corpses are [`crate::swept`], which the
+    /// binary calls beside [`crate::hold_stop_signals`] — it dials every socket in the directory,
+    /// and each dial takes one of the eight seats on whatever answers.
     pub fn bind(instance: &str) -> std::io::Result<Self> {
         let path = socket_path(instance);
         let dir = path.parent().unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir)?;
-        crate::corpses::swept(dir);
 
         if path.exists() {
             if UnixStream::connect(&path).is_ok() {

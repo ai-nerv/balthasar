@@ -98,6 +98,10 @@ pub fn serve(
     if let Some(caller) = args.tied {
         tie_to_caller(caller)?;
     }
+    // Here rather than in `bind`, for the reason the signal block is here: the sweep dials every
+    // socket in the runtime directory, and a dial costs whatever answers one of its eight seats.
+    // Starting a daemon is the one moment that is worth paying for.
+    balthasar_ipc::swept(&balthasar_ipc::socket_dir());
     let listener = Listener::bind(&args.instance)?;
     // Written whether or not anybody connects: a caller that finds no socket falls back to
     // spawning, and it can only do that if we left it an absolute path to spawn.
