@@ -1,16 +1,12 @@
 //! The socket primitive the client libraries need.
 //!
-//! Layer one of three: the stub carries framing and encoding in plain Lua, but it cannot open a
-//! socket, so the host lends it one. A host native like any other — deliberately *not* a VM
-//! feature, so a VM that cannot load C modules needs no change to join the family.
+//! The stub carries framing and encoding in plain Lua but cannot open a socket, so the host lends
+//! it one. This is also what lets balthasar dial out: a sibling's client runs unchanged in this VM.
 //!
 //! ```lua
 //! local h = balthasar.stream.connect(path, timeout_ms)
 //! h:send(bytes)   h:recv(n)   h:close()
 //! ```
-//!
-//! This is also what lets balthasar dial *out*: a sibling's own client runs unchanged in this VM,
-//! given this table.
 
 use luna::{Callback, CallbackReturn, Context, Table, Value};
 use std::cell::RefCell;
@@ -19,16 +15,12 @@ use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 use std::time::Duration;
 
-/// The most a single `recv` will be asked for.
-///
-/// A peer that says a frame is enormous must not make us allocate for it before a byte of it
-/// has arrived. The client asks in pieces anyway; this bounds a hostile answer.
+/// The most a single `recv` will be asked for. A peer that says a frame is enormous must not make
+/// us allocate for it before a byte of it has arrived.
 const MAX_RECV: usize = 16 * 1024 * 1024;
 
-/// How long to wait for a peer that accepted and then said nothing.
-///
-/// A default rather than forever: a stale socket left by a killed process accepts and never
-/// answers, which is indistinguishable from a hang without one.
+/// How long to wait for a peer that accepted and then said nothing. A stale socket left by a
+/// killed process accepts and never answers.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A connected socket, shared between a handle's methods.
@@ -36,18 +28,8 @@ type Handle = Rc<RefCell<Option<UnixStream>>>;
 
 /// Whether `path` is a socket a config may dial.
 ///
-/// **This user's own socket directories and nothing else.** This primitive used to call
-/// `UnixStream::connect` on whatever it was handed, so any Lua a config could reach could open
-/// any socket this user can: a sibling's control socket, a container runtime's.
-///
-/// Narrowed rather than gated, because there is nothing here to gate with. This VM has no
-/// permission seam, and a config file is read before anything that could ask a person exists —
-/// which is exactly the window an untrusted project file runs in. Every legitimate caller is
-/// already inside these roots: the family puts its sockets under `$XDG_RUNTIME_DIR`, falling
-/// back to the temporary directory when that is unset.
-///
-/// Lexical, on a normalised path: `..` is resolved first, so a name cannot climb out of the
-/// directory it appears to be in.
+/// This user's own socket directories and nothing else: without it, any Lua a config can reach
+/// could open any socket this user can. Lexical, on a normalised path, so `..` cannot climb out.
 fn dialable(path: &std::path::Path) -> bool {
     roots().iter().any(|root| under(path, root))
 }
@@ -88,9 +70,8 @@ pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
         };
         let path = String::from_utf8_lossy(path.as_bytes()).into_owned();
 
-        // Refused as an ordinary answer, the way a failed connect already is: `nil` and a reason
-        // the caller can put on screen. Raising would make a config that probed for an absent
-        // sibling die instead of carrying on without it.
+        // Refused as an ordinary answer: raising would kill a config that probed for an absent
+        // sibling.
         if !dialable(std::path::Path::new(&path)) {
             stack.replace(
                 ctx,
@@ -110,10 +91,8 @@ pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
 
         match UnixStream::connect(&path) {
             Ok(socket) => {
-                // Handed back as a failure to connect, not swallowed. This VM has no way to
-                // interrupt a blocking read, so a handle whose deadline never took would hang
-                // the whole harness on a daemon that stopped answering — which is exactly the
-                // case the timeout exists for and exactly the case where it went missing.
+                // This VM has no way to interrupt a blocking read, so a handle whose deadline
+                // never took would hang the whole harness.
                 let deadlines = socket
                     .set_read_timeout(Some(timeout))
                     .and_then(|()| socket.set_write_timeout(Some(timeout)));
@@ -185,8 +164,7 @@ fn handle_table<'gc>(ctx: Context<'gc>, held: Handle) -> Table<'gc> {
         };
         let mut buffer = vec![0_u8; wanted];
         match socket.read(&mut buffer) {
-            // A stream delivers what it likes: a short read is ordinary, and the client asks
-            // again. Zero means the peer went away, which the client reads as a close.
+            // A short read is ordinary and the client asks again; zero means the peer went away.
             Ok(n) => {
                 buffer.truncate(n);
                 stack.replace(ctx, luna::String::from_slice(&ctx, &buffer));
@@ -218,8 +196,6 @@ mod tests {
 
     #[test]
     fn connecting_to_nothing_answers_nil_and_a_reason() {
-        // A client has to be able to tell "nothing is listening" from a crash, because that is
-        // the ordinary state of a machine where no daemon was started.
         let mut engine = Engine::new();
         engine
             .run(
@@ -236,8 +212,8 @@ mod tests {
 
     #[test]
     fn the_primitive_is_named_where_a_siblings_client_looks_for_it() {
-        // A copied stub finds the transport itself when nothing is passed, and it looks under
-        // the family's globals. Getting this name wrong sends discovery to `io.popen`.
+        // A copied stub looks for the transport under the family's globals; a wrong name here
+        // sends discovery to `io.popen`.
         let mut engine = Engine::new();
         engine
             .run(

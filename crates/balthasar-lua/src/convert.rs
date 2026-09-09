@@ -4,16 +4,12 @@
 //! `lua.enter`. Everything above this crate sees `serde_json::Value`.
 //!
 //! The list-or-map rule is the family's: a table whose keys are exactly `1..n` is an array and
-//! anything else is an object. Disagreeing with it would have a config and a socket describe
-//! one table two different ways.
+//! anything else is an object.
 
 use luna::{Table, Value};
 use serde_json::{Map, Number};
 
-/// How deep a table may nest before it is refused.
-///
-/// A config is input, and a cyclic table is a stack overflow rather than an error if this
-/// recurses freely.
+/// How deep a table may nest before it is refused; a cyclic table would otherwise overflow.
 const MAX_DEPTH: usize = 32;
 
 /// A Lua value as JSON, or `None` when it cannot be written down.

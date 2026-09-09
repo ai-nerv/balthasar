@@ -1,9 +1,7 @@
 //! What a configuration's numbers mean.
 //!
-//! The bridge between "the config said something" and "balthasar behaves differently". Every knob
-//! has a default that is the plan's number, so an empty configuration and no configuration at
-//! all behave identically — which is what makes a fresh install work before anybody has written
-//! a line of Lua.
+//! Every knob has a default that is the plan's number, so an empty configuration and no
+//! configuration at all behave identically.
 
 use crate::Config;
 use balthasar_model::{Importance, WitnessKind, floor};
@@ -119,11 +117,8 @@ impl Default for Budget {
 /// Whether and how long the use-and-outcome ledger is kept.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Ledger {
-    /// Whether searches, injections and outcomes are recorded at all.
-    ///
-    /// Off by default. The ledger is instrumentation: it costs writes on the recall path, and a
-    /// memory layer that silently starts recording what a person searches for because a new
-    /// version shipped is not one anybody should install.
+    /// Whether searches, injections and outcomes are recorded at all. Off by default: the ledger
+    /// costs writes on the recall path.
     pub capture: bool,
     /// How long a ledger row lives before retention drops it.
     pub retention_days: u32,
@@ -162,12 +157,9 @@ pub struct Settings {
 }
 
 impl Default for Settings {
-    /// What balthasar does when nothing has been configured.
-    ///
-    /// Deliberately built through [`Settings::from`] rather than derived. A derived default
-    /// would leave the witness weights and the imperative list empty, so "no configuration"
-    /// and "an empty configuration" would behave differently — which is a difference nobody
-    /// would ever think to look for.
+    /// What balthasar does when nothing has been configured. Built through [`Settings::from`]
+    /// rather than derived: a derived default would leave the witness weights and the imperative
+    /// list empty.
     fn default() -> Self {
         Self::from(&Config::default())
     }
@@ -187,9 +179,6 @@ impl Settings {
     }
 
     /// Read a configuration, falling back to the shipped number for anything it did not say.
-    ///
-    /// Every knob is optional and every default is the plan's, so an empty configuration and no
-    /// configuration behave identically.
     #[must_use]
     pub fn from(config: &Config) -> Self {
         let floors = Floors {
@@ -261,8 +250,6 @@ impl Settings {
             budget,
             ledger: Ledger {
                 // One table, `balthasar.outcome`, rather than a flat flag beside a nested number.
-                // Two shapes for one concern is how a configuration surface becomes a thing
-                // people have to look up.
                 capture: config
                     .get("outcome")
                     .and_then(|held| held.get("capture"))
@@ -284,13 +271,8 @@ impl Settings {
 
     /// A digest of every setting that changes what balthasar does.
     ///
-    /// Written out field by field rather than derived from a serialization, so that adding a
-    /// field to `Settings` cannot silently change every recorded fingerprint. When a new
-    /// setting starts mattering it is added here deliberately, and the fingerprint changing is
-    /// the point.
-    ///
-    /// Recorded beside every measurement and every ledger row: two numbers produced under
-    /// different weights are not the same experiment, and without this nothing would say so.
+    /// Written out field by field rather than derived from a serialization, so adding a field to
+    /// `Settings` cannot silently change every recorded fingerprint.
     #[must_use]
     pub fn fingerprint(&self) -> String {
         balthasar_model::content_hash(&format!(
@@ -327,11 +309,8 @@ impl Settings {
         &self.ledger
     }
 
-    /// Which tool this configuration names, if it names one.
-    ///
-    /// A wrapper script or a dev build under another name is the case this exists for: the
-    /// kernel would call it something nobody recognises, and the memories would land in a
-    /// directory named after the wrapper.
+    /// Which tool this configuration names, if it names one. A wrapper script or a dev build
+    /// under another name is the case this exists for.
     #[must_use]
     pub fn tool(&self) -> Option<&str> {
         self.tool.as_deref()

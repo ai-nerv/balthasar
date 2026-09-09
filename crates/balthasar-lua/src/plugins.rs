@@ -1,19 +1,10 @@
 //! Where configuration comes from, and in what order.
 //!
 //! neovim's model, unchanged: a runtimepath of roots, `plugin/` run at startup, `lua/` required
-//! on demand, `after/` last. Twenty years of real plugins have been written against it and most
-//! people arriving already know it. Deviating buys nothing and costs everyone the transfer.
-//!
-//! **This is the family's answer, and it was written here first.** Every sibling has the same
-//! roots in the same order now — `plugin/`, then installed packages under `pack/*/start/*`, then
-//! `after/`; see `FAMILY.md`. For a while it lived only here and was described as one program's
-//! arrangement, which meant the one program a person could extend by dropping a file in a
-//! directory was the one nobody would think to look at for it. The copies are copies on purpose:
-//! a shared crate between these repositories is the dependency the whole arrangement exists to
-//! prevent.
-//!
-//! The sandbox is what makes discovery safe to have. It applies in every sibling's VM now, so a
-//! file that arrives by being installed rather than by being named still cannot spawn a process.
+//! on demand, `after/` last. Every sibling has the same roots in the same order — `plugin/`, then
+//! installed packages under `pack/*/start/*`, then `after/`; see `FAMILY.md`. The sandbox is what
+//! makes discovery safe to have: a file that arrives by being installed rather than by being
+//! named still cannot spawn a process.
 
 use std::path::{Path, PathBuf};
 
@@ -47,9 +38,7 @@ pub struct Roots {
     /// What a coordinator said, read last of all.
     ///
     /// A root like the others rather than a path this module goes and looks up, so
-    /// [`runtimepath`] is a function of what it is handed. Reading it inside meant the answer
-    /// depended on whether *this machine* happened to have a coordinator running — which made
-    /// every test of the order pass alone and fail beside a real session.
+    /// [`runtimepath`] is a function of what it is handed.
     pub given: Option<PathBuf>,
 }
 
@@ -118,10 +107,8 @@ pub fn runtimepath(roots: &Roots) -> Vec<(PathBuf, bool)> {
         }
     }
 
-    // What a coordinator said, last of all and trusted like the owner's own: whoever starts this
-    // process is deciding what it should be, and a file on disk that quietly won would be the
-    // disagreement the arrangement exists to end. Absent is the ordinary case — a balthasar
-    // nobody is coordinating reads its own files exactly as before.
+    // What a coordinator said, last of all and trusted like the owner's own. Absent is the
+    // ordinary case.
     if let Some(given) = &roots.given
         && given.is_file()
     {
@@ -132,9 +119,8 @@ pub fn runtimepath(roots: &Roots) -> Vec<(PathBuf, bool)> {
 
 /// Whether a project directory is one the owner vouched for.
 ///
-/// `balthasar.trusted = { "/home/you/work" }` in the owner's own configuration. A directory under a
-/// vouched-for one counts, so vouching for a workspace does not mean listing every repository
-/// in it.
+/// `balthasar.trusted = { "/home/you/work" }` in the owner's own configuration. A directory under
+/// a vouched-for one counts.
 #[must_use]
 pub fn vouched_for(trusted: &[String], project: &Path) -> bool {
     trusted
@@ -142,10 +128,8 @@ pub fn vouched_for(trusted: &[String], project: &Path) -> bool {
         .any(|root| !root.is_empty() && project.starts_with(root))
 }
 
-/// Every `.lua` directly in a directory, alphabetically.
-///
-/// Alphabetical rather than by whatever the filesystem answers: a load order that changes
-/// between machines is a configuration that behaves differently on each of them.
+/// Every `.lua` directly in a directory, alphabetically rather than by whatever the filesystem
+/// answers: a load order that changes between machines behaves differently on each of them.
 fn lua_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -209,8 +193,6 @@ mod tests {
 
     #[test]
     fn after_gets_the_last_word() {
-        // Registrars are keyed, so whoever registers last decides. That is what makes
-        // `after/` mean anything at all.
         let root = scratch("after");
         let config = root.join("config");
         touch(&config.join("plugin/aaa.lua"));
@@ -252,9 +234,7 @@ mod tests {
 
     #[test]
     fn what_a_coordinator_said_comes_after_everything_on_disk() {
-        // The point of the arrangement: whoever started this process is deciding what it should
-        // be, and registrars are keyed, so the last word has to be theirs. A file on disk that
-        // quietly won would be the disagreement this exists to end.
+        // Registrars are keyed, so the coordinator's word has to come last.
         let root = scratch("coordinated");
         let config = root.join("config");
         touch(&config.join("init.lua"));
@@ -275,8 +255,7 @@ mod tests {
 
     #[test]
     fn a_coordinator_that_said_nothing_adds_nothing() {
-        // The ordinary case: a balthasar nobody is coordinating reads its own files exactly as
-        // it did before any of this existed.
+        // The ordinary case: a balthasar nobody is coordinating reads its own files.
         let root = scratch("uncoordinated");
         let config = root.join("config");
         touch(&config.join("init.lua"));
@@ -338,11 +317,8 @@ mod tests {
 
 /// Every installed package file, as against the owner's own.
 ///
-/// The distinction the trust manifest is about, and the one [`runtimepath`]'s boolean cannot
-/// carry: that says whether a file may *declare*, and both of these may. This says who wrote it.
-/// A file in your own `plugin/` directory is one you put there, and asking you to confirm your own
-/// configuration is a prompt nobody reads. A package under `site/pack/` arrived by being fetched
-/// and can change under you between one run and the next.
+/// [`runtimepath`]'s boolean says whether a file may declare; this says who wrote it. A package
+/// under `site/pack/` arrived by being fetched and can change between one run and the next.
 ///
 /// See [`crate::acknowledged`].
 #[must_use]

@@ -1,8 +1,6 @@
 //! What a harness installs, and what happens to it when balthasar is not there.
 //!
-//! The degradation story is the one that matters. A memory layer that can brick the agent is
-//! worse than no memory layer, so every call has to answer `nil` and let the harness carry on
-//! exactly as it did before.
+//! Every call has to answer `nil` and let the harness carry on exactly as it did before.
 
 use balthasar_lua::{CLIENT, Engine};
 use std::path::PathBuf;
@@ -53,8 +51,7 @@ fn observing_with_no_balthasar_is_not_an_error() {
 
 #[test]
 fn planning_with_no_balthasar_answers_nothing() {
-    // The whole degradation story: not an error to handle, an absence to carry on through.
-    // A harness that gets nil does whatever it did before balthasar existed.
+    // Not an error to handle, an absence to carry on through.
     assert_eq!(through("harness.plan('s', {}) == nil"), "true");
 }
 
@@ -79,8 +76,7 @@ fn opening_without_the_client_says_what_is_missing() {
 
 #[test]
 fn a_failed_connection_is_not_retried_every_turn() {
-    // A harness asks several times per turn. Paying for a connect attempt on each of them,
-    // for a daemon that is not running, would put a syscall storm in the turn loop.
+    // A harness asks several times per turn; a connect attempt on each would be a syscall storm.
     let answer = through(&format!(
         "(function() \
                harness.open({{ source = {CLIENT:?}, where = {{ path = '/no/such/socket' }} }}) \

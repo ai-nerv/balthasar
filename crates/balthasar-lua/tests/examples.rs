@@ -1,9 +1,5 @@
 //! The shipped examples, run.
 //!
-//! pi ships roughly seventy-eight example extensions. That is not documentation — it is how they
-//! know the extension surface works, and balthasar's had never been used by anybody who did not
-//! write it. An example that does not load is worse than no example, because somebody copies it.
-//!
 //! These read each file over the shipped configuration, exactly as a plugin directory would, and
 //! check that it declared what it says it declares.
 
@@ -35,12 +31,8 @@ fn layered(name: &str) -> Engine {
 
 #[test]
 fn a_source_example_adds_one_without_taking_the_shipped_one_with_it() {
-    // The independence commitment, made usable: a new source is a file somebody drops in a
-    // directory rather than a release. This one is deliberately not a harness, because a source
-    // is a shape and not a category.
-    // The shipped ids are read rather than written down here: naming a harness in a Rust file is
-    // what `gate-independent` exists to stop, and this test is about layering rather than about
-    // which harnesses ship.
+    // The shipped ids are read rather than written down here: `gate-independent` refuses a
+    // harness named in a Rust file.
     let mut plain = Engine::new();
     plain
         .read(&[(shipped().join("init.lua"), true)])
@@ -64,9 +56,7 @@ fn a_source_example_adds_one_without_taking_the_shipped_one_with_it() {
 
 #[test]
 fn a_section_example_takes_its_place_in_the_declared_order() {
-    // Sections are keyed and ordered, so where an added one lands is the whole question. This
-    // asks for `order = 15` — after identity, before how-this-project-works — and that is a
-    // claim about the shipped numbers as much as about the example.
+    // Sections are keyed and ordered, so where an added one lands is the question.
     let engine = layered("build-commands.lua");
     let config = engine.config();
     let named: Vec<&str> = config

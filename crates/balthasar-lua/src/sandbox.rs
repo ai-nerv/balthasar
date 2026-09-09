@@ -1,31 +1,16 @@
 //! What a config cannot reach.
 //!
-//! `Lua::full()` hands the VM the whole standard library, which includes `os.execute` and
-//! `io.popen`. This is the one VM in the family that runs files it did not write — a project's
-//! own `.balthasar.lua`, found by walking up from the working directory — so it is the one where
-//! that matters most, and it was the only one without this list.
-//!
-//! **The ordering is why the list is the control.** [`crate::Engine::read`] runs an untrusted file
-//! and *then* calls `refuse_declarations`. A check that runs after arbitrary Lua has already
-//! executed can report what a file declared; it cannot undo what the file did. Refusing a
-//! declaration is about what balthasar believes. This is about what a file can do on the way.
-//!
-//! Removed rather than never installed, because the alternative is assembling a standard library
-//! by hand and quietly missing something the next luna release adds. A short list of what must
-//! not be reachable is auditable; a long list of what may be is not.
-//!
-//! The same list every other Lua VM in the family carries, and deliberately identical in
-//! substance: a config refused something here and allowed it there would make the boundary a
-//! property of which program happened to read the file rather than of what a config may do.
+//! `Lua::full()` hands the VM the whole standard library, and this is the one VM in the family
+//! that runs files it did not write — a project's own `.balthasar.lua`. [`crate::Engine::read`]
+//! runs such a file and only then calls `refuse_declarations`, so this list is the control.
 
 use luna::{Lua, Value};
 
-/// Globals a config must not have, and why each one is on the list.
+/// Globals a config must not have.
 ///
-/// `os.execute` and `io.popen` spawn — and balthasar declares distillers and extractors, which
-/// name commands it runs itself through a seam that checks them. `os.remove`, `os.rename` and
-/// `os.tmpname` write outside that seam. `os.exit` would let a config file end a serving daemon
-/// mid-write. `io` goes wholesale: every remaining member of it opens a file.
+/// `os.execute` and `io.popen` spawn, and balthasar runs distillers and extractors through a seam
+/// that checks the command; `os.remove`, `os.rename` and `os.tmpname` write outside that seam;
+/// `os.exit` would let a config file end a serving daemon mid-write.
 const REMOVED: &[(&str, &str)] = &[
     ("os", "execute"),
     ("os", "exit"),
@@ -35,7 +20,6 @@ const REMOVED: &[(&str, &str)] = &[
     ("os", "setlocale"),
 ];
 
-/// Globals removed entirely.
 const REMOVED_TABLES: &[&str] = &["io", "package", "dofile", "loadfile", "require"];
 
 /// Take away what a config must not be able to do.
@@ -75,8 +59,6 @@ mod tests {
 
     #[test]
     fn a_config_cannot_spawn_a_process() {
-        // balthasar runs distillers and extractors itself, through a seam that decides whether a
-        // command may run. A config that could spawn would go round it.
         assert_eq!(probe("os.execute"), "nil");
         assert_eq!(probe("io"), "nil");
     }
@@ -102,8 +84,7 @@ mod tests {
 
     #[test]
     fn what_a_config_legitimately_needs_still_works() {
-        // The removals must not cost a config the things it is for. `load` in particular: the
-        // family's client stubs are loaded chunks, and removing it would break `lua-api`.
+        // `load` must survive: the family's client stubs are loaded chunks.
         assert_ne!(probe("os.getenv"), "nil", "reading the environment is fine");
         assert_ne!(probe("os.time"), "nil");
         assert_ne!(
