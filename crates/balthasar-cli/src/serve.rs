@@ -236,28 +236,43 @@ const AGENT: &str = "BALTHASAR_AGENT";
 /// would read a sibling's scratch by asking for it. What can be varied here is the peer's own
 /// name for itself, which is no more than it already gets to decide by being that process.
 ///
-/// A peer that names none is [`AgentId::main`] — one directory per run, exactly the arrangement
-/// that existed before there were agents, so a harness that has never heard of them is unchanged.
+/// **A peer that names none falls back to this process's own**, and only then to
+/// [`AgentId::main`]. `/proc/<pid>/environ` is the block the kernel wrote at `exec` and nothing
+/// else: `setenv` allocates on the heap and never touches it, so the one process that cannot put
+/// its name there is the one that learned it after starting — which is exactly the harness that
+/// spawned this balthasar, since it is told its name by a layer it starts itself. It hands the
+/// name down at the spawn instead, where this process's own environment is the only place it can
+/// arrive.
+///
+/// Safe because it is one balthasar per harness: the fallback is the agent of whoever convened
+/// this one. A subagent spawned with its own name has it in its own initial block, so the peer
+/// read finds it and the fallback is never reached — which is why the order is peer first.
+///
+/// Naming none at all is one directory per run, exactly the arrangement that existed before there
+/// were agents, so a harness that has never heard of them is unchanged.
 fn agent_of(peer: &Peer) -> balthasar_model::AgentId {
-    let Ok(body) = std::fs::read(format!("/proc/{}/environ", peer.pid)) else {
-        return balthasar_model::AgentId::main();
-    };
+    std::fs::read(format!("/proc/{}/environ", peer.pid))
+        .ok()
+        .and_then(|body| named_in(&body))
+        .unwrap_or_else(agent_here)
+}
+
+/// What `BALTHASAR_AGENT` says in one `/proc/<pid>/environ` block, if it says anything.
+fn named_in(body: &[u8]) -> Option<balthasar_model::AgentId> {
     let prefix = format!("{AGENT}=");
     body.split(|byte| *byte == 0)
         .filter_map(|entry| std::str::from_utf8(entry).ok())
         .find_map(|entry| entry.strip_prefix(&prefix))
         .map(str::trim)
         .filter(|named| !named.is_empty())
-        .map_or_else(
-            balthasar_model::AgentId::main,
-            balthasar_model::AgentId::new,
-        )
+        .map(balthasar_model::AgentId::new)
 }
 
-/// Which agent this process itself is, for the door that has no peer.
+/// Which agent this process itself is: the door that has no peer, and the fallback for one whose
+/// peer named none.
 ///
 /// `balthasar api` is one process answering one question for whoever ran it, so the environment
-/// to read is our own.
+/// to read is our own. `serve` reaches here for the harness that spawned it — see [`agent_of`].
 fn agent_here() -> balthasar_model::AgentId {
     std::env::var(AGENT)
         .ok()
@@ -283,4 +298,51 @@ fn named_by_kernel(peer: &Peer) -> Option<balthasar_store::Tool> {
                 .map(|name| name.to_string_lossy().into_owned())
         })
         .and_then(|name| balthasar_store::Tool::from_program(&name))
+}
+
+/// The peer's own name comes first, and the fallback exists at all.
+#[cfg(test)]
+mod agents {
+    use super::*;
+
+    /// One `/proc/<pid>/environ` block: NUL-separated, and no trailing separator to rely on.
+    fn environ(entries: &[&str]) -> Vec<u8> {
+        entries.join("\0").into_bytes()
+    }
+
+    #[test]
+    fn a_peer_that_names_itself_is_read_from_its_own_block() {
+        let body = environ(&["PATH=/usr/bin", "BALTHASAR_AGENT=zeta-pi", "HOME=/home/x"]);
+        assert_eq!(
+            named_in(&body).map(|id| id.to_string()),
+            Some("zeta-pi".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_peer_that_names_nothing_is_none_rather_than_main() {
+        // The distinction the fallback turns on. Answering `main` here would be this function
+        // deciding the question, and the caller would have nothing left to fall back *to*.
+        for body in [
+            environ(&["PATH=/usr/bin"]),
+            environ(&["BALTHASAR_AGENT="]),
+            environ(&["BALTHASAR_AGENT=   "]),
+            Vec::new(),
+        ] {
+            assert_eq!(
+                named_in(&body),
+                None,
+                "{:?}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_is_not_matched_on_a_variable_that_merely_ends_in_it() {
+        // `strip_prefix` on an entry, not a search through the whole block: a harness setting
+        // `MY_BALTHASAR_AGENT` would otherwise name every agent of the run.
+        let body = environ(&["MY_BALTHASAR_AGENT=wrong"]);
+        assert_eq!(named_in(&body), None);
+    }
 }
