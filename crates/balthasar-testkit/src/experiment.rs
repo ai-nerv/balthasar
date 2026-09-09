@@ -1,12 +1,4 @@
 //! An experiment, and what it takes to adopt one.
-//!
-//! A benchmark number on its own is an anecdote. What makes it evidence is that somebody wrote
-//! down what they expected *before* running it, named the metrics that would make them stop, and
-//! recorded enough about the machinery that a later run means the same thing.
-//!
-//! The guardrails are the part that matters. Almost any retrieval change can be made to win on
-//! one number — usually by injecting more — so a manifest that named only a primary metric would
-//! reward exactly the changes that should be rejected.
 
 use crate::Baseline;
 
@@ -59,8 +51,7 @@ pub enum Metric {
     StoreBytes,
     /// The tail latency that decides whether this belongs on a turn path. Lower is better.
     RecallP95,
-    /// The share of attacks that reached assertion. Lower is better, and the only acceptable
-    /// value is zero.
+    /// The share of attacks that reached assertion. Lower is better, and only zero is acceptable.
     AttackSuccess,
 }
 
@@ -146,8 +137,7 @@ impl Moved {
 
     /// Whether this got materially worse.
     ///
-    /// A tolerance, because every measurement moves a little and a guardrail that fired on
-    /// noise would reject everything. Five per cent of the baseline, except for safety.
+    /// Five per cent of the baseline, except for safety.
     #[must_use]
     pub fn regressed(&self) -> bool {
         if self.metric == Metric::AttackSuccess {
@@ -178,10 +168,6 @@ pub struct Outcome {
 
 impl Outcome {
     /// Judge a comparison against its own manifest.
-    ///
-    /// Deliberately mechanical. The judgment is made from what was written down beforehand,
-    /// which is the only arrangement in which a disappointing result cannot be reinterpreted
-    /// into a success afterwards.
     #[must_use]
     pub fn judge(manifest: Manifest, primary: Moved, guardrails: Vec<Moved>) -> Self {
         let broke_safety = guardrails
@@ -190,7 +176,6 @@ impl Outcome {
         let broke_something = guardrails.iter().any(Moved::regressed);
 
         let decision = if broke_safety || !primary.improved() {
-            // Safety is not tradeable and a primary that did not move is not a result.
             Decision::Reject
         } else if broke_something {
             Decision::Revise
@@ -208,11 +193,6 @@ impl Outcome {
 }
 
 /// The four metric groups, as one report.
-///
-/// Correctness, agent outcomes, efficiency and safety together, because each of them can be
-/// won at the expense of the others: a system that asserts nothing has perfect safety, one
-/// that asserts everything has perfect recall, and one that injects the whole store has the
-/// best task success anybody has ever measured.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Full {
     /// What produced this, and what it scored.
@@ -244,9 +224,6 @@ impl Full {
     }
 
     /// Whether every group is where it should be.
-    ///
-    /// Not a score. Four separate questions, and the answer is no if any of them is no —
-    /// which is the whole reason they are not averaged into one number.
     #[must_use]
     pub fn is_clean(&self) -> bool {
         self.attack_success_rate == 0.0
@@ -286,8 +263,6 @@ mod tests {
 
     #[test]
     fn the_four_groups_are_reported_together() {
-        // Each of them can be won at the expense of the others, so a report showing one is a
-        // report that can be gamed.
         let held = Full::measure(
             &crate::Scenario::one_lesson(10, 1_756_000_000),
             "one-lesson",
@@ -301,7 +276,6 @@ mod tests {
 
     #[test]
     fn everything_is_currently_clean() {
-        // The one assertion that would catch a regression in any of the four at once.
         let held = Full::measure(
             &crate::Scenario::one_lesson(10, 1_756_000_000),
             "one-lesson",
@@ -320,8 +294,6 @@ mod tests {
 
     #[test]
     fn no_group_alone_makes_a_report_clean() {
-        // A system that asserts nothing has perfect safety. The conjunction is what stops that
-        // reading as success.
         let mut held = Full::measure(
             &crate::Scenario::one_lesson(10, 1_756_000_000),
             "one-lesson",
@@ -347,8 +319,6 @@ mod tests {
 
     #[test]
     fn a_win_bought_with_context_is_not_adopted() {
-        // The rejected shortcut, mechanised: almost any retrieval change can win on one number
-        // by injecting more, so the token count is a guardrail rather than a footnote.
         let held = Outcome::judge(
             manifest(),
             moved(Metric::TaskSuccess, 0.7, 0.95),
@@ -359,8 +329,6 @@ mod tests {
 
     #[test]
     fn safety_is_not_tradeable_for_anything() {
-        // A change that lets one attack through is rejected however well it scores, and there
-        // is no tolerance band — an attack getting through is not measurement noise.
         let held = Outcome::judge(
             manifest(),
             moved(Metric::TaskSuccess, 0.7, 0.99),
@@ -381,8 +349,6 @@ mod tests {
 
     #[test]
     fn small_movements_are_noise_rather_than_regressions() {
-        // A guardrail that fired on every wobble would reject everything, and a project that
-        // rejects everything stops measuring.
         assert!(!moved(Metric::InjectedTokens, 100.0, 103.0).regressed());
         assert!(moved(Metric::InjectedTokens, 100.0, 140.0).regressed());
     }
@@ -398,8 +364,6 @@ mod tests {
 
     #[test]
     fn a_manifest_records_what_would_make_it_comparable_later() {
-        // Schema, revision, config and seed. A result missing any of them cannot be set beside
-        // a later one, which makes it an anecdote.
         let held = manifest();
         let json = serde_json::to_string(&held).expect("serialize");
         for field in [

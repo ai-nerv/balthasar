@@ -1,16 +1,4 @@
 //! Reading somebody else's benchmark.
-//!
-//! LongMemEval, LoCoMo and the rest are conversational memory benchmarks: a long dialogue, then
-//! questions about it. They are useful and they are not what balthasar is for, so they sit here as
-//! *adapters* rather than as a dependency — nothing is vendored, nothing is downloaded, and
-//! `oslo make verify` passes on a machine that has never heard of them.
-//!
-//! **Absence is the normal case.** Every function here answers "no dataset" without failing,
-//! because a suite that breaks when an optional file is missing is a suite people delete.
-//!
-//! **The local suite stays the gate.** These measure whether balthasar can answer questions about a
-//! conversation. The thing balthasar is actually for — does session k+1 stop rediscovering what
-//! session k learned — is not something any of them ask.
 
 use crate::{Act, Case, Category, Expect, Probe};
 use std::path::Path;
@@ -38,10 +26,6 @@ impl Family {
     }
 
     /// Which of balthasar's categories its questions map onto.
-    ///
-    /// Not all of them. None of these benchmarks has a notion of a procedure that stopped
-    /// working, or of content that arrived from an untrusted source — which is worth saying
-    /// plainly rather than discovering when a score looks unexpectedly good.
     #[must_use]
     pub fn covers(self) -> &'static [Category] {
         match self {
@@ -114,9 +98,7 @@ impl Found {
 
 /// Look for a dataset, and read it if it is there.
 ///
-/// `at` is a directory somebody pointed at. Nothing here searches the filesystem, downloads
-/// anything, or caches anything — a benchmark that quietly acquired data would be a benchmark
-/// nobody could reproduce.
+/// Nothing here searches the filesystem, downloads anything, or caches anything.
 pub fn load(family: Family, at: &Path) -> Found {
     let path = at.join(format!("{}.jsonl", family.as_str()));
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -130,10 +112,8 @@ pub fn load(family: Family, at: &Path) -> Found {
 
 /// Turn a benchmark's own shape into scenarios.
 ///
-/// One object per line: a list of turns and a list of questions. The mapping is deliberately
-/// shallow — every turn becomes something said, every question becomes a probe — because a
-/// clever mapping would be a place for balthasar to score well by understanding the benchmark rather
-/// than by remembering.
+/// One object per line: a list of turns and a list of questions. The mapping is shallow — every
+/// turn becomes something said, every question becomes a probe.
 fn parse(family: Family, text: &str) -> Result<Vec<Case>, String> {
     let mut out = Vec::new();
     for (n, line) in text.lines().enumerate() {
@@ -171,9 +151,7 @@ fn parse(family: Family, text: &str) -> Result<Vec<Case>, String> {
                 let asks = question.get("asks").and_then(serde_json::Value::as_str)?;
                 let expect = match question.get("answer").and_then(serde_json::Value::as_str) {
                     Some(answer) => Expect::Asserted(leak(answer.to_owned())),
-                    // A question with no answer is an abstention question, and every one of
-                    // these benchmarks has them. Treating it as unanswerable-by-omission would
-                    // silently drop the hardest cases.
+                    // A question with no answer is an abstention question, not an omission.
                     None => Expect::Silent,
                 };
                 Some(Probe {
@@ -201,10 +179,8 @@ fn parse(family: Family, text: &str) -> Result<Vec<Case>, String> {
 
 /// A string that outlives the parse.
 ///
-/// [`Case`] holds `&'static str` because the built-in corpus is all literals. An external
-/// dataset is read at runtime, so its strings are leaked deliberately — a benchmark process runs
-/// once and exits, and the alternative is threading a lifetime through the whole suite to serve
-/// a path that is off by default.
+/// [`Case`] holds `&'static str`, so a dataset read at runtime has its strings leaked
+/// deliberately: a benchmark process runs once and exits.
 fn leak(held: String) -> &'static str {
     Box::leak(held.into_boxed_str())
 }
@@ -249,8 +225,7 @@ mod tests {
 
     #[test]
     fn a_question_with_no_answer_becomes_an_abstention() {
-        // Every one of these benchmarks has unanswerable questions, and they are the hardest
-        // cases. Dropping them would flatter every score.
+        // Unanswerable questions are the hardest cases; dropping them would flatter every score.
         let at = scratch("abstain");
         std::fs::write(
             at.join("longmemeval.jsonl"),
@@ -276,9 +251,7 @@ mod tests {
 
     #[test]
     fn every_family_says_what_it_cannot_measure() {
-        // A score from a conversational benchmark says nothing about whether a procedure
-        // stopped working or whether a poisoned page got through, and a report that did not say
-        // so would be read as though it did.
+        // A conversational benchmark says nothing about a procedure that stopped working.
         for family in [
             Family::LongMemEval,
             Family::LoCoMo,
@@ -299,9 +272,7 @@ mod tests {
 
     #[test]
     fn nothing_here_reaches_the_network_or_the_filesystem_at_large() {
-        // `load` opens exactly one path, derived from what the caller passed. There is no
-        // search, no cache, and no download — a benchmark that acquired its own data would be
-        // one nobody could reproduce.
+        // `load` opens exactly one path, derived from what the caller passed.
         let at = scratch("scoped");
         let held = load(Family::MemoryAgentBench, &at);
         assert!(matches!(held, Found::Absent(_)));

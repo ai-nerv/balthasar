@@ -1,29 +1,11 @@
 //! The measured baseline: what a run scored, what it cost, and what produced it.
 //!
-//! A benchmark number without its provenance cannot be compared against a later one. This
-//! records the schema, the binary, the configuration, and whether a model or an embedder was
-//! involved, so a change in the number can be attributed to a change in the system rather than
-//! to a change in the machine it ran on.
-//!
-//! Two rules hold here.
-//!
-//! **Logical results are deterministic.** Everything except timing is a function of the
-//! scenario and the code. [`Baseline::logical`] is the part two identical runs must agree on
-//! byte for byte, and the part a regression check compares.
-//!
-//! **Nothing private is reported.** The report carries counts, hashes and stable local names.
-//! It never carries a query, a transcript excerpt, or the text of a memory.
+//! Everything except timing is a function of the scenario and the code. The report carries counts,
+//! hashes and stable local names, never a query, a transcript excerpt, or the text of a memory.
 
 use crate::{Scenario, Score, measure};
 
-/// The recall latency budget, declared rather than observed.
-///
-/// Five milliseconds at the tail. A memory layer sits on the turn path, so this is the number
-/// that decides whether it belongs there at all — and declaring it is what makes a regression a
-/// failure rather than a slightly larger number nobody looks at.
-///
-/// Generous on purpose: the point is to catch an algorithmic change that turns a bounded query
-/// into an unbounded one, not to police a few hundred microseconds on a busy machine.
+/// The recall latency budget, declared rather than observed: five milliseconds at the tail.
 pub const RECALL_P95_BUDGET_MS: f64 = 5.0;
 
 /// Everything one evaluation says about itself.
@@ -52,16 +34,8 @@ pub struct Baseline {
     /// The best this scenario allows.
     pub ceiling: f64,
     /// The same history in the window, with no memory system at all.
-    ///
-    /// The control that can lose, and the one the field is emphatic about: a memory system that
-    /// does not beat simply carrying the text forward has not earned its latency, its storage or
-    /// its failure modes. Published comparisons routinely report the arm balthasar did not run —
-    /// Mem0 at 66.88% against full context's 72.90% on its own benchmark.
     pub in_window: f64,
-    /// How many sessions in balthasar first matches or beats the window.
-    ///
-    /// `None` while it has not. This is the honest form of the claim: a window wins until the
-    /// history outruns it, and the number worth stating is where that stops being true.
+    /// How many sessions in balthasar first matches or beats the window. `None` while it has not.
     pub crossover: Option<usize>,
     /// The same run with memory switched off.
     pub without_memory: f64,
@@ -83,15 +57,9 @@ pub struct Baseline {
     pub recall_p95_ms: f64,
 }
 
-/// The shortest history at which memory catches the window.
-///
-/// Walked prefix by prefix rather than solved, because the two arms fail for different reasons
-/// and the point where they cross is a measurement rather than an inequality. `None` means the
-/// window was still ahead at the end of the scenario, which is a result and not an omission.
+/// The shortest history at which memory catches the window. `None` if the window stayed ahead.
 fn crossover(scenario: &Scenario) -> Option<usize> {
-    // Walking every prefix is quadratic in sessions, and a benchmark slow enough to skip is a
-    // benchmark nobody runs. If the crossing has not happened in this many sessions it is not
-    // the interesting kind of crossing.
+    // Walking every prefix is quadratic in sessions, so the search is bounded.
     const LOOKED: usize = 16;
     for n in 2..=scenario.sessions.len().min(LOOKED) {
         let prefix = Scenario {
@@ -118,16 +86,13 @@ impl Baseline {
         let (with, cost) = measure(scenario, true);
         let (without, _) = measure(scenario, false);
         let (windowed, _) = crate::measure_arm(scenario, crate::Arm::InWindow(crate::WINDOW));
-        // Only worth walking when there is a crossing to find. If the window is still level or
-        // ahead over the whole scenario then memory never overtook it here, and searching the
-        // prefixes is dozens of runs spent confirming it.
+        // Only worth walking when there is a crossing to find.
         let crossover = (with.hit_rate() > windowed.hit_rate())
             .then(|| crossover(scenario))
             .flatten();
         let ceiling = Score::ceiling(scenario);
 
-        // What memory could have prevented and did not: every rediscovery after the first
-        // encounter of that lesson. The first is nobody's fault — there was nothing to know.
+        // Every rediscovery after the first encounter. The first one had nothing to know.
         let unavoidable = scenario.lessons().len();
         let avoidable_failures = with.rediscoveries.saturating_sub(unavoidable);
 
@@ -147,9 +112,8 @@ impl Baseline {
             binary_version: env!("CARGO_PKG_VERSION").to_owned(),
             schema_version,
             config_fingerprint,
-            // Both are the floor and not a claim about what is installed: the benchmark runs
-            // deterministically on purpose, so that a number from it means the same thing on
-            // every machine. See the module note in `eval`.
+            // The floor, not a claim about what is installed: the benchmark runs deterministically
+            // so that a number from it means the same thing on every machine.
             extractor_mode: "rules".to_owned(),
             embedder_mode: "none".to_owned(),
             scenario: name.to_owned(),
@@ -172,9 +136,8 @@ impl Baseline {
 
     /// The part of this report that two identical runs must agree on exactly.
     ///
-    /// Timing and store size are excluded: one is the machine and the other moves with SQLite's
-    /// page allocation. Everything else is a function of the scenario and the code, and a
-    /// difference in any of it is a real change rather than noise.
+    /// Timing and store size are excluded: one is the machine, the other moves with SQLite's page
+    /// allocation.
     #[must_use]
     pub fn logical(&self) -> String {
         format!(
@@ -218,8 +181,6 @@ mod tests {
 
     #[test]
     fn two_identical_runs_agree_on_everything_but_the_clock() {
-        // F0's whole point. A benchmark whose number moves between two runs of the same code
-        // cannot be used to judge a change to the code.
         assert_eq!(baseline().logical(), baseline().logical());
     }
 
@@ -235,8 +196,6 @@ mod tests {
 
     #[test]
     fn a_different_configuration_is_a_different_fingerprint() {
-        // Otherwise two runs under different settings would compare as though they were the
-        // same experiment.
         let mut changed = balthasar_lua::Settings::default();
         changed.floors.inject += 0.1;
         assert_ne!(
@@ -262,7 +221,6 @@ mod tests {
 
     #[test]
     fn the_report_carries_no_text_from_the_run() {
-        // The privacy rule, checked rather than asserted: nothing a session said may appear.
         let scenario = Scenario::one_lesson(6, SEED);
         let held = Baseline::of(
             &scenario,
@@ -282,16 +240,12 @@ mod tests {
 
     #[test]
     fn memory_costs_tokens_and_the_report_says_how_many() {
-        // A benchmark that reports success without cost can be won by injecting everything.
         let held = baseline();
         assert!(held.injected_tokens > 0, "something was injected");
         assert!(held.store_bytes > 0, "and it took room");
     }
 
     /// The best `recall_p95_ms` of three runs over a store of `sessions` sessions.
-    ///
-    /// Best rather than mean: load makes *a* run slow, so the minimum is the closest this can get
-    /// to what the machine would do with nothing else on it.
     fn recall_p95_over(sessions: usize) -> f64 {
         (0..3)
             .map(|_| {
@@ -308,21 +262,11 @@ mod tests {
 
     #[test]
     fn recall_does_not_get_slower_as_fast_as_the_store_gets_bigger() {
-        // §8.9's last acceptance bullet, asked as a question about the algorithm rather than
-        // about the clock. Traversal, relationship views and the ledger are all on this path; a
-        // change that made any of them unbounded shows up as time rising with the store.
-        //
-        // **A ratio, because a wall-clock budget grades the machine.** The previous version
-        // asserted a p95 under `RECALL_P95_BUDGET_MS` and failed about one run in five under
-        // load — at 8.75ms once, and 0/30 idle. Best-of-three was already tried for that flake
-        // and was not enough. Load inflates both measurements here, so it cancels; only a
-        // genuine change in shape moves the ratio.
+        // A ratio rather than a wall-clock budget: load inflates both measurements, so it cancels.
         let small = recall_p95_over(6);
         let large = recall_p95_over(24);
 
-        // Four times the sessions. Measured at 1.94-1.99 over six runs — a spread of 2.5%, where
-        // the wall-clock number this replaced varied by 75% on the same machine. Linear recall
-        // would land near 4, so the bar sits between the two with room on both sides.
+        // Linear recall would land near 4, measured at 1.94-1.99, so the bar sits between the two.
         let grew = large / small;
         assert!(
             grew < 3.0,
@@ -334,10 +278,7 @@ mod tests {
     #[test]
     #[ignore = "wall-clock; grades the machine, not the code. Run it to read the number."]
     fn recall_stays_inside_its_declared_budget() {
-        // Kept, and not run by default. The number is worth having and the budget is worth
-        // stating; asserting it in a suite that runs beside four compiling crates is what made
-        // it flaky. `measure_amendment_throughput` is ignored here for the same reason, and the
-        // test above is what actually holds the invariant this one was standing in for.
+        // Kept and not run by default: the wall clock beside four compiling crates flakes.
         let held = recall_p95_over(6);
         assert!(
             held < RECALL_P95_BUDGET_MS,
@@ -347,9 +288,6 @@ mod tests {
 
     #[test]
     fn nothing_superseded_is_asserted() {
-        // The failure a memory layer adds that a stateless agent cannot have: confidently
-        // stating the command that was already corrected. Locked at one so a regression that
-        // starts asserting superseded facts shows up as a number rather than as a bug report.
         assert!(
             (baseline().assertion_accuracy - 1.0).abs() < f64::EPSILON,
             "a corrected command was asserted without its correction"
@@ -358,8 +296,6 @@ mod tests {
 
     #[test]
     fn success_is_not_bought_with_an_ever_growing_prompt() {
-        // The rejected shortcut, as a test: a benchmark gain purchased by injecting more every
-        // session is not a gain. Ten sessions of one lesson must not cost ten times four.
         let short = Baseline::of(
             &Scenario::one_lesson(4, SEED),
             "one-lesson",
@@ -382,8 +318,7 @@ mod tests {
 
     #[test]
     fn what_could_not_have_been_known_is_not_counted_against_memory() {
-        // The first encounter of a lesson has nothing to recall from. Counting it as an
-        // avoidable failure would make the ceiling unreachable and the metric meaningless.
+        // The first encounter of a lesson has nothing to recall from.
         let scenario = Scenario::one_lesson(6, SEED);
         let held = Baseline::of(
             &scenario,

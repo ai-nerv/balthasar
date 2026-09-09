@@ -1,8 +1,4 @@
 //! A repository, and a series of sessions worked in it.
-//!
-//! Synthetic on purpose. A benchmark built from real transcripts measures one person's habits
-//! and cannot be re-run when a rule changes; this one states what each session did and what it
-//! *should* have known, so a regression is a number rather than a feeling.
 
 use balthasar_model::Timestamp;
 
@@ -56,9 +52,6 @@ const DAY: Timestamp = 86_400;
 
 impl Scenario {
     /// The canonical case: one repository, one lesson, learned once and needed repeatedly.
-    ///
-    /// The agent reaches for `cargo test`, it fails, `make test` works. Every session after the
-    /// first should start knowing that — and without memory, every one of them rediscovers it.
     #[must_use]
     pub fn one_lesson(sessions: usize, start: Timestamp) -> Self {
         let lesson = Lesson::new("run the tests", "cargo test", "make test");
@@ -76,10 +69,6 @@ impl Scenario {
     }
 
     /// A repository with several things worth knowing, met in different orders.
-    ///
-    /// Closer to a real project, and it catches something the single-lesson case cannot: a
-    /// memory layer that remembers the *last* thing rather than the *relevant* thing scores
-    /// well on one lesson and badly here.
     #[must_use]
     pub fn several_lessons(sessions: usize, start: Timestamp) -> Self {
         let lessons = [
@@ -107,22 +96,17 @@ impl Scenario {
 
     /// Many distinct lessons, each needed again long after the window has dropped it.
     ///
-    /// The shape a window cannot answer and a memory can, and it took three attempts to build
-    /// one that actually separates them. A scenario that repeats a single lesson cannot: the
-    /// newest copy is always in the window. Nor can one that revisits a small rotating set, for
-    /// the same reason. What works is a lesson met twice in a row — enough to cross the ladder —
-    /// and then not mentioned again until far more has been said than a window can hold.
+    /// A lesson met twice in a row, then not mentioned again until far more has been said than a
+    /// window can hold.
     #[must_use]
     pub fn many_lessons(sessions: usize, start: Timestamp) -> Self {
         /// How long ago the revisited lesson was last mentioned, in sessions.
         ///
-        /// Far enough that everything about it has left a bounded window, which is the only
-        /// condition under which the two arms can disagree.
+        /// Far enough that everything about it has left a bounded window.
         const AGO: usize = 25;
 
-        // Distinctive words on purpose. An intent made of stopwords and a bare digit has nothing
-        // a full-text query can match — the first version of this scenario scored memory at
-        // exactly zero for that reason, which measured the fixture rather than the system.
+        // Distinctive words on purpose: an intent of stopwords and a bare digit has nothing a
+        // full-text query can match.
         const SUBJECT: &[&str] = &[
             "migrations",
             "billing",
@@ -207,8 +191,8 @@ mod tests {
 
     #[test]
     fn several_lessons_are_met_in_different_orders() {
-        // A memory layer that remembers the last thing rather than the relevant thing scores
-        // well on one lesson and badly here, which is the point of having both.
+        // A memory layer that remembers the last thing rather than the relevant thing scores well
+        // on one lesson and badly here.
         let scenario = Scenario::several_lessons(3, 0);
         let first: Vec<&str> = scenario
             .sessions
@@ -223,8 +207,7 @@ mod tests {
 
     #[test]
     fn sessions_are_a_day_apart() {
-        // Far enough that recency does not carry a claim on its own, close enough that decay
-        // is not what is being measured.
+        // Far enough that recency does not carry a claim, close enough that decay is not measured.
         let scenario = Scenario::one_lesson(2, 0);
         assert_eq!(scenario.sessions[1].at - scenario.sessions[0].at, DAY);
     }

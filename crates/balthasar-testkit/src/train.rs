@@ -1,21 +1,4 @@
 //! Fitting the ranking policy.
-//!
-//! Gradient descent on a logistic regression: about forty lines of arithmetic, no dependency,
-//! no network. The interesting parts are not the fitting — they are the four things that stop a
-//! fitted model from being believed when it should not be.
-//!
-//! **A holdout, always.** Training accuracy is not a result. The data is split before anything
-//! is fitted, and the number reported is from rows the model never saw.
-//!
-//! **AUC, not accuracy.** Most candidates are not helpful, so a model predicting "no" for
-//! everything scores well on accuracy and is worthless. AUC asks whether it *ranks* a helpful
-//! candidate above an unhelpful one, which is the actual job.
-//!
-//! **A floor on the data.** Twelve weights from forty rows describe the sample.
-//!
-//! **A comparison against the rules.** The existing score is already a good ranker. A model that
-//! does not beat it has not earned a place, and reporting its AUC without the baseline's beside
-//! it would make a tie look like a win.
 
 use balthasar_recall::{FEATURES, LAYOUT, MINIMUM, Model};
 use balthasar_store::TrainingRow;
@@ -47,8 +30,7 @@ pub struct Fitted {
 impl Fitted {
     /// Whether the model beat the rules on held-out data.
     ///
-    /// Beating them by anything is not enough — a hundredth of an AUC point is noise, and a
-    /// model adopted on noise is a model that will be un-adopted on noise later.
+    /// Beating them by a hundredth of an AUC point is noise.
     #[must_use]
     pub fn beats_the_rules(&self) -> bool {
         self.model.holdout_auc > self.baseline_auc + 0.02
@@ -56,9 +38,6 @@ impl Fitted {
 }
 
 /// What went wrong.
-///
-/// Both of these are refusals rather than failures: there is nothing wrong with the data, there
-/// is simply not enough of it to fit twelve weights to and say anything honest afterwards.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrainError {
     /// Not enough labelled rows to fit twelve weights to.
@@ -87,9 +66,7 @@ impl std::error::Error for TrainError {}
 
 /// Turn exported rows into labelled examples.
 ///
-/// Only rows with a countable outcome. `ignored` and `unknown` are not labels — an action nobody
-/// evaluated is not a failure, and training on that assumption would teach the model that
-/// anything unreported is bad, which is most of everything.
+/// Only rows with a countable outcome. `ignored` and `unknown` are not labels.
 #[must_use]
 pub fn label(rows: &[TrainingRow]) -> Vec<Example> {
     rows.iter()
@@ -131,8 +108,7 @@ pub fn features_of(row: &TrainingRow) -> Vec<f64> {
 /// Fit a policy, and say whether it is worth anything.
 ///
 /// `holdout` is the share kept back. The split is deterministic — every third row, rather than
-/// shuffled — so two runs on the same data produce the same model and the same number, which is
-/// the only way a training result can be compared with a later one.
+/// shuffled — so two runs on the same data produce the same model and the same number.
 pub fn fit(examples: &[Example], holdout: f64, passes: usize) -> Result<Fitted, TrainError> {
     if examples.len() < MINIMUM {
         return Err(TrainError::TooLittle(examples.len()));
@@ -156,8 +132,7 @@ pub fn fit(examples: &[Example], holdout: f64, passes: usize) -> Result<Fitted, 
         }
     }
 
-    // Standardised on the training half only. Using the whole set would leak the holdout's
-    // distribution into the model and flatter every number that follows.
+    // Standardised on the training half only; the whole set would leak the holdout's distribution.
     let width = FEATURES.len();
     let mut mean = vec![0.0; width];
     let mut scale = vec![1.0; width];
@@ -166,8 +141,7 @@ pub fn fit(examples: &[Example], holdout: f64, passes: usize) -> Result<Fitted, 
         let m = column.iter().sum::<f64>() / column.len() as f64;
         let variance = column.iter().map(|x| (x - m).powi(2)).sum::<f64>() / column.len() as f64;
         mean[i] = m;
-        // A constant feature gets a scale of one rather than dividing by zero. It contributes
-        // nothing, which is correct: it distinguishes nothing.
+        // A constant feature gets a scale of one rather than dividing by zero.
         scale[i] = if variance > 1e-12 {
             variance.sqrt()
         } else {
@@ -237,11 +211,7 @@ pub fn fit(examples: &[Example], holdout: f64, passes: usize) -> Result<Fitted, 
 
 /// The probability that a helpful example outranks an unhelpful one.
 ///
-/// Accuracy is the wrong measure here: most candidates are not helpful, so predicting "no" for
-/// everything scores well and ranks nothing. This asks the question the model is actually for.
-///
-/// Computed by counting concordant pairs, which is exact and quadratic — fine at the sizes a
-/// local ledger reaches, and honest about what it is doing.
+/// Counted over concordant pairs, which is exact and quadratic.
 #[must_use]
 pub fn auc(scored: &[(f64, bool)]) -> f64 {
     let good: Vec<f64> = scored.iter().filter(|(_, y)| *y).map(|(p, _)| *p).collect();
@@ -300,8 +270,7 @@ mod tests {
 
     #[test]
     fn it_beats_a_baseline_that_knows_nothing() {
-        // Every rule_score is 0.5 here, so the rules rank at chance. A model that could not
-        // beat that on separable data would be broken.
+        // Every `rule_score` is 0.5 here, so the rules rank at chance.
         let held = fit(&learnable(600), 0.3, 400).expect("fit");
         assert!((held.baseline_auc - 0.5).abs() < 0.01);
         assert!(held.beats_the_rules());
@@ -309,7 +278,6 @@ mod tests {
 
     #[test]
     fn a_hair_better_than_the_rules_is_not_better() {
-        // A model adopted on noise is one that will be un-adopted on noise later.
         let mut held = fit(&learnable(600), 0.3, 400).expect("fit");
         held.baseline_auc = held.model.holdout_auc - 0.01;
         assert!(!held.beats_the_rules());
@@ -323,8 +291,7 @@ mod tests {
 
     #[test]
     fn one_sided_data_is_refused() {
-        // Nothing to separate. A model fitted here would predict one class perfectly and mean
-        // nothing at all.
+        // Nothing to separate.
         let all_good: Vec<Example> = learnable(400)
             .into_iter()
             .map(|mut e| {
@@ -340,8 +307,7 @@ mod tests {
 
     #[test]
     fn the_split_is_the_same_every_time() {
-        // Two runs on the same data must produce the same model and the same number, or no
-        // training result can be compared with a later one.
+        // Two runs on the same data must produce the same model and the same number.
         let data = learnable(600);
         let one = fit(&data, 0.3, 200).expect("fit");
         let two = fit(&data, 0.3, 200).expect("fit");
@@ -350,8 +316,7 @@ mod tests {
 
     #[test]
     fn the_holdout_is_never_trained_on() {
-        // Standardisation included. Using the whole set would leak the holdout's distribution
-        // into the model and flatter every number after it.
+        // Standardisation included; the whole set would leak the holdout's distribution.
         let data = learnable(600);
         let held = fit(&data, 0.3, 200).expect("fit");
         assert!(held.model.trained_on < data.len(), "some was kept back");
@@ -360,8 +325,7 @@ mod tests {
 
     #[test]
     fn unreported_outcomes_are_not_labels() {
-        // Training on "unreported means bad" would teach the model that most of everything is
-        // bad, which is a statement about instrumentation.
+        // Training on "unreported means bad" would teach the model that most of everything is bad.
         let rows = vec![
             row(Some("succeeded")),
             row(Some("failed")),
@@ -394,8 +358,7 @@ mod tests {
 
     #[test]
     fn a_model_that_predicts_one_class_scores_badly_on_auc_and_well_on_accuracy() {
-        // Why AUC and not accuracy. Nineteen unhelpful, one helpful, and a model that says "no"
-        // to everything: 95% accurate, and useless.
+        // Nineteen unhelpful, one helpful: a model that says "no" to everything is 95% accurate.
         let mut scored: Vec<(f64, bool)> = (0..19).map(|_| (0.1, false)).collect();
         scored.push((0.1, true));
         assert!((auc(&scored) - 0.5).abs() < 1e-9, "AUC sees through it");
