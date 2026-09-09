@@ -41,6 +41,9 @@ pub struct Args {
     /// Only turns mentioning all of these.
     #[arg(long, value_name = "WORD", num_args = 1..)]
     matching: Vec<String>,
+
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Which bounded read the flags asked for, if any.
@@ -76,6 +79,16 @@ pub fn run(
 
     let Some(handle) = &args.session else {
         let (runs, turns) = held.census()?;
+        if args.how.framed() {
+            for run in held.runs(30)? {
+                args.how.emit(&serde_json::json!({
+                    "session": run.session.to_string(),
+                    "turns": run.turns,
+                    "closed": run.closed,
+                }));
+            }
+            return Ok(());
+        }
         crate::say!("{}", render::bold(scope.as_str()));
         crate::say!(
             "{}",
@@ -105,7 +118,8 @@ pub fn run(
     if args.resume {
         let next = held.next_cursor(&session)?;
         let turns = held.replay(&session)?.len();
-        crate::say!("{}", serde_json::json!({ "next": next, "turns": turns }));
+        args.how
+            .emit(&serde_json::json!({ "next": next, "turns": turns }));
         return Ok(());
     }
 
@@ -121,6 +135,19 @@ pub fn run(
             (read.turns.clone(), read.note())
         }
     };
+    if args.how.framed() {
+        for turn in &turns {
+            args.how.emit(&serde_json::json!({
+                "cursor": turn.cursor,
+                "role": turn.role,
+                "text": turn.text,
+                "revisions": turn.revisions,
+                "raw": turn.raw,
+            }));
+        }
+        return Ok(());
+    }
+
     if turns.is_empty() {
         crate::say!("{}", render::dim("nothing was recorded for that run"));
         return Ok(());

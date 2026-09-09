@@ -13,9 +13,8 @@ pub struct Args {
     #[arg(value_name = "DIR")]
     at: Option<PathBuf>,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Create the store home.
@@ -31,11 +30,9 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
     .is_some_and(|_| home.join(".store").is_file());
     balthasar_store::make_home(&home)?;
 
-    if args.json {
-        crate::say!(
-            "{}",
-            serde_json::json!({ "home": home.to_string_lossy(), "existed": existed })
-        );
+    if args.how.framed() {
+        args.how
+            .emit(&serde_json::json!({ "home": home.to_string_lossy(), "existed": existed }));
         return Ok(());
     }
     crate::say!("{}", render::bold(&home.display().to_string()));

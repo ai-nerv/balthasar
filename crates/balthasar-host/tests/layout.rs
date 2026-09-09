@@ -114,8 +114,7 @@ impl Held {
     fn found(reply: &Reply) -> usize {
         reply
             .result
-            .as_ref()
-            .and_then(|values| values.first())
+            .first()
             .and_then(serde_json::Value::as_array)
             .map_or(0, Vec::len)
     }
@@ -332,8 +331,7 @@ fn a_durable_memory_still_goes_to_the_project() {
 fn field<'a>(reply: &'a Reply, name: &str) -> &'a serde_json::Value {
     reply
         .result
-        .as_ref()
-        .and_then(|values| values.first())
+        .first()
         .and_then(|v| v.get(name))
         .unwrap_or(&serde_json::Value::Null)
 }

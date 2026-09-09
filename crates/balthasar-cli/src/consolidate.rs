@@ -21,9 +21,8 @@ pub struct Args {
     #[arg(long)]
     explain: bool,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Run, or rehearse, one cycle.
@@ -59,20 +58,17 @@ pub fn run(
         loaded.tell("consolidate", &[serde_json::json!(text)]);
     }
 
-    if args.json {
-        crate::say!(
-            "{}",
-            serde_json::json!({
-                "dry_run": report.dry_run,
-                "read": read.sessions,
-                "read_promoted": read.promoted,
-                "decayed": report.decayed,
-                "swept": report.swept,
-                "clusters": report.clusters,
-                "promoted": report.promoted.len(),
-                "reinforced": report.reinforced,
-            })
-        );
+    if args.how.framed() {
+        args.how.emit(&serde_json::json!({
+            "dry_run": report.dry_run,
+            "read": read.sessions,
+            "read_promoted": read.promoted,
+            "decayed": report.decayed,
+            "swept": report.swept,
+            "clusters": report.clusters,
+            "promoted": report.promoted.len(),
+            "reinforced": report.reinforced,
+        }));
         return Ok(());
     }
     say_read(&read);

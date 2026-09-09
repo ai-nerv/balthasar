@@ -1,5 +1,6 @@
 //! `balthasar serve`, `balthasar api` and `balthasar lua-api` — the three ways in from outside.
 
+use crate::render::How;
 use crate::{Which, now, open, render, runs_under};
 use balthasar_host::{Answering, Door};
 use balthasar_ipc::{Listener, Peer, Reply, Request};
@@ -26,9 +27,15 @@ pub struct ApiArgs {
     verb: String,
     /// Its arguments, each as JSON.
     args: Vec<String>,
-    /// Answer in CBOR rather than JSON.
-    #[arg(long)]
-    cbor: bool,
+    #[command(flatten)]
+    how: How,
+}
+
+/// Hand over the client library.
+#[derive(Debug, Parser)]
+pub struct ClientArgs {
+    #[command(flatten)]
+    how: How,
 }
 
 /// Ask the kernel to end this process when whoever started it ends.
@@ -187,12 +194,24 @@ pub fn api(
     };
 
     let mut out = std::io::stdout().lock();
-    crate::coordinated::emit(&mut out, args.cbor, &serde_json::to_value(&reply)?);
+    crate::coordinated::emit(&mut out, args.how, &reply);
     Ok(())
 }
 
-/// Print the client library, for a program that needs to embed it.
-pub fn lua_api() {
+/// Hand over the client library.
+///
+/// Bare, it is the source, because that is what a person redirecting it into a file wants. Asked
+/// in an encoding, it is framed with the source as the one value in `result`.
+pub fn lua_api(args: &ClientArgs) {
+    if args.how.framed() {
+        let mut out = std::io::stdout().lock();
+        crate::coordinated::emit(
+            &mut out,
+            args.how,
+            &Reply::one(serde_json::json!(balthasar_lua::CLIENT)),
+        );
+        return;
+    }
     print!("{}", balthasar_lua::CLIENT);
 }
 

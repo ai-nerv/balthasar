@@ -3,9 +3,9 @@
 //! ```text
 //!   frame   4 bytes big-endian length, then the body
 //!   request {"call":"recall","args":["build command",{"limit":5}]}
-//!   reply   {"ok":true,"n":1,"result":[[…]]}
-//!   refusal {"ok":false,"error":"…","fault":"refused"}
-//!   failure {"ok":false,"error":"…","fault":"failed"}
+//!   reply   {"ok":true,"family":1,"n":1,"result":[…]}
+//!   refusal {"ok":false,"family":1,"n":0,"result":[],"error":"…","fault":"refused"}
+//!   failure {"ok":false,"family":1,"n":0,"result":[],"error":"…","fault":"failed"}
 //! ```
 //!
 //! `result` is a list of return values and `n` says how many: a client that unpacks reads a
@@ -58,18 +58,27 @@ pub enum Fault {
 /// Carried on the reply rather than negotiated, and bumped when an older reader would misread.
 pub const FAMILY: u16 = 1;
 
-/// One answer, as it goes back.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+/// Which revision of the registrar surface a plugin file is written against. See EXTENDING.md.
+pub const SURFACE: u16 = 1;
+
+/// One answer, as it goes back. `n` and `result` are always there, refusals included; every field
+/// defaults on the way in, so a reply from before one of them existed still parses.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Reply {
     pub ok: bool,
+    #[serde(default)]
     pub family: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub n: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Vec<serde_json::Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Only on `verbs`: a fact about the program rather than about the reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<u16>,
+    #[serde(default)]
+    pub n: usize,
+    #[serde(default)]
+    pub result: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Which kind of no. Absent means refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fault: Option<Fault>,
 }
 
@@ -77,24 +86,28 @@ impl Reply {
     /// One value came back.
     #[must_use]
     pub fn one(value: serde_json::Value) -> Self {
-        Self {
-            ok: true,
-            family: FAMILY,
-            n: Some(1),
-            result: Some(vec![value]),
-            error: None,
-            fault: None,
-        }
+        Self::of(vec![value])
+    }
+
+    /// Several values came back, each its own row.
+    #[must_use]
+    pub fn rows(values: Vec<serde_json::Value>) -> Self {
+        Self::of(values)
     }
 
     /// Nothing came back, and that is fine.
     #[must_use]
     pub fn none() -> Self {
+        Self::of(Vec::new())
+    }
+
+    fn of(values: Vec<serde_json::Value>) -> Self {
         Self {
             ok: true,
             family: FAMILY,
-            n: Some(0),
-            result: Some(Vec::new()),
+            surface: None,
+            n: values.len(),
+            result: values,
             error: None,
             fault: None,
         }
@@ -103,26 +116,24 @@ impl Reply {
     /// The call was refused: an ordinary answer, so the connection stays open.
     #[must_use]
     pub fn refused(why: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            family: FAMILY,
-            n: None,
-            result: None,
-            error: Some(why.into()),
-            fault: Some(Fault::Refused),
-        }
+        Self::no(why, Fault::Refused)
     }
 
     /// What was handed over was not recorded.
     #[must_use]
     pub fn failed(why: impl Into<String>) -> Self {
+        Self::no(why, Fault::Failed)
+    }
+
+    fn no(why: impl Into<String>, fault: Fault) -> Self {
         Self {
             ok: false,
             family: FAMILY,
-            n: None,
-            result: None,
+            surface: None,
+            n: 0,
+            result: Vec::new(),
             error: Some(why.into()),
-            fault: Some(Fault::Failed),
+            fault: Some(fault),
         }
     }
 }
@@ -284,7 +295,35 @@ mod tests {
     fn a_refusal_is_an_answer_rather_than_a_failure() {
         let text = serde_json::to_string(&Reply::refused("no")).expect("encode");
         assert!(text.contains(r#""ok":false"#), "{text}");
-        assert!(!text.contains("result"), "{text}");
+        assert!(text.contains(r#""fault":"refused""#), "{text}");
+    }
+
+    #[test]
+    fn every_reply_carries_a_list_and_a_count_even_when_it_is_a_no() {
+        for reply in [Reply::refused("no"), Reply::failed("broke"), Reply::none()] {
+            let text = serde_json::to_string(&reply).expect("encode");
+            assert!(text.contains(r#""n":0"#), "{text}");
+            assert!(text.contains(r#""result":[]"#), "{text}");
+        }
+    }
+
+    #[test]
+    fn surface_rides_only_on_the_reply_that_was_given_one() {
+        let plain = serde_json::to_string(&Reply::none()).expect("encode");
+        assert!(!plain.contains("surface"), "{plain}");
+        let mut listed = Reply::rows(vec![serde_json::json!("verbs")]);
+        listed.surface = Some(SURFACE);
+        let text = serde_json::to_string(&listed).expect("encode");
+        assert!(text.contains(r#""surface":1"#), "{text}");
+        assert!(text.contains(r#""n":1"#), "{text}");
+    }
+
+    #[test]
+    fn a_reply_from_before_these_fields_still_parses() {
+        let old: Reply = serde_json::from_str(r#"{"ok":false,"error":"no"}"#).expect("decode");
+        assert_eq!(old.family, 0);
+        assert_eq!(old.n, 0);
+        assert!(old.result.is_empty());
     }
 
     #[test]

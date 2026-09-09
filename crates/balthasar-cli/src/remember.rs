@@ -46,9 +46,8 @@ pub struct Args {
     #[arg(long, value_name = "NAME")]
     session: Option<String>,
 
-    /// Say what was done in machine-readable form.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Keep what was typed.
@@ -118,7 +117,7 @@ pub fn run(
 
     let landing = store.remember(memory, witness, at)?;
     announce(&store, &landing, loaded)?;
-    say(&store, &landing, args.json, at, floors)
+    say(&store, &landing, args.how, at, floors)
 }
 
 /// Tell whatever the configuration registered.
@@ -154,7 +153,7 @@ fn announce(
 fn say(
     store: &balthasar_store::Store,
     landing: &Landing,
-    json: bool,
+    how: crate::render::How,
     at: balthasar_model::Timestamp,
     floors: Floors,
 ) -> anyhow::Result<()> {
@@ -163,7 +162,7 @@ fn say(
         .get(id)?
         .ok_or_else(|| anyhow::anyhow!("the store lost what it just wrote"))?;
 
-    if json {
+    if how.framed() {
         let what = match landing {
             Landing::Added(_) => "added",
             Landing::Reinforced(_) => "reinforced",
@@ -173,15 +172,12 @@ fn say(
             Landing::Superseded { was, .. } => Some(was.to_string()),
             _ => None,
         };
-        crate::say!(
-            "{}",
-            serde_json::json!({
-                "landing": what,
-                "id": id.to_string(),
-                "was": was,
-                "confidence": memory.confidence,
-            })
-        );
+        how.emit(&serde_json::json!({
+            "landing": what,
+            "id": id.to_string(),
+            "was": was,
+            "confidence": memory.confidence,
+        }));
         return Ok(());
     }
 

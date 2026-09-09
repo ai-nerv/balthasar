@@ -17,9 +17,8 @@ pub struct TraceArgs {
     /// The recall id, as `balthasar recall` printed it.
     recall: String,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// What using a memory has actually led to.
@@ -28,9 +27,8 @@ pub struct UtilityArgs {
     /// The memory, by handle or id.
     handle: String,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Print a recall, what it weighed, and what followed.
@@ -45,18 +43,15 @@ pub fn trace(
         .trace_of(&args.recall)?
         .ok_or_else(|| anyhow::anyhow!("no recall called '{}'", args.recall))?;
 
-    if args.json {
-        crate::say!(
-            "{}",
-            serde_json::json!({
-                "recall": held.recall,
-                "query_hash": held.query_hash,
-                "requested_at": held.requested_at,
-                "latency_us": held.latency_us,
-                "considered": held.considered.len(),
-                "actions": held.actions.len(),
-            })
-        );
+    if args.how.framed() {
+        args.how.emit(&serde_json::json!({
+            "recall": held.recall,
+            "query_hash": held.query_hash,
+            "requested_at": held.requested_at,
+            "latency_us": held.latency_us,
+            "considered": held.considered.len(),
+            "actions": held.actions.len(),
+        }));
         return Ok(());
     }
 
@@ -124,21 +119,18 @@ pub fn utility(
     let held = store.utility_of(&id)?;
     let (considered, returned) = store.times_retrieved(&id)?;
 
-    if args.json {
-        crate::say!(
-            "{}",
-            serde_json::json!({
-                "memory": id.to_string(),
-                "verified_helpful": held.verified_helpful,
-                "verified_harmful": held.verified_harmful,
-                "ignored": held.ignored,
-                "unknown": held.unknown,
-                "proximal": held.proximal,
-                "helpfulness": held.helpfulness(),
-                "times_considered": considered,
-                "times_returned": returned,
-            })
-        );
+    if args.how.framed() {
+        args.how.emit(&serde_json::json!({
+            "memory": id.to_string(),
+            "verified_helpful": held.verified_helpful,
+            "verified_harmful": held.verified_harmful,
+            "ignored": held.ignored,
+            "unknown": held.unknown,
+            "proximal": held.proximal,
+            "helpfulness": held.helpfulness(),
+            "times_considered": considered,
+            "times_returned": returned,
+        }));
         return Ok(());
     }
 
@@ -220,6 +212,9 @@ pub struct DatasetArgs {
     /// Write here instead of to standard output.
     #[arg(long, value_name = "FILE")]
     into: Option<PathBuf>,
+
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Write what a policy could be trained on.
@@ -236,6 +231,15 @@ pub fn dataset(
     let store = open(store_path, scope, tool)?;
     let rows = store.training_rows(args.limit)?;
 
+    // The rows themselves when they were going to standard output anyway; a count when a file
+    // was named, because that is what there is left to report.
+    if args.how.framed() && args.into.is_none() {
+        for row in &rows {
+            args.how.emit(&serde_json::to_value(row)?);
+        }
+        return Ok(());
+    }
+
     let mut out = String::new();
     for row in &rows {
         out.push_str(&serde_json::to_string(row)?);
@@ -245,6 +249,13 @@ pub fn dataset(
     match &args.into {
         Some(path) => {
             std::fs::write(path, &out)?;
+            if args.how.framed() {
+                args.how.emit(&serde_json::json!({
+                    "rows": rows.len(),
+                    "into": path.display().to_string(),
+                }));
+                return Ok(());
+            }
             crate::say!(
                 "{} {}",
                 render::bold(&rows.len().to_string()),
@@ -273,9 +284,8 @@ pub struct OutcomesArgs {
     #[arg(long, default_value_t = 20)]
     limit: usize,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Print the actions a run reported and what came of them.
@@ -307,22 +317,19 @@ pub fn outcomes(
         rows.push((used, verdict));
     }
 
-    if args.json {
-        crate::say!(
-            "{}",
-            serde_json::json!({
-                "session": session.id.to_string(),
-                "name": session.name,
-                "actions": rows.iter().map(|(used, verdict)| serde_json::json!({
-                    "action": used.id,
-                    "tool": used.tool,
-                    "attribution": used.attribution.as_str(),
-                    "memories": used.memories.len(),
-                    "outcome": verdict.as_ref().map(|v| v.kind.as_str()),
-                    "evaluator": verdict.as_ref().map(|v| v.evaluator.clone()),
-                })).collect::<Vec<_>>(),
-            })
-        );
+    if args.how.framed() {
+        args.how.emit(&serde_json::json!({
+            "session": session.id.to_string(),
+            "name": session.name,
+            "actions": rows.iter().map(|(used, verdict)| serde_json::json!({
+                "action": used.id,
+                "tool": used.tool,
+                "attribution": used.attribution.as_str(),
+                "memories": used.memories.len(),
+                "outcome": verdict.as_ref().map(|v| v.kind.as_str()),
+                "evaluator": verdict.as_ref().map(|v| v.evaluator.clone()),
+            })).collect::<Vec<_>>(),
+        }));
         return Ok(());
     }
 

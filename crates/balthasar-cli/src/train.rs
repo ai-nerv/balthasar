@@ -38,9 +38,8 @@ pub struct Args {
     #[arg(long)]
     dry_run: bool,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Where a fitted policy lives.
@@ -71,16 +70,13 @@ pub fn run(
             // A refusal, not a failure. Exit successfully and say what is missing, because a
             // command that returns an error status for "not enough data yet" is one people
             // wire into a script and then silence.
-            if args.json {
-                crate::say!(
-                    "{}",
-                    serde_json::json!({
-                        "trained": false,
-                        "rows": rows.len(),
-                        "labelled": examples.len(),
-                        "because": why.to_string(),
-                    })
-                );
+            if args.how.framed() {
+                args.how.emit(&serde_json::json!({
+                    "trained": false,
+                    "rows": rows.len(),
+                    "labelled": examples.len(),
+                    "because": why.to_string(),
+                }));
             } else {
                 crate::say!("{}", render::bold("nothing was fitted"));
                 crate::say!("  {}", render::dim(&why.to_string()));
@@ -105,25 +101,22 @@ pub fn run(
         .clone()
         .unwrap_or_else(|| model_path(scope, &tool.tool));
 
-    if args.json {
-        crate::say!(
-            "{}",
-            serde_json::json!({
-                "trained": true,
-                "written": earned && !args.dry_run,
-                "path": into.to_string_lossy(),
-                "examples": fitted.examples,
-                "helpful": fitted.helpful,
-                "trained_on": fitted.model.trained_on,
-                "holdout_auc": fitted.model.holdout_auc,
-                "baseline_auc": fitted.baseline_auc,
-                "beats_the_rules": fitted.beats_the_rules(),
-                "weights": fitted.model.explain()
-                    .into_iter()
-                    .map(|(name, w)| serde_json::json!({ "feature": name, "weight": w }))
-                    .collect::<Vec<_>>(),
-            })
-        );
+    if args.how.framed() {
+        args.how.emit(&serde_json::json!({
+            "trained": true,
+            "written": earned && !args.dry_run,
+            "path": into.to_string_lossy(),
+            "examples": fitted.examples,
+            "helpful": fitted.helpful,
+            "trained_on": fitted.model.trained_on,
+            "holdout_auc": fitted.model.holdout_auc,
+            "baseline_auc": fitted.baseline_auc,
+            "beats_the_rules": fitted.beats_the_rules(),
+            "weights": fitted.model.explain()
+                .into_iter()
+                .map(|(name, w)| serde_json::json!({ "feature": name, "weight": w }))
+                .collect::<Vec<_>>(),
+        }));
         if earned && !args.dry_run {
             fitted.model.save(&into)?;
         }

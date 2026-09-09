@@ -125,7 +125,7 @@ enum What {
     Eval(eval::Args),
     /// Print the client library another program loads to talk to balthasar.
     #[command(name = "lua-api", alias = "client")]
-    LuaApi,
+    LuaApi(serve::ClientArgs),
     /// Every verb this program answers, on each of its doors.
     Verbs(coordinated::VerbsArgs),
 }
@@ -133,7 +133,15 @@ enum What {
 /// Run, and answer with what the shell should exit on.
 #[must_use]
 pub fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        // A verb balthasar does not have is a refusal like any other: the reply shape, on stdout,
+        // at exit zero. A parser's usage on stderr cannot be told from a binary that is not there.
+        Err(why) if why.kind() == clap::error::ErrorKind::InvalidSubcommand => {
+            return no_such_call(&why);
+        }
+        Err(why) => why.exit(),
+    };
     match dispatch(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(why) => {
@@ -141,6 +149,21 @@ pub fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Refuse a verb that does not exist, naming what was asked for.
+fn no_such_call(why: &clap::Error) -> ExitCode {
+    let asked = match why.get(clap::error::ContextKind::InvalidSubcommand) {
+        Some(clap::error::ContextValue::String(name)) => name.clone(),
+        _ => String::new(),
+    };
+    let mut out = std::io::stdout().lock();
+    coordinated::emit(
+        &mut out,
+        render::How::default(),
+        &balthasar_ipc::Reply::refused(format!("no such call: {asked}")),
+    );
+    ExitCode::SUCCESS
 }
 
 fn dispatch(cli: &Cli) -> anyhow::Result<()> {
@@ -193,8 +216,8 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Some(What::Api(args)) => serve::api(where_, &scope, &tool, args, floors, &mut loaded),
         Some(What::Eval(args)) => eval::run(args),
         Some(What::Verbs(args)) => coordinated::verbs(args),
-        Some(What::LuaApi) => {
-            serve::lua_api();
+        Some(What::LuaApi(args)) => {
+            serve::lua_api(args);
             Ok(())
         }
     };

@@ -14,6 +14,9 @@ pub struct Args {
     /// Say what would be written without writing it.
     #[arg(long)]
     dry_run: bool,
+
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 // The files balthasar ships, compiled in by `build.rs`, which walks `config/`.
@@ -22,25 +25,47 @@ include!(concat!(env!("OUT_DIR"), "/shipped.rs"));
 /// Write them out.
 pub fn run(args: &Args) -> anyhow::Result<()> {
     let into = PathBuf::from(config_home()).join("balthasar");
-    crate::say!("{}", render::dim(&into.display().to_string()));
+    let framed = args.how.framed();
+    if !framed {
+        crate::say!("{}", render::dim(&into.display().to_string()));
+    }
 
     let mut written = 0;
+    let mut taken: Vec<serde_json::Value> = Vec::new();
     for (name, body) in SHIPPED {
         let path = into.join(name);
         if path.exists() && !args.force {
-            crate::say!("  {} {}", render::dim("kept"), name);
+            taken.push(serde_json::json!({ "file": name, "did": "kept" }));
+            if !framed {
+                crate::say!("  {} {}", render::dim("kept"), name);
+            }
             continue;
         }
         if args.dry_run {
-            crate::say!("  {} {}", render::dim("would write"), name);
+            taken.push(serde_json::json!({ "file": name, "did": "would write" }));
+            if !framed {
+                crate::say!("  {} {}", render::dim("would write"), name);
+            }
             continue;
         }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&path, body)?;
-        crate::say!("  {} {name}", render::bold("wrote"));
+        taken.push(serde_json::json!({ "file": name, "did": "wrote" }));
+        if !framed {
+            crate::say!("  {} {name}", render::bold("wrote"));
+        }
         written += 1;
+    }
+
+    if framed {
+        args.how.emit(&serde_json::json!({
+            "home": into.display().to_string(),
+            "written": written,
+            "files": taken,
+        }));
+        return Ok(());
     }
 
     if written > 0 {

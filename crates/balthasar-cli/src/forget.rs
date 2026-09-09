@@ -33,6 +33,9 @@ pub struct Args {
     /// Do not ask before purging.
     #[arg(long)]
     yes: bool,
+
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Archive or purge.
@@ -61,7 +64,14 @@ pub fn run(
 
     if !args.purge {
         store.archive(&id, at)?;
-        loaded.tell("forget", &[described, serde_json::json!("archived")]);
+        loaded.tell(
+            "forget",
+            &[described.clone(), serde_json::json!("archived")],
+        );
+        if args.how.framed() {
+            args.how.emit(&went("archived", &described));
+            return Ok(());
+        }
         crate::say!("archived {}", render::dim(&memory.text()));
         crate::say!(
             "     {}",
@@ -87,7 +97,11 @@ pub fn run(
     }
     let gone = balthasar_store::purge(&mut store, &id)?;
     anyhow::ensure!(gone == 1, "nothing was removed");
-    loaded.tell("forget", &[described, serde_json::json!("purged")]);
+    loaded.tell("forget", &[described.clone(), serde_json::json!("purged")]);
+    if args.how.framed() {
+        args.how.emit(&went("purged", &described));
+        return Ok(());
+    }
     crate::say!("purged {}", render::dim(&memory.text()));
     crate::say!(
         "     {}",
@@ -101,6 +115,13 @@ pub fn run(
         })
     );
     Ok(())
+}
+
+/// What happened, for a caller that asked in an encoding.
+fn went(what: &str, to: &serde_json::Value) -> serde_json::Value {
+    let mut said = to.clone();
+    said["forgotten"] = serde_json::json!(what);
+    said
 }
 
 /// Archive or purge a whole run.
@@ -149,7 +170,14 @@ fn run_session(
                 archived += 1;
             }
         }
-        loaded.tell("forget", &[described, serde_json::json!("archived")]);
+        loaded.tell(
+            "forget",
+            &[described.clone(), serde_json::json!("archived")],
+        );
+        if args.how.framed() {
+            args.how.emit(&went("archived", &described));
+            return Ok(());
+        }
         crate::say!(
             "archived {} from {}",
             render::bold(&format!("{archived} memor(y/ies)")),
@@ -179,7 +207,11 @@ fn run_session(
     let mut pad = balthasar_store::Scratchpad::at(crate::runs_under(store_path, scope, tool));
     let scratch = balthasar_store::purge_scratch(&mut pad, &session)?;
 
-    loaded.tell("forget", &[described, serde_json::json!("purged")]);
+    loaded.tell("forget", &[described.clone(), serde_json::json!("purged")]);
+    if args.how.framed() {
+        args.how.emit(&went("purged", &described));
+        return Ok(());
+    }
     crate::say!("purged {}", render::bold(&render::short(session.as_str())));
     crate::say!(
         "     {}",

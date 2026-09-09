@@ -83,13 +83,7 @@ impl Harness {
     }
 
     fn field(reply: &Reply, name: &str) -> Option<String> {
-        reply
-            .result
-            .as_ref()?
-            .first()?
-            .get(name)?
-            .as_str()
-            .map(str::to_owned)
+        reply.result.first()?.get(name)?.as_str().map(str::to_owned)
     }
 }
 
@@ -122,8 +116,7 @@ fn nothing_is_recorded_when_capture_is_off() {
     assert!(
         reply
             .result
-            .as_ref()
-            .and_then(|v| v.first())
+            .first()
             .is_some_and(serde_json::Value::is_array),
         "the reply shape changed for callers that did not ask for a ledger"
     );

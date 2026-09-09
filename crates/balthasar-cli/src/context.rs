@@ -28,9 +28,8 @@ pub struct Args {
     #[arg(long)]
     raw: bool,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Assemble and print.
@@ -84,8 +83,8 @@ pub fn run(
         print!("{}", context.text());
         return Ok(());
     }
-    if args.json {
-        crate::say!("{}", as_json(&context));
+    if args.how.framed() {
+        args.how.emit(&as_json(&context));
         return Ok(());
     }
     say(&context, args.budget, &withheld);
@@ -121,7 +120,7 @@ fn say(context: &Context, budget: usize, withheld: &[String]) {
 }
 
 /// The same, for a harness that wants the parts.
-fn as_json(context: &Context) -> String {
+fn as_json(context: &Context) -> serde_json::Value {
     serde_json::json!({
         "tokens": context.tokens,
         "deduplicated": context.deduplicated,
@@ -133,5 +132,4 @@ fn as_json(context: &Context) -> String {
             "tokens": s.tokens,
         })).collect::<Vec<_>>(),
     })
-    .to_string()
 }

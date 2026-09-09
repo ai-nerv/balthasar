@@ -17,9 +17,8 @@ pub struct Args {
     /// The memory, by id or by enough of one to be unambiguous.
     id: String,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Print the argument for a memory.
@@ -37,8 +36,8 @@ pub fn run(
         .get(&id)?
         .ok_or_else(|| anyhow::anyhow!("no memory called {}", args.id))?;
 
-    if args.json {
-        crate::say!("{}", serde_json::to_string(&memory)?);
+    if args.how.framed() {
+        args.how.emit(&serde_json::to_value(&memory)?);
         return Ok(());
     }
 

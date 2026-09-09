@@ -30,9 +30,8 @@ pub struct Args {
     #[arg(long)]
     explain: bool,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Walk a source and offer what it teaches.
@@ -73,8 +72,8 @@ pub fn run(
 
     let report = loaded.ingest(&mut store, &settings, &ask)?;
 
-    if args.json {
-        crate::say!("{}", as_json(&report));
+    if args.how.framed() {
+        args.how.emit(&as_json(&report));
         return Ok(());
     }
     say(&report, args.explain);
@@ -135,7 +134,7 @@ fn say(report: &Report, explain: bool) {
 }
 
 /// The same report, for a script.
-fn as_json(report: &Report) -> String {
+fn as_json(report: &Report) -> serde_json::Value {
     serde_json::json!({
         "dry_run": report.dry_run,
         "sessions": report.sessions,
@@ -148,5 +147,4 @@ fn as_json(report: &Report) -> String {
         "held": report.held,
         "refused": report.refused.len(),
     })
-    .to_string()
 }

@@ -20,9 +20,8 @@ pub struct Args {
     #[arg(long)]
     rebuild: bool,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Derive, and report.
@@ -71,17 +70,14 @@ pub fn run(
     let written = store.relate(&edges)?;
     let census = store.relation_census()?;
 
-    if args.json {
-        crate::say!(
-            "{}",
-            serde_json::json!({
-                "memories": held.len(),
-                "written": written,
-                "kinds": census.iter().map(|(view, n)| {
-                    serde_json::json!({ "kind": view.as_str(), "count": n })
-                }).collect::<Vec<_>>(),
-            })
-        );
+    if args.how.framed() {
+        args.how.emit(&serde_json::json!({
+            "memories": held.len(),
+            "written": written,
+            "kinds": census.iter().map(|(view, n)| {
+                serde_json::json!({ "kind": view.as_str(), "count": n })
+            }).collect::<Vec<_>>(),
+        }));
         return Ok(());
     }
 

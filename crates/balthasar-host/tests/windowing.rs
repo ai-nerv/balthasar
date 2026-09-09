@@ -60,10 +60,7 @@ impl Harness {
                 .map(|tool| format!("`{tool}` — ok, output elided"))
         });
         assert!(reply.ok, "{:?}", reply.error);
-        reply
-            .result
-            .and_then(|r| r.into_iter().next())
-            .expect("a plan")
+        reply.result.into_iter().next().expect("a plan")
     }
 
     /// One turn, as a harness streams it.
@@ -226,10 +223,7 @@ fn a_turn_nobody_can_describe_is_left_alone() {
         call: "plan".into(),
         args: vec![serde_json::json!(SESSION), window()],
     });
-    let plan = reply
-        .result
-        .and_then(|r| r.into_iter().next())
-        .expect("a plan");
+    let plan = reply.result.into_iter().next().expect("a plan");
     assert!(plan["mask"].as_array().expect("a list").is_empty());
 }
 
@@ -312,10 +306,7 @@ fn the_run_says_what_model_it_talks_to_and_the_plan_believes_it() {
         call: "model".into(),
         args: vec![serde_json::json!(SESSION)],
     });
-    let back = asked
-        .result
-        .and_then(|r| r.into_iter().next())
-        .expect("a model");
+    let back = asked.result.into_iter().next().expect("a model");
     assert_eq!(back["model"], "small-8k");
     assert_eq!(back["context"], 8_000);
 

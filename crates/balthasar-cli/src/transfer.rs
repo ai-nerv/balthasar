@@ -15,6 +15,9 @@ pub struct ExportArgs {
     /// Where to write. Standard output when not given.
     #[arg(long, short)]
     out: Option<PathBuf>,
+
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Read something back.
@@ -26,6 +29,9 @@ pub struct ImportArgs {
     /// Say what would happen without writing anything.
     #[arg(long)]
     dry_run: bool,
+
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Every memory, one JSON object per line, oldest first.
@@ -42,8 +48,9 @@ pub fn export(
         Some(path) => Box::new(std::fs::File::create(path)?),
         None => Box::new(std::io::stdout().lock()),
     };
+    // One memory per value, in whichever encoding: a dump is the rows, not one row that is a list.
     for memory in &everything {
-        writeln!(out, "{}", serde_json::to_string(memory)?)?;
+        args.how.write(&mut out, &serde_json::to_value(memory)?)?;
     }
     out.flush()?;
     if args.out.is_some() {
@@ -94,6 +101,16 @@ pub fn import(
         }
     }
 
+    if args.how.framed() {
+        args.how.emit(&serde_json::json!({
+            "dry_run": args.dry_run,
+            "added": added,
+            "reinforced": reinforced,
+            "superseded": superseded,
+            "skipped": skipped,
+        }));
+        return Ok(());
+    }
     let verb = if args.dry_run { "would add" } else { "added" };
     crate::say!(
         "{verb} {added}, reinforced {reinforced}, superseded {superseded}, skipped {skipped}"

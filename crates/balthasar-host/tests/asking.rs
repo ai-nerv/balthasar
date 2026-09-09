@@ -48,8 +48,7 @@ impl Held {
 fn value(reply: &balthasar_ipc::Reply) -> serde_json::Value {
     reply
         .result
-        .as_ref()
-        .and_then(|r| r.first())
+        .first()
         .cloned()
         .unwrap_or(serde_json::Value::Null)
 }

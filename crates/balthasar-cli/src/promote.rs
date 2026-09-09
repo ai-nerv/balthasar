@@ -32,9 +32,8 @@ pub struct Args {
     #[arg(long)]
     no_pin: bool,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Promote, or show what could be.
@@ -133,17 +132,14 @@ fn keep(
         })],
     );
 
-    if args.json {
-        crate::say!(
-            "{}",
-            serde_json::json!({
-                "id": after.id.to_string(),
-                "was": before.tier.as_str(),
-                "now": after.tier.as_str(),
-                "confidence": after.confidence,
-                "pinned": after.strength.pinned,
-            })
-        );
+    if args.how.framed() {
+        args.how.emit(&serde_json::json!({
+            "id": after.id.to_string(),
+            "was": before.tier.as_str(),
+            "now": after.tier.as_str(),
+            "confidence": after.confidence,
+            "pinned": after.strength.pinned,
+        }));
         return Ok(());
     }
 

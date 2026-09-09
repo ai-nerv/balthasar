@@ -24,6 +24,9 @@ pub struct Args {
     /// Say what would happen without writing anything.
     #[arg(long)]
     dry_run: bool,
+
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Walk the store and embed what needs it.
@@ -36,6 +39,11 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let _ = now();
     let Some(embedder) = loaded.embedder() else {
+        if args.how.framed() {
+            args.how
+                .emit(&serde_json::json!({ "model": null, "embedded": 0 }));
+            return Ok(());
+        }
         crate::say!(
             "{}",
             render::dim(
@@ -75,6 +83,14 @@ pub fn run(
         done += waiting.len();
     }
 
+    if args.how.framed() {
+        args.how.emit(&serde_json::json!({
+            "model": model,
+            "embedded": done,
+            "dry_run": args.dry_run,
+        }));
+        return Ok(());
+    }
     if done == 0 {
         crate::say!("{}", render::dim("everything is already embedded"));
         return Ok(());

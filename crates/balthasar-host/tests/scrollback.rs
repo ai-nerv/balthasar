@@ -46,8 +46,7 @@ impl Held {
     fn value(reply: &Reply) -> serde_json::Value {
         reply
             .result
-            .as_ref()
-            .and_then(|r| r.first())
+            .first()
             .cloned()
             .unwrap_or(serde_json::Value::Null)
     }

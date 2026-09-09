@@ -18,9 +18,8 @@ pub struct Args {
     #[arg(long = "now")]
     commit: bool,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Rehearse or run a decay pass.
@@ -38,8 +37,8 @@ pub fn run(
         store.decay_preview(at)?
     };
 
-    if args.json {
-        crate::say!("{}", as_json(&report));
+    if args.how.framed() {
+        args.how.emit(&as_json(&report));
         return Ok(());
     }
     say(&report);
@@ -130,7 +129,7 @@ fn say(report: &Faded) {
 }
 
 /// The same report, for a script.
-fn as_json(report: &Faded) -> String {
+fn as_json(report: &Faded) -> serde_json::Value {
     let entries = |list: &[balthasar_store::Weakened]| {
         list.iter()
             .map(|e| {
@@ -150,5 +149,4 @@ fn as_json(report: &Faded) -> String {
         "swept": entries(&report.swept),
         "pinned": report.pinned,
     })
-    .to_string()
 }

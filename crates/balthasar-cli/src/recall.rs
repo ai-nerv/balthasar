@@ -48,9 +48,8 @@ pub struct Args {
     #[arg(long)]
     explain: bool,
 
-    /// One JSON object per result.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Search this scope, and the global store underneath it.
@@ -168,7 +167,7 @@ pub fn run(
 
     // Evidence is fetched for the results that survived, not for every candidate: a search
     // over a thousand memories should not read four thousand witnesses nobody will see.
-    if args.explain || args.json {
+    if args.explain || args.how.framed() {
         for (store, _, _) in stores(store_path, scope, tool)? {
             for hit in &mut found {
                 if let Ok(witnesses) = store.witnesses_of(&hit.memory.id)
@@ -185,9 +184,9 @@ pub fn run(
         &[serde_json::json!(ask.query), serde_json::json!(found.len())],
     );
 
-    if args.json {
+    if args.how.framed() {
         for hit in &found {
-            crate::say!("{}", serde_json::to_string(&hit.memory)?);
+            args.how.emit(&serde_json::to_value(&hit.memory)?);
         }
         return Ok(());
     }

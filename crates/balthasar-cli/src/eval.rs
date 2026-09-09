@@ -35,9 +35,8 @@ pub struct Args {
     #[arg(long)]
     varied: bool,
 
-    /// Answer as JSON: the full baseline rather than the headline.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 
     /// Report whether the store can tell a popular memory from a useful one.
     ///
@@ -110,16 +109,16 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
 
     if args.full {
         let held = balthasar_testkit::Full::measure(&scenario, name, START);
-        if args.json {
-            crate::say!("{}", serde_json::to_string(&held)?);
+        if args.how.framed() {
+            args.how.emit(&serde_json::to_value(&held)?);
         } else {
             say_full(&held);
         }
         return Ok(());
     }
 
-    if args.json {
-        crate::say!("{}", serde_json::to_string(&baseline)?);
+    if args.how.framed() {
+        args.how.emit(&serde_json::to_value(&baseline)?);
         return Ok(());
     }
     crate::say!(

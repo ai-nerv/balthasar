@@ -20,9 +20,8 @@ pub struct Args {
     /// One session, by name or id, with what it contributed.
     session: Option<String>,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Show the sessions.
@@ -41,19 +40,16 @@ pub fn run(
             .ok_or_else(|| anyhow::anyhow!("no session called '{handle}'"))?;
         let kept = store.session_yield(&session.id)?;
 
-        if args.json {
-            crate::say!(
-                "{}",
-                serde_json::json!({
-                    "id": session.id.to_string(),
-                    "name": session.name,
-                    "project": session.scope.to_string(),
-                    "title": session.title,
-                    "harness": session.harness,
-                    "open": session.is_open(),
-                    "kept": kept,
-                })
-            );
+        if args.how.framed() {
+            args.how.emit(&serde_json::json!({
+                "id": session.id.to_string(),
+                "name": session.name,
+                "project": session.scope.to_string(),
+                "title": session.title,
+                "harness": session.harness,
+                "open": session.is_open(),
+                "kept": kept,
+            }));
             return Ok(());
         }
 
@@ -77,18 +73,15 @@ pub fn run(
     }
 
     let sessions = store.sessions(args.limit)?;
-    if args.json {
+    if args.how.framed() {
         for session in &sessions {
-            crate::say!(
-                "{}",
-                serde_json::json!({
-                    "id": session.id.to_string(),
-                    "name": session.name,
-                    "project": session.scope.to_string(),
-                    "title": session.title,
-                    "kept": store.session_yield(&session.id).unwrap_or(0),
-                })
-            );
+            args.how.emit(&serde_json::json!({
+                "id": session.id.to_string(),
+                "name": session.name,
+                "project": session.scope.to_string(),
+                "title": session.title,
+                "kept": store.session_yield(&session.id).unwrap_or(0),
+            }));
         }
         return Ok(());
     }

@@ -17,6 +17,51 @@ pub fn write_line(args: std::fmt::Arguments<'_>) {
     }
 }
 
+/// Which encoding an answer was asked for.
+///
+/// Every verb takes both flags, so a sibling can ask any of them the family's way. Bare, a verb
+/// prints what a person reads.
+#[derive(Debug, Clone, Copy, Default, clap::Args)]
+pub struct How {
+    /// Answer in JSON. The default, and accepted so every sibling takes the same flags.
+    #[arg(long)]
+    pub json: bool,
+    /// Answer in CBOR rather than JSON.
+    #[arg(long)]
+    pub cbor: bool,
+}
+
+impl How {
+    /// Whether a machine asked, rather than a person.
+    #[must_use]
+    pub fn framed(self) -> bool {
+        self.json || self.cbor
+    }
+
+    /// Write one value in whichever encoding was asked for.
+    ///
+    /// A body that will not encode goes out as JSON instead of not at all.
+    pub fn write(self, out: &mut impl Write, value: &serde_json::Value) -> std::io::Result<()> {
+        if self.cbor {
+            let mut bytes = Vec::new();
+            if ciborium::into_writer(value, &mut bytes).is_ok() {
+                return out.write_all(&bytes);
+            }
+        }
+        writeln!(out, "{value}")
+    }
+
+    /// The same, to standard output, stopping quietly when nobody is reading.
+    pub fn emit(self, value: &serde_json::Value) {
+        let mut out = std::io::stdout().lock();
+        if let Err(why) = self.write(&mut out, value)
+            && why.kind() == std::io::ErrorKind::BrokenPipe
+        {
+            std::process::exit(0);
+        }
+    }
+}
+
 /// `println!`, but a closed pipe ends the program rather than panicking in it.
 #[macro_export]
 macro_rules! say {

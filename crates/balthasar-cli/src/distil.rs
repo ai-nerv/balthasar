@@ -33,9 +33,8 @@ pub struct Args {
     #[arg(long)]
     explain: bool,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Read, or rehearse reading.
@@ -62,23 +61,20 @@ pub fn run(
     let waiting = runs.len();
     let total = pass(&mut store, &held, scope, &runs, at, !args.commit, loaded)?;
 
-    if args.json {
-        crate::say!(
-            "{}",
-            serde_json::json!({
-                "dry_run": total.dry_run,
-                "runs": total.sessions,
-                "turns": total.observations,
-                "proposed": total.proposed,
-                "inferred": total.inferred,
-                "by": total.by,
-                "promoted": total.promoted,
-                "reinforced": total.reinforced,
-                "superseded": total.superseded,
-                "held": total.held,
-                "refused": total.refused.len(),
-            })
-        );
+    if args.how.framed() {
+        args.how.emit(&serde_json::json!({
+            "dry_run": total.dry_run,
+            "runs": total.sessions,
+            "turns": total.observations,
+            "proposed": total.proposed,
+            "inferred": total.inferred,
+            "by": total.by,
+            "promoted": total.promoted,
+            "reinforced": total.reinforced,
+            "superseded": total.superseded,
+            "held": total.held,
+            "refused": total.refused.len(),
+        }));
         return Ok(());
     }
     say(&total, waiting, args.explain);

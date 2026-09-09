@@ -17,9 +17,8 @@ pub struct Args {
     /// The memory, by handle or id.
     handle: String,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Print the trust view.
@@ -61,21 +60,18 @@ pub fn run(
     let external = witnesses.iter().any(|w| w.channel.is_untrusted());
     let inferred = witnesses.iter().all(|w| w.channel.is_inferred()) && !witnesses.is_empty();
 
-    if args.json {
-        crate::say!(
-            "{}",
-            serde_json::json!({
-                "memory": id.to_string(),
-                "witnesses": witnesses.len(),
-                "sessions": sessions.len(),
-                "sources": sources.len(),
-                "channels": channels.keys().collect::<Vec<_>>(),
-                "ceiling": ceiling.as_str(),
-                "external": external,
-                "inferred_only": inferred,
-                "confidence": held.confidence,
-            })
-        );
+    if args.how.framed() {
+        args.how.emit(&serde_json::json!({
+            "memory": id.to_string(),
+            "witnesses": witnesses.len(),
+            "sessions": sessions.len(),
+            "sources": sources.len(),
+            "channels": channels.keys().collect::<Vec<_>>(),
+            "ceiling": ceiling.as_str(),
+            "external": external,
+            "inferred_only": inferred,
+            "confidence": held.confidence,
+        }));
         return Ok(());
     }
 

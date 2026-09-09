@@ -82,12 +82,7 @@ impl Held {
     }
 
     fn field(reply: &Reply, name: &str) -> Option<serde_json::Value> {
-        reply
-            .result
-            .as_ref()
-            .and_then(|values| values.first())
-            .and_then(|v| v.get(name))
-            .cloned()
+        reply.result.first().and_then(|v| v.get(name)).cloned()
     }
 }
 
