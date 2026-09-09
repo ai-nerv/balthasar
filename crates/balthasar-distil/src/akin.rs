@@ -8,21 +8,16 @@ use balthasar_store::Cluster;
 
 /// How many clusters one pass will compare against each other.
 ///
-/// The comparison is quadratic, so this is a wall-clock budget rather than a correctness one —
-/// newest first, and anything missed is found by the next pass, exactly as with the run cap.
+/// The comparison is quadratic, so this is a wall-clock budget: anything missed is found by the
+/// next pass.
 const COMPARED: usize = 300;
 
-/// How many clusters one pass will compare against each other.
-///
 /// A cluster, and whether it took a near match to assemble.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Akin {
     /// The claim and the runs that made it.
     pub cluster: Cluster,
-    /// Whether two differently-worded claims were treated as one.
-    ///
-    /// Carried into the witness note, so `balthasar why` can say the corroboration was a rewording
-    /// rather than a repeat and a person can disagree with it.
+    /// Whether two differently-worded claims were treated as one, which the witness note says.
     pub near: bool,
 }
 
@@ -39,9 +34,8 @@ pub fn merge(clusters: Vec<Cluster>) -> Vec<Akin> {
 
         match joined {
             Some(held) => {
-                // Only a different digest is a rewording. Identical text folding together is an
-                // exact repeat, and a witness note claiming otherwise would be a lie about the
-                // one thing this flag exists to report.
+                // Only a different digest is a rewording; identical text folding together is an
+                // exact repeat.
                 let reworded = held.cluster.hash != cluster.hash;
                 for session in cluster.sessions {
                     if !held.cluster.sessions.contains(&session) {
@@ -77,8 +71,6 @@ mod tests {
 
     #[test]
     fn two_runs_wording_it_differently_corroborate() {
-        // The whole point. Before this each of these was one claim seen once, so neither
-        // reached the two distinct sessions CALLUS needs and neither crossed.
         let merged = merge(vec![
             cluster("we use make test", &["01A"]),
             cluster("run make test instead", &["01B"]),
@@ -90,8 +82,7 @@ mod tests {
 
     #[test]
     fn a_claim_never_corroborates_its_own_replacement() {
-        // The failure that matters. These are the same subject with a different value, which is
-        // a revision — and a store that took it as agreement would hold a fact no run stated.
+        // The same subject with a different value is a revision, not agreement.
         for (a, b) in [
             ("we deploy with fly.io", "we deploy with heroku"),
             (
@@ -143,8 +134,6 @@ mod tests {
 
     #[test]
     fn an_exact_repeat_is_not_reported_as_a_near_match() {
-        // `near` drives what the witness note says, so it has to mean something. An identical
-        // claim from two runs is a repeat and must read as one.
         let merged = merge(vec![
             cluster("we use make test", &["01A"]),
             cluster("we use make test", &["01B"]),
@@ -155,7 +144,6 @@ mod tests {
 
     #[test]
     fn a_run_saying_it_twice_is_still_one_run() {
-        // Merging must not manufacture the diversity it is being counted for.
         let merged = merge(vec![
             cluster("we use make test", &["01A"]),
             cluster("run make test instead", &["01A"]),

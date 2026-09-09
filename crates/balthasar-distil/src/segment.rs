@@ -1,33 +1,23 @@
 //! Where one piece of work ends and the next begins.
 //!
-//! An episode is a coherent change in what is being worked on, not N turns or N tokens. A fixed
-//! window cuts through the middle of a repair as readily as between two unrelated tasks, and an
-//! episode that begins mid-repair cannot answer *what fixed it* because half the evidence is in
-//! the neighbour.
+//! An episode is a coherent change in what is being worked on, not N turns or N tokens. An
+//! episode that begins mid-repair cannot answer *what fixed it*.
 //!
-//! Everything here is rules. No model, no embeddings, no clock beyond what the turns carry — so
-//! segmentation produces the same answer on every machine, and a distiller that proposes better
-//! boundaries is an improvement on something that already works rather than a dependency.
+//! Everything here is rules: no model, no embeddings, no clock beyond what the turns carry, so
+//! segmentation produces the same answer on every machine.
 //!
 //! Three properties are load-bearing, and each has a test.
 //!
-//! **Every boundary says why it is there.** A segmenter whose reasons are implicit is one nobody
-//! can debug, and a causal claim built on an unexplained boundary is unfalsifiable.
-//!
-//! **Appending a turn changes only the open segment.** A segmenter that rewrites the whole
-//! session on every observation is unusable on a live transcript and makes every derived record
-//! churn. Closed segments are closed.
-//!
-//! **The transcript is untouched.** Segments are derived and rebuildable; the turns they point
-//! at are the authority.
+//! * Every boundary says why it is there.
+//! * Appending a turn changes only the open segment. Closed segments are closed.
+//! * The transcript is untouched: segments are derived and rebuildable.
 
 use crate::observation::{Kind, Observation, Role};
 use balthasar_model::Timestamp;
 
 /// Which version of these rules produced a segment.
 ///
-/// Stored with every derived record so that a change here can be rolled out beside the old
-/// segmentation and compared, rather than silently replacing it.
+/// Stored with every derived record, so a change here can be compared against the old one.
 pub const DERIVATION: u32 = 1;
 
 /// What this module calls itself in a derived record.
@@ -61,9 +51,7 @@ pub enum Signal {
 impl Signal {
     /// Whether this splits on its own, or only in company.
     ///
-    /// Hard signals are the ones where continuing would join two genuinely different pieces of
-    /// work. Weak ones are suggestive: a single idle gap in the middle of a repair is somebody
-    /// getting coffee, and cutting there would separate a failure from its fix.
+    /// A weak signal alone — a single idle gap mid-repair — would separate a failure from its fix.
     #[must_use]
     pub fn is_hard(self) -> bool {
         matches!(
@@ -158,10 +146,8 @@ pub struct Rules {
 impl Default for Rules {
     /// The shipped numbers.
     ///
-    /// `min_turns` is three because the shortest complete piece of work is ask, attempt,
-    /// result. `max_turns` is forty because an episode nobody can read is not a summary of
-    /// anything. `idle_seconds` is twenty minutes: long enough that lunch is not a boundary,
-    /// short enough that tomorrow is.
+    /// `min_turns` is three because the shortest complete piece of work is ask, attempt, result.
+    /// `idle_seconds` is twenty minutes: long enough that lunch is not a boundary.
     fn default() -> Self {
         Self {
             min_turns: 3,
@@ -223,8 +209,7 @@ fn signals(turns: &[Observation], rules: &Rules) -> Vec<Boundary> {
         }
 
         if turn.role == Role::User && !turn.text.trim().is_empty() {
-            // A correction continues the work; a new request replaces it. Which one it is
-            // decides whether the failure and its fix stay in one episode.
+            // A correction continues the work; a new request replaces it.
             if is_correction(&turn.text) {
                 out.push(Boundary {
                     cursor,
@@ -266,9 +251,8 @@ fn signals(turns: &[Observation], rules: &Rules) -> Vec<Boundary> {
 
 /// Turn candidate boundaries into segments.
 ///
-/// A weak signal inside `min_turns` of the segment's start is dropped rather than honoured: it
-/// is the rule that keeps a failure and its fix in one episode, which is the whole reason
-/// causal questions can be answered at all.
+/// A weak signal inside `min_turns` of the segment's start is dropped rather than honoured,
+/// which is what keeps a failure and its fix in one episode.
 fn resolve(turns: &[Observation], found: &[Boundary], rules: &Rules) -> Vec<Segment> {
     let mut out: Vec<Segment> = Vec::new();
     let mut open: Option<Segment> = None;
@@ -278,8 +262,7 @@ fn resolve(turns: &[Observation], found: &[Boundary], rules: &Rules) -> Vec<Segm
         let when = turn.at.unwrap_or_default();
         let here = found.iter().find(|b| b.cursor == cursor && at > 0);
 
-        // Long spans are split even with nothing else to say, so one runaway session cannot
-        // become one unreadable episode.
+        // Long spans are split even with nothing else to say.
         let overlong = open
             .as_ref()
             .is_some_and(|s| cursor.saturating_sub(s.start_cursor) >= rules.max_turns);
@@ -385,9 +368,7 @@ fn same_tool(one: &Observation, two: &Observation) -> bool {
 
 /// Whether a user turn is fixing the agent rather than asking for something new.
 ///
-/// Deliberately a short list of openings rather than a classifier. Being wrong here costs a
-/// boundary in the wrong place, and a rule anybody can read and extend is worth more than an
-/// accuracy nobody can audit.
+/// A short list of openings rather than a classifier.
 fn is_correction(text: &str) -> bool {
     const OPENINGS: &[&str] = &[
         "no,",
@@ -466,9 +447,8 @@ mod tests {
 
     #[test]
     fn a_failure_and_its_fix_are_never_separated() {
-        // The property every causal question depends on. A boundary between the failure and the
-        // repair would put "what broke" in one episode and "what fixed it" in the next, and
-        // neither could answer the question on its own.
+        // A boundary between the failure and the repair would put "what broke" in one episode
+        // and "what fixed it" in the next.
         let held = segment(&a_repair(0, NOW), &Rules::default());
         assert_eq!(held.len(), 1);
         let only = &held[0];
@@ -489,8 +469,7 @@ mod tests {
 
     #[test]
     fn a_correction_is_not_a_new_goal() {
-        // "no, use make" continues the work it corrects. Treating it as a new request would
-        // start an episode whose first turn is the fix to a failure it does not contain.
+        // "no, use make" continues the work it corrects.
         let mut turns = a_repair(0, NOW);
         turns.push(user(3, "no, use make instead", NOW + 30));
         turns.push(tool(4, "make test", true, NOW + 40));
@@ -502,8 +481,7 @@ mod tests {
 
     #[test]
     fn every_boundary_says_why_it_is_there() {
-        // A boundary without a reason cannot be argued with, and anything derived from it
-        // inherits that.
+        // A boundary without a reason cannot be argued with.
         let mut turns = a_repair(0, NOW);
         turns.extend(a_repair(3, NOW + 100));
         for held in segment(&turns, &Rules::default()) {
@@ -517,8 +495,7 @@ mod tests {
 
     #[test]
     fn appending_an_ordinary_turn_changes_only_the_open_segment() {
-        // The stability property. A segmenter that rewrites the session on every observation
-        // makes every derived record churn and cannot run on a live transcript.
+        // A segmenter that rewrites the session on every observation cannot run live.
         let mut turns = a_repair(0, NOW);
         turns.extend(a_repair(3, NOW + 100));
         let before = segment(&turns, &Rules::default());
@@ -552,8 +529,7 @@ mod tests {
 
     #[test]
     fn a_silence_inside_a_short_span_is_somebody_getting_coffee() {
-        // A weak signal too close to the start is dropped. Otherwise a pause between asking and
-        // the first attempt would produce a one-turn episode containing only the question.
+        // A weak signal too close to the start is dropped.
         let turns = vec![
             user(0, "get the tests passing", NOW),
             tool(1, "cargo test", false, NOW + 3600),
@@ -636,8 +612,7 @@ mod tests {
 
     #[test]
     fn segmentation_is_the_same_answer_every_time() {
-        // No clock, no model, no map iteration order. A boundary that moved between two runs of
-        // the same code would make every comparison meaningless.
+        // No clock, no model, no map iteration order.
         let mut turns = a_repair(0, NOW);
         turns.extend(a_repair(3, NOW + 100));
         assert_eq!(
@@ -648,8 +623,7 @@ mod tests {
 
     #[test]
     fn every_turn_belongs_to_exactly_one_episode() {
-        // Otherwise a memory distilled from a span could be attributed to two episodes, or to
-        // none, and the cursor range on an Episode would stop meaning anything.
+        // Otherwise a memory distilled from a span could be attributed to two episodes, or none.
         let mut turns = a_repair(0, NOW);
         turns.extend(a_repair(3, NOW + 100));
         turns.push(tool(6, "make lint", true, NOW + 8 * 3600));

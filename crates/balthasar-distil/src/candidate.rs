@@ -5,11 +5,9 @@ use balthasar_model::{Body, Tier, Timestamp, WitnessKind};
 /// Something a path across the gate proposes keeping.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
-    /// What it says.
     pub body: Body,
     /// Which tier it wants to be.
     pub tier: Tier,
-    /// What produced it.
     pub witness: WitnessKind,
     /// Where in the transcript, so the evidence can point at it.
     pub cursor: Option<u64>,
@@ -17,10 +15,7 @@ pub struct Candidate {
     pub importance: balthasar_model::Importance,
     /// Which extractor made it, for `witness.note`.
     pub from: String,
-    /// Whether it should be kept from fading.
-    ///
-    /// Only somebody insisting sets this. A person who has been asked the same thing repeatedly
-    /// is not asking for a memory that decays.
+    /// Whether it should be kept from fading; only somebody insisting sets this.
     pub pinned: bool,
 }
 
@@ -67,11 +62,8 @@ impl Candidate {
         self.body.text()
     }
 
-    /// What this candidate scores before anything else has seen it.
-    ///
-    /// One witness, so this is the weight of the path that produced it. The whole design of the
-    /// weights is here: what a person asked for crosses alone, what merely scrolled out of a
-    /// window does not.
+    /// What this candidate scores before anything else has seen it: one witness, so the weight
+    /// of the path that produced it.
     #[must_use]
     pub fn score(&self, weight_of: impl Fn(WitnessKind) -> f64) -> f64 {
         weight_of(self.witness)
@@ -95,11 +87,9 @@ impl Candidate {
 /// What the gate decided.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Verdict {
-    /// It crosses.
     Promote {
         /// How fast it may fade, possibly amended by a handler.
         importance: balthasar_model::Importance,
-        /// Whether it is pinned.
         pinned: bool,
     },
     /// It waits in scratch for a second witness rather than dying with the session.
@@ -113,8 +103,7 @@ pub enum Verdict {
 
 /// Decide a candidate against the floors, before any configuration has its say.
 ///
-/// Three outcomes rather than two, because "not yet" and "no" are different answers and
-/// collapsing them is what makes a memory system either forgetful or credulous.
+/// Three outcomes rather than two: "not yet" and "no" are different answers.
 #[must_use]
 pub fn weigh(score: f64, promote: f64, hold: f64) -> Verdict {
     if score >= promote {
@@ -134,11 +123,8 @@ pub fn weigh(score: f64, promote: f64, hold: f64) -> Verdict {
 /// How a candidate lands once everything has had its say.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decided {
-    /// What was proposed.
     pub candidate: Candidate,
-    /// What the gate said.
     pub verdict: Verdict,
-    /// When.
     pub at: Timestamp,
 }
 
@@ -163,8 +149,6 @@ mod tests {
 
     #[test]
     fn what_merely_left_the_window_waits_instead() {
-        // §5.1's whole point: distillation is worth 0.3, the promotion floor is 0.5, and the
-        // gap between them is the main defence against believing something said once.
         let score = candidate(WitnessKind::Distillation).score(WitnessKind::weight);
         assert_eq!(weigh(score, 0.5, 0.3), Verdict::Hold);
     }
@@ -188,8 +172,7 @@ mod tests {
 
     #[test]
     fn a_candidate_reads_as_a_table_a_gate_can_use() {
-        // The shipped gate reads `text`, `tier` and `witness`. If any of them stopped being
-        // there the gate would silently stop firing.
+        // The shipped gate reads `text`, `tier` and `witness`.
         let json = candidate(WitnessKind::Cost).as_json();
         for field in ["text", "tier", "witness", "importance", "from"] {
             assert!(json.get(field).is_some(), "{field} is missing");

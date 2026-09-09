@@ -1,16 +1,8 @@
 //! Sleep: what falls out of an idle machine.
 //!
-//! The two paths that cannot be walked inside a single session, because both are about what
-//! happens *across* them:
-//!
-//! * **CALLUS** — something that recurred in unrelated runs. One session repeating a thing is a
-//!   person being emphatic; the same thing surfacing in runs that knew nothing of each other is
-//!   a property of the world.
+//! * **CALLUS** — something that recurred in unrelated runs.
 //! * **SLEEP** — the pass itself: decay first, so a promotion is judged on current strength,
 //!   then cluster, then promote, then sweep what is spent.
-//!
-//! Costs no model. Clustering is by content hash, which is exact and free; a distiller makes it
-//! better and its absence does not stop it.
 
 use crate::DistilError;
 use balthasar_lua::Settings;
@@ -20,23 +12,12 @@ use balthasar_model::{
 use balthasar_store::{Landing, Store, mint};
 
 /// How many distinct sessions must have seen something before it belongs to the project.
-///
-/// Two, and it is the whole of CALLUS. One is emphasis; two is corroboration. Higher would make
-/// a memory layer that learns nothing from a project worked on twice.
 pub const DISTINCT_SESSIONS: usize = 2;
 
 /// How far back a consolidation pass looks for scratch worth corroborating.
-///
-/// Thirty days. Older scratch has either crossed the ladder already or decayed out of the live
-/// set, so opening its file would be paying to read what cannot be promoted. Bounding this is
-/// what stops a pass from scaling with the whole history of a project.
 pub const HORIZON: balthasar_model::Timestamp = 30 * 24 * 60 * 60;
 
-/// How many runs one consolidation pass will open.
-///
-/// Newest first, so a project with ten thousand runs makes progress on every pass rather than
-/// timing out on all of them. The number is a wall-clock budget rather than a correctness one:
-/// anything missed this pass is found by the next.
+/// How many runs one consolidation pass will open, newest first.
 pub const RUNS_PER_PASS: usize = 256;
 
 /// What a pass did, or would do.
@@ -66,8 +47,7 @@ impl Consolidated {
 
 /// Run one cycle.
 ///
-/// The order matters and is cortex's: decay before promotion, so a claim is judged on what it
-/// is worth now rather than on what it was worth when it was learned.
+/// Decay runs before promotion, so a claim is judged on what it is worth now.
 pub fn consolidate(
     store: &mut Store,
     scratch: Option<&mut balthasar_store::Scratchpad>,
@@ -81,9 +61,6 @@ pub fn consolidate(
         ..Consolidated::default()
     };
 
-    // Decay first, so a claim is judged on what it is worth now. Sweeping is held back to the
-    // end: archiving here would take away the very scratch the cycle is about to look at for
-    // corroboration, and the promotion it was going to make would silently never happen.
     let faded = if dry_run {
         store.decay_preview(now)?
     } else {
@@ -91,16 +68,10 @@ pub fn consolidate(
     };
     report.decayed = faded.weakened.len();
 
-    // Where the scratch is. A host that keeps each run in its own file has to be asked across
-    // all of them; one that keeps everything in the project's store answers from a query.
     let mut scratch = scratch;
-    // Every claim, not only the ones already repeated word for word. Two runs wording one thing
-    // differently are two clusters of one session each, and asking the store for corroborated
-    // clusters would drop both before anything could notice they agree.
-    // Both places scratch lives, always. A run's own file holds what it observed; the project
-    // store holds what a pass *held* — a claim one witness short of the floor, waiting for the
-    // second. Reading only the run files made everything held invisible to the thing whose job
-    // is to corroborate it.
+    // Every claim, not only the ones already repeated word for word: two runs wording one thing
+    // differently are two clusters of one session each.
+    // Both places scratch lives — the run's own file, and claims a pass held one witness short.
     let mut found = store.scratch_clusters(scope.as_str(), 1)?;
     if let Some(pad) = scratch.as_mut() {
         if !dry_run {
@@ -109,8 +80,7 @@ pub fn consolidate(
         found.extend(pad.recurring(scope.as_str(), 1, now - HORIZON, RUNS_PER_PASS)?);
     }
 
-    // Fold the rewordings together, and only then ask which claims are corroborated. The bar is
-    // unchanged — what changed is that a claim gets to arrive at it in more than one wording.
+    // Fold the rewordings together, and only then ask which claims are corroborated.
     let groups = crate::merge(found)
         .into_iter()
         .map(one_witness_per_session)
@@ -130,7 +100,8 @@ pub fn consolidate(
         }
     }
 
-    // Only now. Everything left has had its chance at the ladder.
+    // Swept only now: everything left has had its chance at the ladder, and sweeping earlier
+    // would take away the scratch this cycle reads for corroboration.
     if !dry_run {
         report.swept = store.sweep(now)?.swept.len();
         if let Some(pad) = scratch.as_mut() {
@@ -142,16 +113,8 @@ pub fn consolidate(
 
 /// One session, one witness, however many agents of it said the thing.
 ///
-/// A run's scratch is per agent now, so one claim reaches this from as many files as the run had
-/// subagents — and five subagents quoting each other are not five confirmations. They share a
-/// context, a prompt and usually each other's output, which is exactly the relationship CALLUS
-/// exists to look past: it counts *unrelated* runs.
-///
-/// The same reasoning the schema applies to `domain`, where ten sessions quoting one document
-/// count as one source — witness diversity is only diversity if the witnesses could disagree.
-/// Deliberately conservative: the cost of collapsing too far is a claim that waits for a third
-/// run, and the cost of not collapsing far enough is a project that promotes whatever one run
-/// with enough subagents said twice.
+/// A run's scratch is per agent, so one claim reaches this from as many files as the run had
+/// subagents; CALLUS counts unrelated runs.
 fn one_witness_per_session(mut akin: crate::Akin) -> crate::Akin {
     let mut distinct: Vec<SessionId> = Vec::with_capacity(akin.cluster.sessions.len());
     for session in akin.cluster.sessions.drain(..) {
@@ -163,11 +126,7 @@ fn one_witness_per_session(mut akin: crate::Akin) -> crate::Akin {
     akin
 }
 
-/// Carry one recurring claim into the project's own memory.
-///
-/// One witness per distinct session, which is what makes diversity count: the confidence a
-/// promoted claim lands with is a function of how many unrelated runs saw it, not of how loudly
-/// any one of them said it.
+/// Carry one recurring claim into the project's own memory, one witness per distinct session.
 fn promote(
     store: &mut Store,
     settings: &Settings,
@@ -183,8 +142,7 @@ fn promote(
         Body::note(&group.text, NoteKind::Claim),
         now,
     );
-    // Dated from when it was first seen, not from when the pass ran. A thing learned in March
-    // and confirmed in August did not become true this afternoon.
+    // Dated from when it was first seen, not from when the pass ran.
     memory.temporal = balthasar_model::Temporal::recalled(now, group.first_seen);
     memory.session = group.sessions.first().cloned();
     memory.provenance = balthasar_model::Provenance {
@@ -192,9 +150,8 @@ fn promote(
         who: None,
     };
 
-    // What it was made from, recorded rather than inferred. Without this a purge of the scratch
-    // leaves the fact standing with nothing pointing at where it came from — and the next pass
-    // writes the claim back out of a record that was supposed to be gone.
+    // What it was made from, recorded rather than inferred: a purge of the scratch would
+    // otherwise let the next pass write the claim back.
     memory.links = group
         .sources
         .iter()
@@ -208,8 +165,6 @@ fn promote(
     let first = witness_for(akin, 0, scope, settings, now);
     let landing = store.remember(memory, first, now)?;
 
-    // Every other session that saw it is its own witness. Attaching them one at a time is what
-    // makes `balthasar why` able to print the argument rather than a number.
     for (index, _) in group.sessions.iter().enumerate().skip(1) {
         store.attach(
             landing.id(),
@@ -241,9 +196,7 @@ fn witness_for(
         scope.clone(),
         group.first_seen.min(now),
     )
-    // Said in the note, because it is the part a person might disagree with. "Recurred" and
-    // "was said in different words and judged to be the same claim" are different strengths of
-    // evidence, and `balthasar why` has to be able to tell them apart.
+    // Said in the note: "recurred" and "recurred, reworded" are different strengths of evidence.
     .noted(if akin.near {
         "recurred across sessions, reworded (rules, not a model)"
     } else {
@@ -259,8 +212,6 @@ mod tests {
 
     #[test]
     fn corroboration_takes_two_unrelated_runs() {
-        // One session repeating a thing is a person being emphatic. Raising this would make a
-        // memory layer that learns nothing from a project worked on twice.
         assert_eq!(DISTINCT_SESSIONS, 2);
     }
 
@@ -279,10 +230,7 @@ mod tests {
 
     #[test]
     fn five_agents_of_one_run_are_one_witness() {
-        // Scratch is per agent, so one claim arrives from as many files as the run had
-        // subagents. Counting those as five confirmations would promote whatever a single run
-        // with enough subagents said, and subagents of one run share a context and each other's
-        // output — they are the least independent witnesses there are.
+        // Scratch is per agent, so one claim arrives from as many files as the run had subagents.
         let one = one_witness_per_session(cluster(&["01ONE", "01ONE", "01ONE", "01ONE", "01ONE"]));
         assert_eq!(one.cluster.sessions.len(), 1);
         assert!(
@@ -293,8 +241,6 @@ mod tests {
 
     #[test]
     fn two_runs_still_corroborate_however_many_agents_they_had() {
-        // The bar is unchanged. Collapsing agents must not collapse the thing the ladder is
-        // for: two unrelated runs that both saw it.
         let two = one_witness_per_session(cluster(&["01ONE", "01TWO", "01ONE"]));
         assert_eq!(
             two.cluster.sessions,
