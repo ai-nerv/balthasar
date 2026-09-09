@@ -92,21 +92,25 @@ impl Read {
     }
 }
 
-/// Drop a leading part-message: one assistant message is several blocks written as separate
-/// turns, and a read that cut into the middle would hand a model an assistant turn without the
-/// tool call it made. Only the front is trimmed; the other edge is the end of the run.
-fn on_a_boundary(turns: &mut Vec<Turn>, all: &[Turn]) {
-    let Some(first) = turns.first() else { return };
-    let Some(entry) = first.entry.clone() else {
-        return;
-    };
-    // Whether anything earlier belongs to the same message.
-    let started_earlier = all
-        .iter()
-        .any(|t| t.cursor < first.cursor && t.entry.as_ref() == Some(&entry));
-    if started_earlier {
-        turns.retain(|t| t.entry.as_ref() != Some(&entry));
-    }
+/// One turn, from a row of the fifteen columns every read of this table selects.
+fn turn_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Turn> {
+    Ok(Turn {
+        cursor: r.get::<_, i64>(0)? as u64,
+        at: r.get(1)?,
+        role: r.get(2)?,
+        kind: r.get(3)?,
+        text: r.get(4)?,
+        tool: r.get(5)?,
+        raw: r.get(6)?,
+        entry: r.get(7)?,
+        tokens: r.get::<_, Option<i64>>(8)?.map(|n| n.max(0) as u32),
+        state: r.get::<_, String>(9)?.parse().unwrap_or_default(),
+        pinned: r.get::<_, i64>(10)? != 0,
+        ok: r.get(11)?,
+        ms: r.get::<_, Option<i64>>(12)?.map(|n| n.max(0) as u64),
+        args: r.get(13)?,
+        revisions: r.get::<_, i64>(14)? as u32,
+    })
 }
 
 /// What a turn costs. The harness's own count when it has one; four characters to a token is
@@ -166,27 +170,21 @@ impl Transcript {
         })
     }
 
-    /// Turns ending at `until`, taken from the end backwards.
+    /// Turns ending at `until`, read newest-first and stopped at the budget.
+    ///
+    /// What a harness calls to build every window it sends, so it costs what it returns rather
+    /// than what the run holds.
     fn backwards(
         &self,
         session: &SessionId,
         until: u64,
         budget: &Budget,
     ) -> Result<Read, StoreError> {
-        let all = self.range(session, 0, until)?;
-        let mut turns = Vec::new();
-        let mut tokens = 0;
-        for turn in all.iter().rev() {
-            let cost = tokens_of(turn);
-            if !turns.is_empty() && (tokens + cost > budget.tokens || turns.len() >= budget.turns) {
-                break;
-            }
-            tokens += cost;
-            turns.push(turn.clone());
-        }
+        let mut turns = self.newest_first(session, until, budget)?;
+        let tokens = turns.iter().map(tokens_of).sum();
         turns.reverse();
-        on_a_boundary(&mut turns, &all);
-        let omitted = all.len() - turns.len();
+        self.drop_a_leading_part_message(session, &mut turns)?;
+        let omitted = self.how_many_up_to(session, until)? - turns.len();
         // Reading backwards, "more" is what came *before*, so continuing asks for the span that
         // ends just before the earliest turn returned.
         let next = (omitted > 0).then(|| turns.first().map_or(0, |t| t.cursor.saturating_sub(1)));
@@ -294,6 +292,79 @@ impl Transcript {
         })
     }
 
+    /// Turns at or before `until`, newest first, stopping as soon as the budget is spent.
+    ///
+    /// The statement is stepped rather than collected, so what is not returned is not read.
+    fn newest_first(
+        &self,
+        session: &SessionId,
+        until: u64,
+        budget: &Budget,
+    ) -> Result<Vec<Turn>, StoreError> {
+        let mut statement = self.db().prepare(
+            "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, \
+                    ok, ms, args, revisions FROM turn \
+             WHERE session = ?1 AND cursor <= ?2 ORDER BY cursor DESC",
+        )?;
+        let ceiling = i64::try_from(until).unwrap_or(i64::MAX);
+        let rows = statement.query_map(params![session.as_str(), ceiling], turn_of)?;
+
+        let mut taken: Vec<Turn> = Vec::new();
+        let mut tokens = 0;
+        for row in rows {
+            let turn = row?;
+            let cost = tokens_of(&turn);
+            // Always take the first, however large: a budget smaller than one turn still gives it.
+            if !taken.is_empty() && (tokens + cost > budget.tokens || taken.len() >= budget.turns) {
+                break;
+            }
+            tokens += cost;
+            taken.push(turn);
+        }
+        Ok(taken)
+    }
+
+    /// How many turns this run has at or before `until`, counted over the cursor index.
+    fn how_many_up_to(&self, session: &SessionId, until: u64) -> Result<usize, StoreError> {
+        let ceiling = i64::try_from(until).unwrap_or(i64::MAX);
+        let held: i64 = self.db().query_row(
+            "SELECT count(*) FROM turn WHERE session = ?1 AND cursor <= ?2",
+            params![session.as_str(), ceiling],
+            |r| r.get(0),
+        )?;
+        Ok(held.max(0) as usize)
+    }
+
+    /// Drop a leading part-message: one assistant message is several blocks written as separate
+    /// turns, and a read that cut into the middle would hand a model an assistant turn without the
+    /// tool call it made. Only the front is trimmed; the other edge is the end of the run.
+    fn drop_a_leading_part_message(
+        &self,
+        session: &SessionId,
+        turns: &mut Vec<Turn>,
+    ) -> Result<(), StoreError> {
+        let Some(first) = turns.first() else {
+            return Ok(());
+        };
+        let Some(entry) = first.entry.clone() else {
+            return Ok(());
+        };
+        let started_earlier: bool = self.db().query_row(
+            "SELECT EXISTS(SELECT 1 FROM turn \
+             WHERE session = ?1 AND entry = ?2 AND cursor < ?3)",
+            params![
+                session.as_str(),
+                entry,
+                i64::try_from(first.cursor).unwrap_or(i64::MAX)
+            ],
+            |r| r.get::<_, i64>(0).map(|held| held != 0),
+        )?;
+        if started_earlier {
+            turns.retain(|t| t.entry.as_ref() != Some(&entry));
+        }
+        Ok(())
+    }
+
     /// Every turn in a cursor range, in order.
     fn range(&self, session: &SessionId, from: u64, to: u64) -> Result<Vec<Turn>, StoreError> {
         let mut statement = self.db().prepare(
@@ -306,25 +377,7 @@ impl Transcript {
         let ceiling = i64::try_from(to).unwrap_or(i64::MAX);
         let floor = i64::try_from(from).unwrap_or(i64::MAX);
         let rows = statement
-            .query_map(params![session.as_str(), floor, ceiling], |r| {
-                Ok(Turn {
-                    cursor: r.get::<_, i64>(0)? as u64,
-                    at: r.get(1)?,
-                    role: r.get(2)?,
-                    kind: r.get(3)?,
-                    text: r.get(4)?,
-                    tool: r.get(5)?,
-                    raw: r.get(6)?,
-                    entry: r.get(7)?,
-                    tokens: r.get::<_, Option<i64>>(8)?.map(|n| n.max(0) as u32),
-                    state: r.get::<_, String>(9)?.parse().unwrap_or_default(),
-                    pinned: r.get::<_, i64>(10)? != 0,
-                    ok: r.get(11)?,
-                    ms: r.get::<_, Option<i64>>(12)?.map(|n| n.max(0) as u64),
-                    args: r.get(13)?,
-                    revisions: r.get::<_, i64>(14)? as u32,
-                })
-            })?
+            .query_map(params![session.as_str(), floor, ceiling], turn_of)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }

@@ -9,7 +9,7 @@
 use rusqlite::Connection;
 
 /// Every migration, in order. The index is the version it produces.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6];
 
 /// What schema a store this build writes is at.
 ///
@@ -382,6 +382,18 @@ ALTER TABLE witness ADD COLUMN domain TEXT;
 -- "which memories came from this source" has to be answerable in one read, because it is the
 -- question a purge of a poisoned origin starts from.
 CREATE INDEX witness_domain ON witness(domain) WHERE domain IS NOT NULL;
+"#;
+
+/// The order a traversal reads edges in, so it can stop.
+///
+/// `relations_of` asks for the strongest `fan_out` edges out of one memory. `relation_out` keys on
+/// `(from_memory, kind)`, which finds the rows but says nothing about their order — so SQLite read
+/// every edge the memory had and sorted them to take eight. A hub is what a memory layer
+/// accumulates: one entity everything mentions ends up with thousands of edges, and every recall
+/// that touched it paid for all of them. Ordered here, the read stops at the limit.
+const V6: &str = r#"
+CREATE INDEX relation_walk ON relation_view(from_memory, weight DESC, to_memory)
+  WHERE stale_at IS NULL;
 "#;
 #[cfg(test)]
 mod tests {
