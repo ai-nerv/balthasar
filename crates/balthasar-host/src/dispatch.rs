@@ -14,29 +14,17 @@ pub struct Answering<'a> {
     pub store: &'a mut Store,
     /// The scrollback, when this host keeps one.
     ///
-    /// Optional in the type and mandatory in practice for a harness that keeps no journal of
-    /// its own: without it there is nowhere for a turn to be, and `replay` has nothing to
-    /// answer with. A host that serves such a harness and passes `None` here has quietly
-    /// removed the only copy.
+    /// Without it there is nowhere for a turn to be and `replay` has nothing to answer with.
     pub scrollback: Option<&'a mut balthasar_store::Transcript>,
     /// Where each run's own memories go, when this host keeps them separately.
     ///
-    /// A session's scratch belongs to that run and lives in that run's file, so deleting one
-    /// run is deleting one directory. `None` keeps everything in [`Answering::store`], which is
-    /// what a test with one ephemeral store wants and what `--store` asks for.
+    /// A session's scratch belongs to that run and lives in that run's file.
     pub scratch: Option<&'a mut balthasar_store::Scratchpad>,
     /// Which project.
     pub scope: ScopeId,
     /// Which agent inside a run this connection belongs to.
     ///
-    /// **Pinned here and never a call argument.** It is fixed when the connection is accepted,
-    /// the same way [`Tool`] is, and for the same reason: a name a caller could vary per call
-    /// is a name a caller can vary to somebody else's, and reading a sibling subagent's scratch
-    /// by asking for it is the whole of what the agent dimension is supposed to prevent. A
-    /// harness that names no agent gets [`AgentId::main`], which is one directory per run and
-    /// exactly the arrangement that existed before agents did.
-    ///
-    /// [`Tool`]: balthasar_store::Tool
+    /// Pinned when the connection is accepted and never a call argument.
     pub agent: AgentId,
     /// The moment.
     pub now: Timestamp,
@@ -46,24 +34,19 @@ pub struct Answering<'a> {
     pub live_floor: f64,
     /// Whether the use-and-outcome ledger records anything.
     ///
-    /// Off unless a configuration asked. Recording costs writes on the recall path, and a
-    /// memory layer that started keeping a trail of what a caller searched for because a new
-    /// version shipped is not one anybody should install.
+    /// Off unless a configuration asked.
     pub capture: bool,
 }
 
 impl Answering<'_> {
     /// The store a run's own memories belong in.
     ///
-    /// The run's own file when this host keeps one, and the project's store otherwise. Callers
-    /// do not branch on which: a scratch memory is written the same way either way, and the
-    /// only difference is which file the write lands in.
+    /// The run's own file when this host keeps one, and the project's store otherwise.
     pub(crate) fn run(
         &mut self,
         session: &SessionId,
     ) -> Result<&mut Store, balthasar_store::StoreError> {
-        // The pinned agent, taken from this connection rather than from the call: which file a
-        // write lands in is not something the caller gets to say.
+        // The pinned agent, taken from this connection rather than from the call.
         let agent = self.agent.clone();
         match self.scratch.as_mut() {
             Some(pad) => pad.of(session, &agent),
@@ -74,8 +57,7 @@ impl Answering<'_> {
 
 /// Answer one call, with no way to describe a masked turn.
 ///
-/// `plan` still works: a turn nobody can describe is left alone, which is the right answer when
-/// there is no configuration to ask.
+/// `plan` still works: a turn nobody can describe is left alone.
 pub fn answer(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
     answer_with(at, door, request, |_| None)
 }
@@ -88,8 +70,7 @@ pub fn answer_with(
     describe: impl FnMut(&balthasar_store::Turn) -> Option<String>,
 ) -> Reply {
     let Some(verb) = verbs::known(&request.call) else {
-        // Naming what is available beats "unknown verb": the usual cause is a sibling built
-        // against a newer surface, and saying so is what makes that diagnosable.
+        // Naming what is available beats "unknown verb".
         return Reply::refused(format!(
             "balthasar does not answer '{}' — it answers: {}",
             request.call,
@@ -110,8 +91,7 @@ pub fn answer_with(
                 )
                 .collect::<Vec<_>>()
         )),
-        // Shipped in the binary, identical for every session, and it says nothing about *this*
-        // one — so it is as safe to answer as `verbs` and is answered the same way.
+        // Shipped in the binary and identical for every session, so it answers like `verbs`.
         "client" => Reply::one(serde_json::json!(balthasar_lua::CLIENT)),
         "status" => status(at),
         "recall" => recall(at, request),
@@ -130,8 +110,7 @@ pub fn answer_with(
         "utility" => crate::outcome::utility(at, request),
         "remember" => remember(at, door, request),
         "forget" => forget(at, door, request),
-        // `context` needs the configuration's sections, which the caller assembles and hands
-        // in. Answering it here without them would produce an injection nobody declared.
+        // `context` needs the configuration's sections, which the caller assembles and hands in.
         "context" => Reply::refused("context is served by the host that holds the configuration"),
         other => Reply::refused(format!("'{other}' is named but not wired")),
     }
@@ -167,8 +146,7 @@ fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
     ask.limit = limit;
     ask.floor = at.live_floor;
     ask.near = true;
-    // A peer asking for memory is a peer about to send it somewhere. The remote boundary is
-    // the safe assumption unless it says otherwise.
+    // A peer asking for memory is about to send it somewhere, so the remote boundary is assumed.
     ask.remote = opts
         .and_then(|o| o.get("remote"))
         .and_then(serde_json::Value::as_bool)
@@ -178,15 +156,13 @@ fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
         Ok(found) => found,
         Err(why) => return Reply::refused(why.to_string()),
     };
-    // A run searches its own scratch too. Its memories live in its own file now, so without
-    // this a session could not find what it had just been told.
+    // A run searches its own scratch too, which now lives in its own file.
     if let Some(run) = opts
         .and_then(|o| o.get("session"))
         .and_then(serde_json::Value::as_str)
         .map(SessionId::new)
     {
-        // This agent's own scratch and no sibling's. A subagent that could search the scratch
-        // of the others in its run would have the separation on disk and none in the answers.
+        // This agent's own scratch and no sibling's.
         let agent = at.agent.clone();
         let own = match at.scratch.as_mut() {
             Some(pad) => pad.peek(&run, &agent).and_then(|held| match held {
@@ -202,19 +178,14 @@ fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
         found.sort_by(|a, b| b.score.total_cmp(&a.score));
         found.truncate(limit);
     }
-    // Names are resolved once for the whole result set. A caller handed a bare identity has to
-    // ask a second question to find out which run it means, and "which session" is one of the
-    // two questions every answer here has to be able to settle.
+    // Names are resolved once for the whole result set.
     let names = session_names(at);
     let described: Vec<serde_json::Value> = found
         .iter()
         .map(|hit| describe(&hit.memory, at.inject_floor, at.now, &names))
         .collect();
 
-    // Handing memories to a caller that is about to put them in a model's context *is* an
-    // injection, and pretending otherwise would mean the ledger only ever saw the injections
-    // somebody remembered to declare. The id goes back with the results so the caller can say
-    // what it then did — which is the only way an outcome ever becomes attributable.
+    // Handing memories to a caller about to put them in a context is an injection.
     let injection = if at.capture {
         match note_served(at, &found, opts) {
             Ok(id) => Some(id),
@@ -235,8 +206,7 @@ fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
 
 /// Record that a search happened and that its results were handed over.
 ///
-/// After the answer is decided, never before it: the ledger is instrumentation, and there is no
-/// path from here back into what was returned.
+/// After the answer is decided, never before it: the ledger is instrumentation.
 fn note_served(
     at: &mut Answering<'_>,
     found: &[balthasar_store::Scored],
@@ -359,8 +329,7 @@ fn why(at: &mut Answering<'_>, request: &Request) -> Reply {
                     "worth": w.value(at.now),
                     "note": w.note,
                 })).collect::<Vec<_>>(),
-                // What the witnesses actually saw, when the scrollback still has it. The
-                // difference between naming a cursor and showing the turn.
+                // What the witnesses actually saw, when the scrollback still has it.
                 "quoted": quoted,
             }))
         }
@@ -412,12 +381,10 @@ fn remember(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         .and_then(serde_json::Value::as_str)
         .map(SessionId::new);
 
-    // Which file this lands in. A session's own memory goes in that run's store; a durable
-    // one goes in the project's, which is the same store when this host keeps no scratchpad.
+    // Which file this lands in. A session's own memory goes in that run's store.
     let landing_in = session.clone();
 
-    // The ceiling, applied here rather than trusted to the caller: a peer proposes at the
-    // weight a peer proposes at, whatever it asked for.
+    // The ceiling, applied here rather than trusted to the caller.
     let kind = door.witness_for(WitnessKind::Imperative);
     let pinned = door.may_pin()
         && opts
@@ -502,8 +469,7 @@ fn forget(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         Err(why) => return Reply::refused(why.to_string()),
     };
 
-    // A peer may retract what its own session put in. Anything else is the owner's to forget,
-    // because a process that could archive a project's memory could quietly empty it.
+    // A peer may retract what its own session put in. Anything else is the owner's to forget.
     if !matches!(door, Door::Owner) {
         let own = held.tier == Tier::Scratch;
         if !own {
@@ -521,10 +487,7 @@ fn forget(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
 
 /// Stop asserting a whole run, or remove it.
 ///
-/// A run is in three files — what it promoted into the project, what it said, and the scratch it
-/// never promoted — and the two kinds of forgetting reach different numbers of them. Archiving
-/// keeps everything and stops asserting it, so it touches memories alone; purging is the answer
-/// to "delete the key I pasted", so it has to reach all three or the answer is untrue.
+/// A run is in three files: purging reaches all three, archiving touches memories alone.
 fn forget_run(at: &mut Answering<'_>, door: &Door, handle: &str, purge: bool) -> Reply {
     let session = match at.store.session(handle) {
         Ok(Some(found)) => found.id,
@@ -540,8 +503,7 @@ fn forget_run(at: &mut Answering<'_>, door: &Door, handle: &str, purge: bool) ->
         Ok(ids) => ids,
         Err(why) => return Reply::refused(why.to_string()),
     };
-    // A handle naming no run is a typo, and a typo must not answer as a successful purge of
-    // nothing — the caller's next move is to stop looking for the run it meant.
+    // A handle naming no run is a typo, and must not answer as a successful purge of nothing.
     let known = turns > 0
         || !promoted.is_empty()
         // Any agent of it, because a run one subagent wrote scratch for is a run that happened.
@@ -556,8 +518,7 @@ fn forget_run(at: &mut Answering<'_>, door: &Door, handle: &str, purge: bool) ->
     if !purge {
         return archive_run(at, door, &session, &promoted);
     }
-    // The existing ceiling, used for the first time. A peer that could remove rows could empty
-    // a project one run at a time, and unlike a bad write there is no ladder to catch it.
+    // The existing ceiling, used for the first time.
     if !door.may_purge() {
         return Reply::refused("removing a run is the owner's — a peer may archive it");
     }
@@ -588,10 +549,7 @@ fn forget_run(at: &mut Answering<'_>, door: &Door, handle: &str, purge: bool) ->
 
 /// Stop asserting what a run learned, keeping every word of it.
 ///
-/// A peer reaches only the run's own scratch. Anything the run promoted belongs to the project
-/// now, and a peer that could archive a project's memories by naming the run that found them
-/// could empty it as surely as by deleting them — which is the same reason a peer may not
-/// archive somebody else's memory one at a time.
+/// A peer reaches only the run's own scratch.
 fn archive_run(
     at: &mut Answering<'_>,
     door: &Door,
@@ -602,9 +560,7 @@ fn archive_run(
     let mut archived = 0;
     let mut left = 0;
 
-    // Every agent of the run, not only the one asking. Archiving a run is a statement about the
-    // run, and one that left a sibling subagent's scratch asserting itself would have stopped
-    // half of what somebody asked to be stopped.
+    // Every agent of the run, not only the one asking.
     let agents = at
         .scratch
         .as_ref()
@@ -633,8 +589,7 @@ fn archive_run(
     Reply::one(serde_json::json!({
         "archived": archived,
         "session": session.to_string(),
-        // Named rather than silent: a peer told "archived 4" while three of the run's findings
-        // are still being asserted has been told something untrue by omission.
+        // Named rather than silent, so a peer is not told something untrue by omission.
         "left_to_the_owner": left,
     }))
 }
@@ -651,15 +606,13 @@ fn describe(
         "text": memory.text(),
         "tier": memory.tier.as_str(),
         "project": memory.scope.to_string(),
-        // Both: the identity a caller stores, and the name it shows a person. A durable
-        // memory belongs to the project; the session says which run of it learned the thing.
+        // Both: the identity a caller stores, and the name it shows a person.
         "session": memory.session.as_ref().map(ToString::to_string),
         "session_name": memory.session.as_ref()
             .and_then(|id| names.get(id.as_str()))
             .cloned(),
         "confidence": memory.confidence,
-        // The distinction the whole design turns on, handed over rather than left for the
-        // caller to work out from a number and a threshold it would have to be told.
+        // Computed here rather than left to the caller to derive from a number and a threshold.
         "asserted": memory.is_assertable(inject_floor, now, true),
         "since": memory.temporal.valid_from,
         "until": memory.temporal.valid_to,

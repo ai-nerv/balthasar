@@ -1,16 +1,10 @@
 //! Building what a model is actually told.
-//!
-//! The order is the design: allocate by weight, sort within a section, drop restatements, drop
-//! anything under the floor, redact, and hand unspent room to the next section.
 
 use crate::{Section, budget};
 use balthasar_model::{Memory, ScopeId, Timestamp};
 use balthasar_store::{Recall, Store, Weights};
 
 /// Where the assembled context is going.
-///
-/// A local llama.cpp and somebody's API are not the same boundary, and pretending they are is
-/// how a memory marked local ends up in a request to a third party.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Bound {
     /// A model on this machine.
@@ -102,17 +96,11 @@ const DUPLICATE: f64 = 0.8;
 const PER_SECTION: usize = 40;
 
 /// How much of the turn a memory must answer to be worth injecting.
-///
-/// More than half. A model shown a near-miss will use it, and "the staging box is at 10.0.0.7"
-/// in answer to a question about production is worse than saying nothing — which is the whole
-/// reason a memory layer can abstain at all.
 const RELEVANT_ENOUGH: f64 = 0.55;
 
 /// Assemble the context for one turn.
 ///
-/// `redact` is asked about every line and may rewrite or withhold it. Privacy is enforced here,
-/// at the boundary where memory leaves, rather than in the store — which always answers its
-/// owner faithfully.
+/// `redact` is asked about every line and may rewrite or withhold it.
 pub fn assemble(
     stores: &[(Store, bool)],
     sections: &[Section],
@@ -174,8 +162,7 @@ pub fn assemble(
             tokens,
         });
 
-        // Whatever this section did not use goes to the ones after it, rather than being lost
-        // to a section that had four lines to say and room for forty.
+        // Whatever this section did not use goes to the ones after it.
         let unspent = allowance.saturating_sub(spent);
         let remaining: f64 = sections
             .iter()
@@ -217,8 +204,7 @@ fn gather(
         recall.weights = ask.weights;
         recall.near = *near;
         recall.scope_name = ask.scope.clone();
-        // Only where the section is answering a turn. A section that takes whatever is most
-        // salient is not answering a question and has nothing to be relevant to.
+        // Only where the section is answering a turn.
         if section.query.is_some() {
             recall.relevance = RELEVANT_ENOUGH;
         }
@@ -235,8 +221,7 @@ fn gather(
     }
 
     if section.preserve_order {
-        // Chronological, oldest first. Sorting episodes by salience puts last week above this
-        // morning, which tells a reader nothing about what happened.
+        // Chronological, oldest first.
         found.sort_by_key(|(_, memory)| memory.temporal.when());
     } else {
         found.sort_by(|a, b| b.0.total_cmp(&a.0));

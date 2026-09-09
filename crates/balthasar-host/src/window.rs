@@ -1,8 +1,4 @@
 //! `observe` and `plan` — the short-term half of the surface.
-//!
-//! These two are why the connection is held. A harness streams every turn as it settles and
-//! asks what to send before every request, which is several calls per turn rather than the
-//! occasional poll a control socket sees.
 
 use crate::Answering;
 use balthasar_buffer::{Plan, Window};
@@ -12,10 +8,7 @@ use balthasar_store::{State, mint};
 
 /// Record one turn.
 ///
-/// The turn goes to the scrollback, which is the only record of the conversation: what a
-/// harness sends, what a plan reshapes, and what a replay hands back all read the same rows.
-/// A scratch memory is kept alongside it, and that is a different thing — a claim that may
-/// outlive every session, where the turn is one moment in one run.
+/// The turn goes to the scrollback, which is the only record of the conversation.
 pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("observe needs a session");
@@ -25,9 +18,7 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
     };
     let session = SessionId::new(session);
 
-    // Recorded on first sight rather than requiring a harness to open one first. A session
-    // that streamed turns and had no name was invisible to `balthasar sessions` and to
-    // `balthasar promote`, so what it held could not be looked at or kept.
+    // Recorded on first sight rather than requiring a harness to open one first.
     if let Some(scrollback) = at.scrollback.as_mut() {
         let _ = scrollback.open_run(
             &session,
@@ -37,9 +28,7 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
             at.now,
         );
     }
-    // Twice on purpose. The project keeps the registry, so `balthasar sessions` can list runs
-    // without opening every one of them; the run keeps its own row, so its scratch has
-    // something to point at.
+    // Twice on purpose: the project keeps the registry, the run keeps its own row.
     let (scope, now) = (at.scope.clone(), at.now);
     if let Err(why) = at
         .store
@@ -56,10 +45,7 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
         Err(why) => return Reply::refused(why.to_string()),
     }
 
-    // The scrollback first, and durably. For a harness with no journal of its own this call
-    // answering is the only signal that the turn is safe, so nothing else happens until it is —
-    // and a balthasar with nowhere to put it says so rather than answering yes to a turn it
-    // dropped on the floor.
+    // The scrollback first, and durably: nothing else happens until it is.
     let Some(scrollback) = at.scrollback.as_mut() else {
         return Reply::failed("this balthasar keeps no scrollback: the turn was not recorded");
     };
@@ -91,8 +77,7 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
 
-    // Scratch, not fact. What a session says is the session's until something on the ladder
-    // carries it across, and observing is not that something.
+    // Scratch, not fact. Observing is not what carries a claim across the ladder.
     let memory = if text.is_empty() {
         None
     } else {
@@ -104,8 +89,7 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
             at.now,
         );
         held.session = Some(session.clone());
-        // The id that actually holds the text, which is not always the one that went in: a
-        // session repeating itself gets one row and several references to it.
+        // The id that actually holds the text, which is not always the one that went in.
         let landed = match at.run(&session) {
             Ok(run) => run.keep_scratch(held),
             Err(why) => return Reply::refused(why.to_string()),
@@ -116,8 +100,7 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
         }
     };
 
-    // The first thing asked is what the run was for, which is the closest thing to a name a
-    // session has without asking a model to invent one.
+    // The first thing asked is the closest thing to a name a session has.
     if role == "user" && !text.is_empty() {
         let _ = at.store.title_session(&session, text);
         let _ = at
@@ -131,10 +114,7 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
 
 /// Say what model this run talks to, and how much it holds.
 ///
-/// Told once, at the start of a run. balthasar does the compacting, which means balthasar has to know the
-/// size of the thing it is compacting for — and it cannot be guessed from the turns, because a
-/// conversation that fits comfortably in a million tokens overflowed an eight-thousand-token
-/// model twenty turns ago.
+/// balthasar does the compacting, so it has to know the size of the thing it compacts for.
 pub fn model(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("model needs a session");
@@ -149,8 +129,7 @@ pub fn model(at: &mut Answering<'_>, request: &Request) -> Reply {
         .and_then(|s| s.get("model"))
         .and_then(serde_json::Value::as_str)
     else {
-        // Asking rather than telling. A harness restoring a run needs to know what it was
-        // planning against before it plans again.
+        // Asking rather than telling.
         return match scrollback.model_of(&session) {
             Ok(Some((name, context))) => {
                 Reply::one(serde_json::json!({ "model": name, "context": context }))
@@ -173,9 +152,7 @@ pub fn model(at: &mut Answering<'_>, request: &Request) -> Reply {
 
 /// Say what a harness should send.
 ///
-/// `describe` is the configuration's mask handler for a tool. Only the tool's author knows what
-/// a useful stub says, so a turn nobody can describe is left alone rather than replaced with
-/// something uninformative.
+/// `describe` is the mask handler for a tool; a turn nobody can describe is left alone.
 pub fn plan(
     at: &mut Answering<'_>,
     request: &Request,
@@ -191,9 +168,7 @@ pub fn plan(
         return Reply::refused("planning needs a scrollback to plan over");
     };
 
-    // What the harness said, else what the run recorded, else the shipped guess. The size is
-    // the one number that decides whether a prompt is accepted, and a run that said which model
-    // it talks to should not have to repeat it on every plan.
+    // What the harness said, else what the run recorded, else the shipped guess.
     let fallback = Window::default();
     let noted = scrollback.model_of(&session).ok().flatten();
     let window = Window {
@@ -220,8 +195,7 @@ pub fn plan(
     }
 
     let plan = balthasar_buffer::plan(&entries, &window, describe);
-    // The plan is recorded as it is handed over. A harness that applies it and then asks again
-    // must not be told to mask what it has already masked.
+    // The plan is recorded as it is handed over, so asking again does not mask twice.
     for masked in &plan.mask {
         let _ = scrollback.mark(&session, masked.cursor, State::Masked);
     }
@@ -231,11 +205,7 @@ pub fn plan(
                 let _ = scrollback.mark(&session, *cursor, State::Summarised);
             }
         }
-        // TIDE. The moment a span leaves the window is the last moment anybody will look at
-        // it, which makes it the cheapest extraction point in the whole system and the one
-        // every harness throws away. What was in it becomes a candidate — not a fact: a
-        // distillation is worth less than the promotion floor precisely so that something
-        // which merely scrolled past cannot become a belief on its own.
+        // TIDE. What was in a span leaving the window becomes a candidate, never a fact.
         let _ = distil(at, &session, &entries, span);
     }
 
@@ -244,9 +214,7 @@ pub fn plan(
 
 /// The turn a harness sent, in the shape the scrollback keeps.
 ///
-/// `raw` is whatever the harness's own record is, carried verbatim and never parsed. That is
-/// what lets a harness with no journal of its own treat this as one: it gets back exactly what
-/// it wrote, and balthasar never needs to know what an entry means.
+/// `raw` is whatever the harness's own record is, carried verbatim and never parsed.
 fn turn_of(
     session: &SessionId,
     turn: &serde_json::Value,
@@ -258,8 +226,7 @@ fn turn_of(
         .unwrap_or_default();
     let _ = session;
     balthasar_store::Turn {
-        // Which message this block belongs to, when the harness splits one into several. Absent
-        // for a turn that is its own message, which is what a plain user turn is.
+        // Which message this block belongs to, when the harness splits one into several.
         pinned: turn
             .get("pinned")
             .and_then(serde_json::Value::as_bool)
@@ -269,16 +236,12 @@ fn turn_of(
             .get("entry")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
-        // What the harness was charged, when it says. It has the provider's number and balthasar
-        // only has an estimate, so a budget spent against the estimate drifts from what the
-        // model will actually refuse. Absent is not zero: a reader falls back to estimating.
+        // What the harness was charged, when it says. Absent is not zero, and a reader estimates.
         tokens: turn
             .get("tokens")
             .and_then(serde_json::Value::as_u64)
             .and_then(|n| u32::try_from(n).ok()),
-        // What the extractors will read later. A harness that says whether its tool succeeded
-        // and how long it took is a harness balthasar can learn a repair from; one that says neither
-        // still gets a working transcript.
+        // What the extractors will read later.
         ok: turn.get("ok").and_then(serde_json::Value::as_bool),
         ms: turn.get("ms").and_then(serde_json::Value::as_u64),
         args: turn.get("args").map(ToString::to_string),
@@ -290,9 +253,7 @@ fn turn_of(
             .get("at")
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(now),
-        // Not "user". A turn arriving without a role is a turn nobody vouched for, and the
-        // person's rung is the one that crosses alone — so an omission must cost an extraction
-        // rather than buy an imperative.
+        // Not "user". A turn arriving without a role is a turn nobody vouched for.
         role: turn
             .get("role")
             .and_then(serde_json::Value::as_str)
@@ -308,8 +269,7 @@ fn turn_of(
             .get("tool")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
-        // A string if the harness sent one, otherwise the whole object it sent. Either way it
-        // comes back byte for byte.
+        // A string if the harness sent one, otherwise the whole object it sent, byte for byte.
         raw: turn
             .get("raw")
             .map(|raw| raw.as_str().map_or_else(|| raw.to_string(), str::to_owned)),
@@ -319,8 +279,7 @@ fn turn_of(
 
 /// Revise the turn already at a cursor.
 ///
-/// Not exceptional. A tool call is written when it is made and written again when its result
-/// arrives, so the same cursor is written twice and the second write is the one that matters.
+/// The same cursor is written twice when a tool call's result arrives, and the second write wins.
 pub fn amend(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("amend needs a session");
@@ -345,8 +304,7 @@ pub fn amend(at: &mut Answering<'_>, request: &Request) -> Reply {
 
 /// Everything a run said, in order.
 ///
-/// What a harness restores from. Turns come back as they finally stood, so a tool call arrives
-/// with its result rather than as it was first written.
+/// What a harness restores from. Turns come back as they finally stood.
 pub fn replay(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("replay needs a session");
@@ -355,10 +313,7 @@ pub fn replay(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Reply::refused("this balthasar keeps no scrollback");
     };
-    // Unbounded on purpose, and only here. `replay` is what a harness restoring a session
-    // needs — every turn, in order, byte for byte — and truncating it would mean handing back
-    // a session that is quietly missing its beginning. Everything that wants *part* of a
-    // scrollback asks `scroll`, which is bounded.
+    // Unbounded on purpose, and only here. Everything wanting part of a scrollback asks `scroll`.
     match scrollback.replay(&session) {
         Ok(turns) => Reply::one(serde_json::json!(turns)),
         Err(why) => Reply::refused(why.to_string()),
@@ -367,12 +322,9 @@ pub fn replay(at: &mut Answering<'_>, request: &Request) -> Reply {
 
 /// `scroll(session, {want, from, to, cursor, terms, tokens, turns})`.
 ///
-/// Part of a scrollback, within a budget. A run's transcript grows without limit — balthasar is the
-/// only copy — and a model's context does not, so this is the read for everything except
-/// restoring a session.
+/// Part of a scrollback, within a budget.
 ///
-/// The reply carries what was left out and where to continue from, because a caller cannot
-/// otherwise tell "that is all there was" from "that is all you asked for".
+/// The reply carries what was left out and where to continue from.
 pub fn scroll(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("scroll needs a session");
@@ -440,8 +392,7 @@ pub fn scroll(at: &mut Answering<'_>, request: &Request) -> Reply {
 
 /// Where a restarting harness left off.
 ///
-/// A harness with no journal has no other way to know which cursor to allocate next, and
-/// guessing wrong overwrites a turn that nothing else holds a copy of.
+/// Guessing the next cursor wrong overwrites a turn that nothing else holds a copy of.
 pub fn resume(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("resume needs a session");
@@ -460,9 +411,7 @@ pub fn resume(at: &mut Answering<'_>, request: &Request) -> Reply {
 
 /// Attach a distillation witness to everything a summary is about to stand in for.
 ///
-/// One witness per turn, weighted below the promotion floor. What it buys is that a *second*
-/// witness — the same thing recurring in another run, or a person confirming it — now has
-/// something to land on rather than starting from nothing.
+/// One witness per turn, weighted below the promotion floor.
 fn distil(
     at: &mut Answering<'_>,
     session: &SessionId,
@@ -488,7 +437,6 @@ fn distil(
         .at_cursor(entry.cursor)
         .noted("left the context window (rules, not a model)");
         // In the run's own store, which is where the memory a summary stands in for lives.
-        // Attaching in the project's would be evidence for a memory that is not there.
         let now = at.now;
         at.run(session)?.attach(&id, witness, now)?;
         carried += 1;

@@ -1,17 +1,4 @@
 //! What a model is actually sent: a window into the scrollback, and what memory has to add.
-//!
-//! The view is not a buffer the harness keeps beside the store — it is a window *into* the
-//! store. The transcript is appended to as the run happens and read back as a slice, so what a
-//! model sees and what balthasar holds cannot drift: there is only one copy, and the prompt is a
-//! rendering of part of it.
-//!
-//! **The split moves as the session does.** At the start there is almost no scrollback, so
-//! memory fills the budget — which is right, because that is the moment the agent knows least
-//! and last week's lessons are all it has. As the run grows, the recent turns matter more and
-//! take the room. Memory never disappears, though: it keeps a floor, because a session long
-//! enough to crowd it out is exactly the one that will otherwise rediscover something.
-//!
-//! Nothing here decides what is *true*. It decides what fits.
 
 use crate::{Ask, Context, Section, assemble};
 use balthasar_model::SessionId;
@@ -23,17 +10,10 @@ pub struct Split {
     /// The whole allowance.
     pub tokens: usize,
     /// The least memory may have, however long the run gets.
-    ///
-    /// A fraction rather than a count, so it scales with whatever budget a caller has. A
-    /// quarter: enough for a handful of facts and a habit, which is the difference between an
-    /// agent that repeats last week's mistake and one that does not.
     pub memory_floor: f64,
     /// The most the scrollback may take before memory's floor bites.
     pub scrollback_ceiling: f64,
     /// The share of memory's own allowance that verbatim spans may take.
-    ///
-    /// A minority on purpose. A promoted claim carries witnesses and a derived confidence; a span
-    /// carries neither, so it earns room only where memory had nothing to say.
     pub span_share: f64,
     /// What the reply and a compaction call need kept clear.
     pub reserve: usize,
@@ -53,10 +33,6 @@ impl Default for Split {
 
 impl Split {
     /// What the scrollback may spend, given how much of it there is.
-    ///
-    /// Grows with the run and stops at the ceiling. A short session leaves most of the budget to
-    /// memory without anybody configuring that — the scrollback simply has not got enough to
-    /// claim it yet.
     #[must_use]
     pub fn for_scrollback(&self, available: usize) -> usize {
         let ceiling = (self.tokens as f64 * self.scrollback_ceiling) as usize;
@@ -72,18 +48,11 @@ impl Split {
 }
 
 /// How full the window is, and how long that can last.
-///
-/// The number a caller needs before a request, not after it: whether this fits, and whether the
-/// next one will. A harness that finds out by being refused has already lost the turn.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pressure {
     /// What the prompt costs.
     pub used: usize,
     /// What the model will take, less what the reply and a compaction need.
-    ///
-    /// Not the raw context size. Compacting costs a request of its own and that request needs
-    /// room, so a plan that filled the window to the brim would leave the summarisation itself
-    /// as the thing that overflows.
     pub usable: usize,
 }
 
@@ -110,9 +79,6 @@ impl Pressure {
     }
 
     /// Whether it is time to compact.
-    ///
-    /// Before the window is full, not at it. Compaction needs a request of its own, and a
-    /// harness that waits until nothing fits has nowhere to run it.
     #[must_use]
     pub fn should_compact(&self) -> bool {
         self.share() >= 0.8
@@ -131,9 +97,6 @@ pub struct Prompt {
     /// What memory added.
     pub memory: Context,
     /// What was said that no memory records.
-    ///
-    /// Evidence, never assertion. These are turns matching the question that never crossed the
-    /// ladder — the answer to "nobody wrote this down, but somebody said it".
     pub spans: crate::Quotes,
     /// The whole thing.
     pub tokens: usize,
@@ -157,10 +120,6 @@ impl Default for Prompt {
 
 impl Prompt {
     /// Whether the window is showing the start of the run.
-    ///
-    /// When it is, nothing has been cut and the model is seeing the whole conversation. When it
-    /// is not, something earlier exists and only memory can speak for it — which is the moment
-    /// memory stops being a nicety.
     #[must_use]
     pub fn is_whole(&self) -> bool {
         self.omitted == 0
@@ -179,8 +138,6 @@ impl Prompt {
 /// Build one.
 ///
 /// The scrollback is read first, because how much of it there is decides what memory has left.
-/// The other order would fix memory's allowance before knowing whether the run needed the room,
-/// and a long session would then carry a full page of facts it had already acted on.
 pub fn compose(
     stores: &[(Store, bool)],
     scrollback: &Transcript,
@@ -190,9 +147,7 @@ pub fn compose(
     split: &Split,
     redact: impl FnMut(&str, &balthasar_model::Memory) -> Option<String>,
 ) -> Result<Prompt, balthasar_store::StoreError> {
-    // The run's own model when it said which one, and the caller's split otherwise. A budget
-    // set from a default is a guess about the one number that decides whether a prompt is
-    // accepted, and the run already knows the answer.
+    // The run's own model when it said which one, and the caller's split otherwise.
     let split = &match scrollback.model_of(session) {
         Ok(Some((_, context))) => Split {
             tokens: context as usize,
@@ -221,9 +176,7 @@ pub fn compose(
         redact,
     )?;
 
-    // Then what nobody ever wrote down. Spans get what memory did not spend, capped at their
-    // share — so a question memory answers well costs no spans at all, and a question it cannot
-    // answer spends the room on the words themselves.
+    // Spans get what memory did not spend, capped at their share.
     let spare = for_memory.saturating_sub(memory.tokens);
     let allowance = spare.min((for_memory as f64 * split.span_share) as usize);
     let already: Vec<String> = memory
@@ -254,8 +207,6 @@ mod tests {
 
     #[test]
     fn an_empty_run_leaves_the_whole_budget_to_memory() {
-        // The start of a session: nothing has been said, and last week's lessons are all the
-        // agent has. Memory should not be rationed against a scrollback that does not exist.
         let split = Split::default();
         assert_eq!(split.for_memory(0), split.tokens);
     }
@@ -270,8 +221,6 @@ mod tests {
 
     #[test]
     fn memory_never_falls_below_its_floor() {
-        // A session long enough to crowd memory out is exactly the one that will otherwise
-        // rediscover something, so the floor is the whole point.
         let split = Split::default();
         let floor = (split.tokens as f64 * split.memory_floor) as usize;
         assert_eq!(split.for_memory(split.tokens * 10), floor);
@@ -293,7 +242,6 @@ mod tests {
 
     #[test]
     fn a_prompt_says_whether_it_is_showing_the_whole_run() {
-        // When it is not, something earlier exists that only memory can speak for.
         let whole = Prompt::default();
         assert!(whole.is_whole());
 
@@ -311,8 +259,6 @@ mod tests {
 
     #[test]
     fn the_split_is_a_fraction_so_it_scales_with_the_budget() {
-        // A caller with a small budget and one with a large budget get the same shape, rather
-        // than the small one losing memory entirely to a count somebody tuned once.
         let small = Split {
             tokens: 1_000,
             ..Split::default()

@@ -1,8 +1,4 @@
 //! A slice of what a model is told.
-//!
-//! Declared in Lua, because what belongs at the top of a coding agent's context is not what
-//! belongs at the top of a personal assistant's, and that is a decision for whoever is running
-//! the thing rather than for whoever wrote it.
 
 use balthasar_model::{Importance, Tier};
 use serde::Deserialize;
@@ -35,16 +31,10 @@ pub struct Section {
     pub limit: Option<usize>,
 
     /// Keep the order things came in rather than sorting by salience.
-    ///
-    /// For anything chronological. Episodes sorted by salience read as nonsense: a summary of
-    /// last week above one from this morning tells a reader nothing about what happened.
     #[serde(default)]
     pub preserve_order: bool,
 
     /// A confidence floor of this section's own, above the global one.
-    ///
-    /// A build command that is wrong is worse than no build command, so the section that
-    /// carries them can ask for more certainty than the rest.
     #[serde(default)]
     pub min_confidence: Option<f64>,
 
@@ -74,12 +64,10 @@ fn one() -> f64 {
 impl Section {
     /// Read one from what a configuration declared.
     ///
-    /// A malformed declaration answers `None` rather than raising: one bad section should cost
-    /// that section, not the whole injection, and the caller reports which one it was.
+    /// A malformed declaration answers `None` rather than raising.
     #[must_use]
     pub fn read(id: &str, spec: &serde_json::Value) -> Option<Self> {
-        // `where` is a Lua keyword-adjacent name that reads well in a config and is reserved
-        // in Rust, so the field is `filter` here and aliased on the way in.
+        // `where` is reserved in Rust, so the field is `filter` here and aliased on the way in.
         let mut spec = spec.clone();
         if let Some(object) = spec.as_object_mut()
             && let Some(said) = object.remove("where")
@@ -99,9 +87,7 @@ impl Section {
             .into_iter()
             .filter_map(|(id, spec)| Self::read(id, spec))
             .collect();
-        // Stable on `order`, so two sections that did not say keep the order they were
-        // declared in. A context whose sections reshuffled between runs would move what the
-        // model reads first for no reason anyone could see.
+        // Stable on `order`, so two sections that did not say keep the order they were declared in.
         found.sort_by_key(|section| section.order);
         found
     }
@@ -215,8 +201,7 @@ mod tests {
 
     #[test]
     fn a_sections_own_floor_can_only_raise_the_global_one() {
-        // A section asking for less certainty than the store is willing to assert would be a
-        // way to route around the injection floor, which is the one thing it must not be.
+        // A section asking for less certainty than the store asserts would route around the floor.
         let section =
             Section::read("x", &serde_json::json!({ "min_confidence": 0.1 })).expect("a section");
         assert_eq!(section.floor(0.35), 0.35);

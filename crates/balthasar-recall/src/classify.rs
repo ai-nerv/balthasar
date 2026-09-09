@@ -1,13 +1,4 @@
 //! What kind of question is being asked.
-//!
-//! Classification changes which candidates are *generated*, never what relevance means. A
-//! temporal query and an entity query walk different edges and then score the results the same
-//! way — because if classification could also change the scoring, a misclassified query would
-//! be wrong twice and there would be no way to tell which half failed.
-//!
-//! Rules, and deliberately transparent ones. A learned classifier would be more accurate and
-//! would make `--explain` say "the model thought so", which is not an explanation. The rules
-//! are a short list of markers anybody can read, extend, and argue with.
 
 use balthasar_model::Family;
 
@@ -81,9 +72,7 @@ impl Shape {
 
 /// Work out what a query is reaching for.
 ///
-/// Checked in order of how specific each marker set is, so that "why did the build fail before
-/// the release" reads as causal rather than temporal — the more specific reading wins, and the
-/// order below *is* the specificity ranking rather than an accident of how it was written.
+/// Checked in order of how specific each marker set is, so the more specific reading wins.
 #[must_use]
 pub fn shape_of(query: &str) -> Shape {
     let text = format!(" {} ", query.trim().to_lowercase());
@@ -183,9 +172,7 @@ mod tests {
 
     #[test]
     fn a_specific_reading_beats_a_general_one() {
-        // "why ... before ..." carries both a causal and a temporal marker. Causal is the more
-        // specific reading and has to win, or every causal question with a date in it would be
-        // answered by walking the wrong family.
+        // "why ... before ..." carries both a causal and a temporal marker; causal wins.
         assert_eq!(
             shape_of("why did the build fail before the release"),
             Shape::Causal
@@ -200,8 +187,7 @@ mod tests {
 
     #[test]
     fn what_is_true_now_does_not_walk_outward() {
-        // Slots and validity answer this. Traversing would add candidates that are related to
-        // the current answer rather than being it.
+        // Slots and validity answer this.
         assert_eq!(shape_of("what is the deploy target"), Shape::Current);
         assert!(Shape::Current.families().is_empty());
     }
@@ -214,8 +200,7 @@ mod tests {
 
     #[test]
     fn a_causal_question_also_walks_time() {
-        // What fixed a failure is usually near it. Causal edges are sparse, so the temporal
-        // family is carried along as the fallback rather than as the answer.
+        // Causal edges are sparse, so the temporal family is carried along as the fallback.
         assert!(Shape::Causal.families().contains(&Family::Causal));
         assert!(Shape::Causal.families().contains(&Family::Temporal));
     }
@@ -238,8 +223,7 @@ mod tests {
 
     #[test]
     fn classification_is_a_pure_function_of_the_query() {
-        // No clock, no store, no configuration. Two identical queries classify identically on
-        // every machine, which is what makes a per-query-type benchmark comparable.
+        // No clock, no store, no configuration.
         for query in ["why did it fail", "before the release", "deploy target"] {
             assert_eq!(shape_of(query), shape_of(query));
         }
