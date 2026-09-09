@@ -33,9 +33,9 @@ impl Scratchpad {
     /// Scratch beneath a tool's home — `<project>/balthasar/<tool>`.
     ///
     /// Brings an older tree forward on the way in, which is the only moment anything looks at
-    /// the whole of it. A failure to move leaves every file where it is rather than half a
-    /// tree in each shape: the scratch is then invisible until the next process tries again,
-    /// which is recoverable, and losing it is not.
+    /// the whole of it. Swallowed because a failed move leaves every run whole — see
+    /// [`crate::layout`], which undoes a part-moved one — so the scratch is merely invisible
+    /// until the next process retries, and that is recoverable where losing it is not.
     #[must_use]
     pub fn at(home: impl Into<PathBuf>) -> Self {
         let home = home.into();

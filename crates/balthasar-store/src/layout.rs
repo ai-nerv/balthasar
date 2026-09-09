@@ -129,11 +129,32 @@ fn move_runs(tool_home: &Path) -> std::io::Result<usize> {
             continue;
         }
         std::fs::create_dir_all(&now)?;
+        // A database and its write-ahead log move together or not at all. Renaming them one at a
+        // time and returning on the first failure leaves the database at the new path and the WAL
+        // at the old one, which the next process reads as a run already brought forward — so the
+        // WAL is never moved, and the writes it holds are lost rather than resumed.
+        let mut undo = Vec::new();
+        let mut stopped = None;
         for suffix in std::iter::once("").chain(SIBLINGS) {
             let from = beside(&was, suffix);
-            if from.exists() {
-                std::fs::rename(&from, beside(&now.join("memory.db"), suffix))?;
+            if !from.exists() {
+                continue;
             }
+            let to = beside(&now.join("memory.db"), suffix);
+            match std::fs::rename(&from, &to) {
+                Ok(()) => undo.push((to, from)),
+                Err(why) => {
+                    stopped = Some(why);
+                    break;
+                }
+            }
+        }
+        if let Some(why) = stopped {
+            for (to, from) in undo.into_iter().rev() {
+                // Nothing further to try if the undo fails, and `why` is the error to report.
+                let _ = std::fs::rename(&to, &from);
+            }
+            return Err(why);
         }
         moved += 1;
     }
@@ -297,5 +318,29 @@ mod tests {
 
         assert_eq!(bring_forward(&home).expect("forward"), 1);
         assert!(home.join("01ONE/main/memory.db").is_file());
+    }
+
+    #[test]
+    fn a_run_whose_wal_cannot_move_is_left_whole() {
+        // The database and its WAL are one thing. Moving the database and stopping at the WAL
+        // leaves a tree the next process reads as already brought forward, so the WAL is never
+        // moved again and the writes it holds are gone -- not resumed.
+        //
+        // A directory standing where the WAL must land is what makes the second rename fail.
+        let root = scratch("partial");
+        let home = root.join("balthasar/harness");
+        old_tree(&home, &["01ONE"]);
+        std::fs::create_dir_all(home.join("01ONE/main/memory.db-wal/held")).expect("mkdir");
+
+        assert!(bring_forward(&home).is_err(), "the WAL could not be moved");
+        assert!(
+            home.join("01ONE/memory.db").is_file(),
+            "the database went back to where its WAL still is"
+        );
+        assert!(home.join("01ONE/memory.db-wal").is_file());
+        assert!(
+            !home.join("01ONE/main/memory.db").exists(),
+            "and nothing was left at the new path for the next process to trust"
+        );
     }
 }
