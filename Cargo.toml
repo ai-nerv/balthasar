@@ -59,6 +59,11 @@ rustix = { version = "1", features = ["net", "process"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 ciborium = "0.2"
+# Two syscalls, for the signal that ends a `serve`: `pthread_sigmask` and `sigwait`. rustix has
+# both, in `rustix::runtime` — a `doc(hidden)` module its own documentation reserves for people
+# implementing a libc, with no stability promise. This crate is already compiled into the binary
+# (rand reaches it through getrandom), so this line adds an edge that was there and nothing else.
+libc = "0.2"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 sha2 = "0.10"
 thiserror = "2.0"

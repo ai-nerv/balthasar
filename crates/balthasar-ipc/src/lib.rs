@@ -8,12 +8,16 @@
 //! handful of things another program has a real reason to ask a memory layer. `prompt`, `run`
 //! and `eval` are absent and stay absent.
 
+mod corpses;
 mod encoding;
 mod frame;
 mod peer;
 mod serve;
+mod stop;
 
+pub use corpses::swept;
 pub use encoding::Wire;
 pub use frame::{FAMILY, Fault, MAX_FRAME, Reply, Request, WireError, recv, send};
 pub use peer::Peer;
 pub use serve::{Listener, socket_dir, socket_path, tool_descriptor};
+pub use stop::hold as hold_stop_signals;

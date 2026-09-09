@@ -128,7 +128,9 @@ dependencies = [
 name = "balthasar-ipc"
 version = "0.1.0"
 dependencies = [
+ "balthasar-model",
  "ciborium",
+ "libc",
  "rustix",
  "serde",
  "serde_json",

@@ -85,6 +85,16 @@ pub fn serve(
     floors: balthasar_lua::Floors,
     loaded: &mut crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
+    // Before the tie, and so before any socket exists. `PR_SET_PDEATHSIG` is `SIGTERM`, and a
+    // parent that dies in the window between asking for the signal and blocking it would end
+    // this process where it stands — which is survivable only because there is nothing on disk
+    // yet to leave behind. Once the socket is bound there is, and by then the block is in place.
+    if !balthasar_ipc::hold_stop_signals() {
+        eprintln!(
+            "{}",
+            render::dim("could not hold SIGTERM; a stop will not be tidy")
+        );
+    }
     if let Some(caller) = args.tied {
         tie_to_caller(caller)?;
     }
@@ -109,7 +119,7 @@ pub fn serve(
     // would make half a run's ledger and half not, which is worse than either.
     let capture = loaded.settings().ledger().capture;
 
-    listener.serve(|peer: &Peer, request: Request| {
+    let served = listener.serve(|peer: &Peer, request: Request| {
         let named = named_by_kernel(peer).unwrap_or_else(|| fallback.clone());
         let held = match opened.entry(named.clone()) {
             std::collections::hash_map::Entry::Occupied(seat) => seat.into_mut(),
@@ -152,7 +162,14 @@ pub fn serve(
         balthasar_host::answer_with(&mut at, &Door::Socket(peer.clone()), &request, |entry| {
             loaded.mask(entry)
         })
-    })?;
+    });
+
+    // The socket goes before the stores do, and the order is deliberate rather than incidental:
+    // closing a store checkpoints its WAL and fsyncs, and a caller that connects during that is
+    // better off finding nothing and spawning its own than waiting on a daemon that has already
+    // stopped answering. `opened` drops on the way out of this function, after this line.
+    drop(listener);
+    served?;
     Ok(())
 }
 

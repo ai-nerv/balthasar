@@ -8,10 +8,17 @@ description = "balthasar's socket: the family's framing, and who is on the other
 
 [dependencies]
 ciborium.workspace = true
+libc.workspace = true
 rustix = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# For `Scratch` in the corpse-sweep tests: a directory that removes itself on a failing assertion
+# as well as a passing one. `balthasar-model` is a leaf with three dependencies of its own, so
+# this adds nothing to the build and cannot make a cycle -- nothing in it knows about a socket.
+balthasar-model.workspace = true
 
 [lints]
 workspace = true

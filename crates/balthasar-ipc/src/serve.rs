@@ -1,6 +1,6 @@
 //! Listening, and telling other programs where to find us.
 
-use crate::{Peer, Reply, Request, frame};
+use crate::{Peer, Reply, Request, frame, stop};
 use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -98,6 +98,18 @@ struct Asked {
     answered: std::sync::mpsc::Sender<Reply>,
 }
 
+/// What the answering thread wakes up for.
+///
+/// A stop travels the same queue as a call, and that is the point of it being here rather than
+/// in a flag somebody polls: the loop can only leave between two calls, so no request is ever
+/// half-answered and no SQLite transaction is ever half-written on the way out.
+enum Heard {
+    /// A caller has asked something.
+    Call(Asked),
+    /// A signal arrived, named so that a log can say which.
+    Stop(&'static str),
+}
+
 /// A bound socket.
 pub struct Listener {
     listener: UnixListener,
@@ -110,9 +122,15 @@ impl Listener {
     /// A stale socket file looks exactly like a live one until something connects, so binding
     /// tries a connection first: if anything answers, this instance refuses rather than
     /// stealing the name.
+    ///
+    /// **The neighbours' corpses go too.** Only this instance's own name was ever disproved, so
+    /// every balthasar that was killed outright left a file nobody would look at again — see
+    /// [`crate::swept`], which this is the one moment to call.
     pub fn bind(instance: &str) -> std::io::Result<Self> {
         let path = socket_path(instance);
-        std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
+        let dir = path.parent().unwrap_or(Path::new("."));
+        std::fs::create_dir_all(dir)?;
+        crate::corpses::swept(dir);
 
         if path.exists() {
             if UnixStream::connect(&path).is_ok() {
@@ -169,6 +187,20 @@ impl Listener {
     /// thread at all, so a `Mutex` around it would need a `Send` bound the caller cannot satisfy.
     /// Keeping it where it was built asks nothing of it, and gives the same one-at-a-time.
     ///
+    /// **A stop signal ends this the way running out of callers would**, when the caller asked
+    /// for that by calling [`crate::hold_stop_signals`] first. `SIGTERM` and `SIGINT` are then
+    /// blocked and delivered nowhere; a thread of its own waits for one and posts it into this
+    /// queue, and the loop below returns instead of the process being ended under it. Everything
+    /// the caller wrote to run on the way out — the socket unlink in [`Listener::drop`], the
+    /// SQLite close in whatever the answering closure was holding — then runs, which under a
+    /// bare `SIGTERM` it never did.
+    ///
+    /// Asked of this thread's own signal mask rather than taken as an argument, because the mask
+    /// is the thing that has to be true: only a waiter spawned from a thread that inherits the
+    /// block can promise the signal will still be pending when it asks for one. A caller that
+    /// never blocked them gets the plain death it always had, and no thread standing in
+    /// `sigwait` to absorb somebody else's Ctrl-C.
+    ///
     /// # Errors
     /// When the listener cannot be handed to the thread that accepts on it.
     pub fn serve(&self, mut answer: impl FnMut(&Peer, Request) -> Reply) -> std::io::Result<()> {
@@ -176,18 +208,37 @@ impl Listener {
         // lifetime: a panic out of `answer` below then unwinds straight out, as it did when this
         // was one loop, instead of stopping to join a thread that never ends.
         let listening = self.listener.try_clone()?;
-        let (asked, asking) = std::sync::mpsc::channel::<Asked>();
+        let (asked, asking) = std::sync::mpsc::channel::<Heard>();
+        if stop::holding() {
+            // Its own sender, taken before the accept thread takes the original: a balthasar that
+            // nobody ever connects to still has to be able to hear that it is time to go.
+            let stopping = asked.clone();
+            std::thread::spawn(move || {
+                if let Some(named) = stop::awaited() {
+                    let _ = stopping.send(Heard::Stop(named));
+                }
+            });
+        }
         std::thread::spawn(move || accept(&listening, &asked));
 
         // The accept thread keeps its end of this for as long as it runs, so the wait here is
-        // what makes `serve` the call that does not return.
-        while let Ok(Asked {
-            peer,
-            request,
-            answered,
-        }) = asking.recv()
-        {
-            let _ = answered.send(answer(&peer, request));
+        // what makes `serve` the call that does not return of its own accord.
+        while let Ok(heard) = asking.recv() {
+            match heard {
+                Heard::Call(Asked {
+                    peer,
+                    request,
+                    answered,
+                }) => {
+                    let _ = answered.send(answer(&peer, request));
+                }
+                // Out loud on the way past: a daemon that vanishes without a word and one that
+                // crashed read identically in a log.
+                Heard::Stop(named) => {
+                    eprintln!("balthasar: stopped on {named}");
+                    break;
+                }
+            }
         }
         Ok(())
     }
@@ -198,7 +249,7 @@ impl Listener {
 /// Identity is settled here, per connection, before a byte is read: the kernel's word about the
 /// peer travels with every call it makes rather than being asked for again, and a caller has no
 /// say in it.
-fn accept(listening: &UnixListener, asked: &std::sync::mpsc::Sender<Asked>) {
+fn accept(listening: &UnixListener, asked: &std::sync::mpsc::Sender<Heard>) {
     let crowd: Crowd = Crowd::default();
 
     for incoming in listening.incoming() {
@@ -222,7 +273,17 @@ fn accept(listening: &UnixListener, asked: &std::sync::mpsc::Sender<Asked>) {
             continue;
         };
 
-        let _ = stream.set_read_timeout(Some(QUIET));
+        // Refused rather than served without one. A connection with no read timeout never comes
+        // up for air, so its thread sits in `recv` for as long as the peer stays open and the
+        // seat it holds is one of eight that never comes back. Turning the caller away costs it
+        // a retry; keeping it would cost every later caller a seat.
+        if stream.set_read_timeout(Some(QUIET)).is_err() {
+            let _ = refuse(
+                &mut stream,
+                "balthasar could not make this connection interruptible",
+            );
+            continue;
+        }
         let asked = asked.clone();
         std::thread::spawn(move || {
             let _seat = seat;
@@ -238,13 +299,13 @@ fn accept(listening: &UnixListener, asked: &std::sync::mpsc::Sender<Asked>) {
 /// A refusal rather than a dropped connection when there is nobody left to ask, for the reason
 /// the whole wire is written that way: "no answer" and "the far end has gone" look identical to
 /// a client, and one of them is worth retrying.
-fn answering(asked: &std::sync::mpsc::Sender<Asked>, peer: &Peer, request: Request) -> Reply {
+fn answering(asked: &std::sync::mpsc::Sender<Heard>, peer: &Peer, request: Request) -> Reply {
     let (answered, hearing) = std::sync::mpsc::channel();
-    let sent = asked.send(Asked {
+    let sent = asked.send(Heard::Call(Asked {
         peer: peer.clone(),
         request,
         answered,
-    });
+    }));
     match sent.ok().and_then(|()| hearing.recv().ok()) {
         Some(reply) => reply,
         None => Reply::refused("balthasar has stopped answering"),
@@ -407,6 +468,34 @@ mod crowd {
     ///
     /// By hand rather than through a client, because what is being tested is the socket and a
     /// client that reconnected on its own would hide exactly the case that matters.
+    /// A served socket whose file goes when the test ends, however the test ends.
+    ///
+    /// The accept loop never returns, so the [`Listener`] moved into the serving thread outlives
+    /// the test and its `Drop` never runs. Both tests here used to unlink on their last line
+    /// instead — which an `assert!` unwinds straight past, so a *failing* run left its socket in
+    /// the runtime directory for good. `api@crowd-*.sock` was among the corpses found there.
+    struct Bound(PathBuf);
+
+    impl Bound {
+        /// Bind, and serve every call by echoing back what was asked.
+        fn serving(instance: &str) -> Self {
+            let listener = Listener::bind(instance).expect("bind");
+            let path = listener.path().to_owned();
+            std::thread::spawn(move || {
+                let _ = listener.serve(|_peer: &Peer, request: Request| {
+                    Reply::one(serde_json::json!(format!("heard {}", request.call)))
+                });
+            });
+            Self(path)
+        }
+    }
+
+    impl Drop for Bound {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
     fn say(stream: &mut UnixStream, call: &str) -> serde_json::Value {
         let body =
             serde_json::to_vec(&serde_json::json!({ "call": call, "args": [] })).expect("encode");
@@ -428,16 +517,10 @@ mod crowd {
         // at the accept, so the second caller -- the probe a forked child sends before it
         // trusts the socket -- is never answered at all. The child reads that as a dead socket
         // and unlinks it, which leaves the parent's live daemon with no name.
-        let instance = format!("crowd-{}", std::process::id());
-        let listener = Listener::bind(&instance).expect("bind");
-        let path = listener.path().to_owned();
-        let _serving = std::thread::spawn(move || {
-            let _ = listener.serve(|_peer: &Peer, request: Request| {
-                Reply::one(serde_json::json!(format!("heard {}", request.call)))
-            });
-        });
+        let bound = Bound::serving(&format!("crowd-{}", std::process::id()));
+        let path = &bound.0;
 
-        let mut scribe = UnixStream::connect(&path).expect("the scribe connects");
+        let mut scribe = UnixStream::connect(path).expect("the scribe connects");
         // Asked and answered before the second one knocks, so the connection is provably the
         // one the server is sitting on rather than one still in the backlog.
         assert_eq!(
@@ -445,7 +528,7 @@ mod crowd {
             serde_json::json!("heard remember")
         );
 
-        let mut probe = UnixStream::connect(&path).expect("the child's probe connects");
+        let mut probe = UnixStream::connect(path).expect("the child's probe connects");
         // A deadline rather than a wait: the failure this is written for is a probe that is
         // never answered, and a test that hung on it would say nothing on the way past.
         probe
@@ -463,9 +546,6 @@ mod crowd {
 
         drop(probe);
         drop(scribe);
-        // The accept loop never returns, so the thread outlives the test and its `Drop` never
-        // runs. Unlinked here rather than left in the runtime directory to be disproved later.
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -473,20 +553,14 @@ mod crowd {
         // The bound has to be visible from the wire, because the only client that matters here
         // treats silence as death. A refusal is a frame; a dropped connection is the thing that
         // gets the socket unlinked.
-        let instance = format!("ceiling-{}", std::process::id());
-        let listener = Listener::bind(&instance).expect("bind");
-        let path = listener.path().to_owned();
-        let _serving = std::thread::spawn(move || {
-            let _ = listener.serve(|_peer: &Peer, request: Request| {
-                Reply::one(serde_json::json!(format!("heard {}", request.call)))
-            });
-        });
+        let bound = Bound::serving(&format!("ceiling-{}", std::process::id()));
+        let path = &bound.0;
 
         // Held, and each one answered first so that its seat is provably taken rather than
         // still sitting in the backlog.
         let mut held: Vec<UnixStream> = Vec::new();
         for _ in 0..CALLERS {
-            let mut caller = UnixStream::connect(&path).expect("connect");
+            let mut caller = UnixStream::connect(path).expect("connect");
             assert_eq!(
                 say(&mut caller, "verbs")["result"][0],
                 serde_json::json!("heard verbs")
@@ -494,7 +568,7 @@ mod crowd {
             held.push(caller);
         }
 
-        let mut over = UnixStream::connect(&path).expect("connect");
+        let mut over = UnixStream::connect(path).expect("connect");
         over.set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .expect("a deadline");
         let mut header = [0_u8; 4];
@@ -511,7 +585,7 @@ mod crowd {
         drop(held.pop());
         let mut taken = None;
         for _ in 0..100 {
-            let mut next = UnixStream::connect(&path).expect("connect");
+            let mut next = UnixStream::connect(path).expect("connect");
             next.set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .expect("a deadline");
             if say(&mut next, "verbs")["ok"] == serde_json::json!(true) {
@@ -524,6 +598,5 @@ mod crowd {
 
         drop(taken);
         drop(held);
-        let _ = std::fs::remove_file(&path);
     }
 }
