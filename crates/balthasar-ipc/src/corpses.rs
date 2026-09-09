@@ -1,9 +1,7 @@
 //! Sockets left behind by balthasars that are no longer running.
 //!
-//! `$XDG_RUNTIME_DIR/balthasar` is shared by every instance on the machine. A death with no way
-//! out — `SIGKILL`, the OOM killer, lost power — leaves a socket file there, and a forked child's
-//! probe reads a stale file as a live daemon, waits, gets nothing, and unlinks it; the socket it
-//! unlinks is sometimes the live one.
+//! `$XDG_RUNTIME_DIR/balthasar` is shared by every instance on the machine, and a death with no
+//! way out leaves a socket file there that a probe reads as a live daemon.
 
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -31,9 +29,8 @@ fn is_socket_name(name: &str) -> bool {
 
 /// Whether connecting is refused outright, which is the only proof that nothing is bound.
 ///
-/// `ECONNREFUSED` alone, never `is_ok()`: `EACCES` is somebody else's socket and `EMFILE` is this
-/// process out of descriptors, and deleting on either takes a live balthasar's name. A listener
-/// answers from the moment it is bound, so a busy daemon still completes this connection.
+/// `ECONNREFUSED` alone, never `is_ok()`: `EMFILE` is this process out of descriptors, and
+/// deleting on it takes a live balthasar name.
 fn refused(path: &Path) -> bool {
     match UnixStream::connect(path) {
         Ok(_) => false,
@@ -61,7 +58,6 @@ mod tests {
 
     #[test]
     fn a_socket_something_is_listening_on_is_left_alone() {
-        // Sweeping a live name would leave a running daemon unreachable.
         let dir = Scratch::new("balthasar-corpses", "live");
         let live = dir.join("api@live.sock");
         let _bound = std::os::unix::net::UnixListener::bind(&live).expect("bind");
@@ -90,7 +86,6 @@ mod tests {
 
     #[test]
     fn what_is_not_a_socket_of_ours_is_not_touched() {
-        // Sweeping `balthasar.tool` or `given.lua` would break the next start-up.
         let dir = Scratch::new("balthasar-corpses", "others");
         for name in ["balthasar.tool", "given.lua", "api@dead.sock.bak", "notes"] {
             std::fs::write(dir.join(name), "x").expect("write");
@@ -103,8 +98,6 @@ mod tests {
 
     #[test]
     fn a_regular_file_wearing_a_sockets_name_goes_too() {
-        // Not a socket, so connecting is refused here as well, and it is still a name the next
-        // instance would have to disprove.
         let dir = Scratch::new("balthasar-corpses", "impostor");
         let impostor = dir.join("api@impostor.sock");
         std::fs::write(&impostor, "not a socket").expect("write");
@@ -120,10 +113,7 @@ mod tests {
 
     #[test]
     fn binding_does_not_sweep_the_neighbours() {
-        // The sweep dials, and a dial takes one of the eight seats on whatever answers it. Doing
-        // that inside `bind` made every start-up cost every live balthasar a seat, which showed
-        // up as `the_caller_over_the_ceiling_is_told_so_rather_than_left_hanging` failing one run
-        // in five. The binary sweeps; `bind` settles its own name and nothing else.
+        // The sweep dials, and a dial takes one of the eight seats on whatever answers it.
         let instance = format!("neighbour-{}", std::process::id());
         let corpse = crate::socket_dir().join(format!("api@corpse-{}.sock", std::process::id()));
         std::fs::create_dir_all(crate::socket_dir()).expect("mkdir");

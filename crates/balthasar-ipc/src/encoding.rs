@@ -1,14 +1,4 @@
-//! Which encoding a body is in, and how to read and write it in that encoding.
-//!
-//! The family's reply shape is one shape in two encodings: JSON for anything that might be read
-//! by a person or piped through a text tool, CBOR for a caller that is only going to parse it.
-//! Both carry exactly the same fields; nothing is expressible in one and not the other.
-//!
-//! **Nothing is negotiated.** A body says what it is in its first byte, so a server answers in
-//! whatever it was asked in and a caller that has never heard of CBOR is unaffected. A handshake
-//! would be a second thing to keep in step, and a setting would be a third — and either would
-//! have to be got right by both ends before the first call, which is precisely when there is
-//! nothing to ask.
+//! Which encoding a body is in — a body says what it is in its first byte, nothing negotiated.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -16,25 +6,21 @@ use serde::de::DeserializeOwned;
 /// How a body on the wire is encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wire {
-    /// Text. The default, and what every existing caller sends.
     Json,
-    /// Bytes, for a caller that is not going to read it.
     Cbor,
 }
 
 impl Wire {
     /// Which encoding `body` is in.
     ///
-    /// JSON's top level here is an object or an array, so it begins `{` or `[` after any leading
-    /// space. CBOR's is a map or an array, whose first byte is major type 4 or 5 — `0x80`–`0xBF`.
-    /// The two ranges do not overlap, so this is a reading rather than a guess.
+    /// JSON begins `{` or `[` after any leading space; CBOR.s map or array is major type 4 or 5,
+    /// `0x80`–`0xBF`. The two ranges do not overlap.
     #[must_use]
     pub fn of(body: &[u8]) -> Self {
         match body.iter().find(|b| !b.is_ascii_whitespace()) {
             Some(b'{' | b'[') => Self::Json,
             Some(0x80..=0xBF) => Self::Cbor,
-            // Anything else is neither, and JSON gives the better error: a caller that sent
-            // rubbish gets told what was wrong with it rather than "not a map".
+            // Neither, and JSON gives the better error.
             _ => Self::Json,
         }
     }
@@ -92,9 +78,6 @@ mod tests {
 
     #[test]
     fn an_empty_body_is_not_taken_for_cbor() {
-        // It is neither, and the reader has to pick one to report the failure in. JSON says
-        // "EOF while parsing"; CBOR would say the body is not a map, which is true of every
-        // malformed body and tells the caller nothing.
         assert_eq!(Wire::of(b""), Wire::Json);
         assert_eq!(Wire::of(b"garbage"), Wire::Json);
     }
@@ -112,8 +95,6 @@ mod tests {
 
     #[test]
     fn a_round_trip_survives_being_sniffed() {
-        // What the server actually does: it is handed bytes, works out the encoding, reads the
-        // request, and answers in the same one.
         for wire in [Wire::Json, Wire::Cbor] {
             let body = wire
                 .write(&serde_json::json!({"call": "recall"}))

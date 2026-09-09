@@ -2,14 +2,12 @@
 //!
 //! `Drop` does not run on `SIGTERM`, which is what `--tied` asks the kernel to send. Blocked and
 //! collected in `sigwait` rather than handled: a handler body must be async-signal-safe, and the
-//! socket unlink and the SQLite close are not. `libc` rather than `rustix`, whose
-//! `kernel_sigprocmask` and `kernel_sigwait` are `doc(hidden)` and documented as unstable.
+//! socket unlink and the SQLite close are not.
 #![allow(unsafe_code)]
 
 /// The signals that mean stop, and what to call them out loud.
 const STOPPING: [(libc::c_int, &str); 2] = [(libc::SIGTERM, "SIGTERM"), (libc::SIGINT, "SIGINT")];
 
-/// The two of them as a set, built the way libc insists a set is built.
 fn stopping() -> libc::sigset_t {
     let mut set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
     // SAFETY: `sigemptyset` writes a whole `sigset_t` through the pointer, which is what
@@ -26,8 +24,7 @@ fn stopping() -> libc::sigset_t {
 /// Block them, so every thread started from this one inherits the block. Says whether it took.
 ///
 /// Call before the first thread is spawned: a process-directed signal goes to any thread that
-/// will take it. When it did not take, start no waiter — a `sigwait` racing the default action
-/// would sometimes appear to work. The binary calls this, never a library.
+/// will take it. When it did not take, start no waiter.
 pub fn hold() -> bool {
     let set = stopping();
     // SAFETY: `set` is initialised above and outlives the call. Both signals in it are ordinary
@@ -37,9 +34,6 @@ pub fn hold() -> bool {
 }
 
 /// Whether this thread already has them blocked, and so whether waiting for one can work.
-///
-/// Asked of the kernel, not a flag: only a thread spawned from one that has them blocked can
-/// promise the signal is still pending when it asks.
 pub(crate) fn holding() -> bool {
     let mut current = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
     // SAFETY: with a null `set`, `pthread_sigmask` only reads this thread's mask out through the
@@ -51,8 +45,7 @@ pub(crate) fn holding() -> bool {
         return false;
     }
     let current = unsafe { current.assume_init() };
-    // Every one of them, not any: a waiter started for a half-blocked set lets the other half
-    // kill the process mid-answer.
+    // Every one of them, not any: a half-blocked set lets the other half kill mid-answer.
     STOPPING.iter().all(|(signal, _)| {
         // SAFETY: `current` was written whole by the call above.
         unsafe { libc::sigismember(&raw const current, *signal) == 1 }
@@ -81,11 +74,8 @@ mod tests {
 
     #[test]
     fn a_blocked_signal_is_waited_for_rather_than_lost() {
-        // On a thread of its own, and joined, so the per-thread mask leaves with it rather than
-        // deafening the rest of a `--test-threads=1` run.
         std::thread::spawn(|| {
-            // `pthread_kill` rather than a process-directed signal: the other threads in this
-            // binary never called `hold`, and one of them would take it and end the run.
+            // `pthread_kill` rather than a process-directed signal: no other thread called `hold`.
             assert!(!holding(), "a fresh thread inherits nothing");
             assert!(hold(), "the mask has to take before anything is raised");
             assert!(holding(), "and the kernel has to agree that it took");
@@ -101,8 +91,6 @@ mod tests {
 
     #[test]
     fn binding_a_socket_does_not_change_how_this_process_dies() {
-        // The block used to happen inside `Listener::bind`, which left six tests that only bind
-        // with the stop signals blocked, and interrupting `cargo test` sometimes did nothing.
         let listener =
             crate::Listener::bind(&format!("mask-{}", std::process::id())).expect("bind");
         for (signal, named) in STOPPING {

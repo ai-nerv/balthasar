@@ -1,27 +1,19 @@
-//! Who is on the other end.
-//!
-//! Taken from the kernel, never from a number the peer sent. A write ceiling that a caller can
-//! talk its way past is not a ceiling, and identity is the one thing on this socket that must
-//! not be self-reported.
+//! Who is on the other end, taken from the kernel and never from a number the peer sent.
 
 use std::os::unix::net::UnixStream;
 
 /// A connected caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Peer {
-    /// Its process id, as the kernel reports it.
     pub pid: i32,
-    /// Its user id.
     pub uid: u32,
-    /// What it is running, when that can be read.
     pub program: Option<String>,
 }
 
 impl Peer {
     /// Who is at the other end of this socket.
     ///
-    /// `None` when the kernel will not say, which is treated as the most restricted caller
-    /// rather than the least: an unidentifiable peer gets what an unidentifiable peer gets.
+    /// `None` when the kernel will not say, which is treated as the most restricted caller.
     #[must_use]
     pub fn of(stream: &UnixStream) -> Option<Self> {
         let credentials = rustix::net::sockopt::socket_peercred(stream).ok()?;
@@ -35,18 +27,12 @@ impl Peer {
     }
 
     /// Whether this is the same user balthasar is running as.
-    ///
-    /// The only identity check that matters here. A memory store is one person's, and a peer
-    /// belonging to somebody else has no business in it whatever it claims to be.
     #[must_use]
     pub fn is_owner(&self) -> bool {
         self.uid == rustix::process::getuid().as_raw()
     }
 
-    /// How a witness records it.
-    ///
-    /// `harness[pid 4021]` — the program the kernel says is running, and its process id. Enough
-    /// for `balthasar why` to answer "which process believes this".
+    /// How a witness records it: `harness[pid 4021]`, or `pid 4021` when the program is unknown.
     #[must_use]
     pub fn named(&self) -> String {
         match &self.program {
@@ -58,8 +44,7 @@ impl Peer {
 
 /// What a process is running, from `/proc`.
 ///
-/// Best effort: a peer that has exited between connecting and being asked about leaves nothing
-/// to read, and that is not a reason to refuse the call it already made.
+/// Best effort: a peer that has exited between connecting and being asked leaves nothing to read.
 fn program_of(pid: i32) -> Option<String> {
     let path = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
     Some(path.file_name().map_or_else(

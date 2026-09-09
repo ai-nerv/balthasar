@@ -1,9 +1,7 @@
 //! What a serving balthasar leaves behind when it is told to stop.
 //!
-//! Against the real binary: a signal is a property of a live process, and what has to be true is
-//! that the socket file is gone afterwards, looked at by something that is not the process that
-//! made it. `Drop` does not run on a signal and `--tied` sends one, so every tied balthasar used
-//! to leave its socket for the next instance's probe to misread as live.
+//! Against the real binary: `Drop` does not run on a signal, and what has to be true is that the
+//! socket file is gone afterwards, looked at by something that is not the process that made it.
 
 use balthasar_model::scratch::Scratch;
 use std::path::{Path, PathBuf};
@@ -23,8 +21,7 @@ impl Serving {
     /// Start one and wait until its socket is really there.
     ///
     /// Spawned directly, never through a shell: a shell without job control sets `SIGINT` to
-    /// `SIG_IGN` in every background job, and the disposition survives `exec`, so the `SIGINT`
-    /// case would be sending a signal the process was told to ignore.
+    /// `SIG_IGN` in every background job, and the disposition survives `exec`.
     fn starting(dir: &Path, instance: &str) -> Self {
         let child = Command::new(env!("CARGO_BIN_EXE_balthasar"))
             .args(["serve", "--instance", instance, "--scope", "project"])
@@ -120,9 +117,7 @@ fn a_balthasar_interrupted_takes_its_socket_with_it() {
 
 #[test]
 fn a_tied_balthasar_leaves_no_socket_when_its_caller_is_killed() {
-    // The only case where the signal comes from the kernel rather than from this test: the
-    // caller is killed outright, so nothing in it runs. `tied.rs` proves the process goes; this
-    // proves it does not leave its name behind.
+    // The only case where the signal comes from the kernel rather than from this test.
     let dir = Scratch::new("balthasar-signalled", "tied");
     std::fs::create_dir_all(dir.join("run")).expect("mkdir");
     let pids = dir.join("pid");
@@ -149,8 +144,7 @@ fn a_tied_balthasar_leaves_no_socket_when_its_caller_is_killed() {
         .and_then(|text| text.trim().parse().ok())
         .expect("the caller said which balthasar it started");
 
-    // The pid the caller wrote down, before anything happens to it: watching the shell instead
-    // would pass on a process that was never the subject.
+    // The pid the caller wrote down: watching the shell would pass on the wrong process.
     assert!(alive(served), "it was running before its caller was killed");
 
     // Checked, not attempted: a kill that silently did nothing would report the bug as present.
@@ -158,8 +152,7 @@ fn a_tied_balthasar_leaves_no_socket_when_its_caller_is_killed() {
     caller.wait().expect("reap the caller");
 
     let gone = waited_for(|| !socket.exists());
-    // Both: one that unlinked its socket and carried on serving nothing satisfies the first
-    // alone, and is not what the tie promises.
+    // Both: unlinking the socket and carrying on serving nothing is not what the tie promises.
     let ended = waited_for(|| !alive(served));
     let _ = Command::new("kill")
         .args(["-9", &served.to_string()])
