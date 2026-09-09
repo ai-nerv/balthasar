@@ -291,6 +291,7 @@ local GATES = {
   { "gate-untrusted",    "untrusted content cannot become durable instruction" },
   { "gate-no-exec",      "balthasar describes procedures and never runs them" },
   { "gate-wire",         "one way of saying a thing crosses a boundary" },
+  { "gate-sandbox",      "one Lua VM, and it is sandboxed" },
 }
 
 for _, gate in ipairs(GATES) do
@@ -316,6 +317,7 @@ make.recipe{
     "gate-untrusted",
     "gate-no-exec",
     "gate-wire",
+    "gate-sandbox",
   },
 }
 
