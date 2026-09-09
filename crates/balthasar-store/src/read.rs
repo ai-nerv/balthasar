@@ -1,9 +1,7 @@
 //! Getting something out.
 //!
-//! Two stages, because it is a nineteen-fold difference and because it is the only way
-//! commitment 3 survives: full-text search prefilters, and scoring ranks what it found.
-//! Vectors, when they arrive at M4, become another term in the same sum — never a replacement
-//! for this path, and never a full scan of an embedding column.
+//! Two stages: full-text search prefilters, and scoring ranks what it found. Vectors are another
+//! term in the same sum, never a replacement for this path and never a full scan of a column.
 
 use crate::score::{Scored, Weights, cosine, coverage, frecency, fts_query, relative, terms_of};
 use crate::{Store, StoreError, row};
@@ -19,10 +17,8 @@ pub struct Recall {
     pub limit: usize,
     /// Only these tiers, or every durable one when empty.
     pub tiers: Vec<Tier>,
-    /// Confidence a memory must reach to come back at all.
-    ///
-    /// The *live* floor, not the injection floor. A memory below assertion is still findable,
-    /// and the gap between those two numbers is the whole answer to staleness.
+    /// Confidence a memory must reach to come back at all. The *live* floor, not the injection
+    /// floor: a memory below assertion is still findable.
     pub floor: f64,
     /// Whether to look in the archive too. Only worth it when the live results are weak.
     pub include_archived: bool,
@@ -30,11 +26,7 @@ pub struct Recall {
     pub remote: bool,
     /// How much of the question a memory must actually answer to come back at all.
     ///
-    /// Separate from `floor`, which is about how sure the memory is. This one is about whether
-    /// it is an answer to *this* question — a confidently-held fact about the staging box is
-    /// not an answer about the production box, however sure anybody is of it.
-    ///
-    /// Zero by default: a bare `recall` shows what it found and lets a person judge. The
+    /// Separate from `floor`, which is about how sure the memory is. Zero by default; the
     /// injection path raises it, because a model shown a near-miss will use it.
     pub relevance: f64,
     /// The moment to score against.
@@ -49,11 +41,8 @@ pub struct Recall {
     pub near: bool,
     /// Whether finding a memory counts as needing it.
     ///
-    /// Off by default, and the default is the point. Reinforcing on every search meant a
-    /// person browsing their own store reset the strength of everything they looked at, so
-    /// nothing ever faded and `balthasar decay` always reported an empty pass. Inspection is not
-    /// use. The injection path turns this on, because a memory the model was actually given
-    /// *was* needed.
+    /// Off by default: reinforcing on every search means browsing resets the strength of
+    /// everything looked at and nothing ever fades. The injection path turns this on.
     pub reinforce: bool,
 }
 
@@ -80,9 +69,6 @@ impl Recall {
 }
 
 /// A group of memories saying the same thing in different runs.
-///
-/// Built here because the query that finds them is here, and used by the ladder. Putting it the
-/// other way round would have the store depending on the crate that reads it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cluster {
     /// What they say.
@@ -94,26 +80,19 @@ pub struct Cluster {
     /// When the first of them did.
     pub first_seen: Timestamp,
     /// The memories this cluster was assembled from, when they are in the store being written.
-    ///
-    /// Empty when they are not. A `link` row has foreign keys into `memory`, so an id belonging
-    /// to a run's own file cannot be recorded from the project's — and the honest answer to
-    /// "what was this made from" is then the session, which the promoted memory already carries.
+    /// Empty otherwise: a `link` row has foreign keys into `memory`, so an id belonging to a
+    /// run's own file cannot be recorded from the project's.
     pub sources: Vec<balthasar_model::MemoryId>,
 }
 
-/// How many candidates full-text search may hand to scoring.
-///
-/// A bound, so the cost of a query never scales with the size of the store. Exceeding it
-/// returns fewer candidates rather than an error: an error channel would be an oracle for how
-/// much the store holds.
+/// How many candidates full-text search may hand to scoring, so the cost of a query never scales
+/// with the size of the store. Exceeding it returns fewer candidates rather than an error.
 const CANDIDATES: usize = 500;
 
 /// Below how many lexical hits a query is treated as having missed.
 ///
 /// Full-text search gates the candidates, so a query sharing no words with anything answers
-/// nothing however good its vector is — `deployment` would not find `we deploy with fly`. When
-/// the lexical stage comes back this thin, a bounded scan tops the set up and lets the vector
-/// decide. Still bounded, so the cost of a miss does not scale with the store either.
+/// nothing however good its vector is. Below this, a bounded scan tops the set up.
 const THIN: usize = 8;
 
 impl Store {
@@ -137,9 +116,6 @@ impl Store {
     }
 
     /// Every piece of evidence for a memory, newest first.
-    ///
-    /// Newest first because that is the order `balthasar why` reads best in: what most recently
-    /// convinced us, then what convinced us before that.
     pub fn witnesses_of(&self, id: &MemoryId) -> Result<Vec<Witness>, StoreError> {
         let mut statement = self
             .db()
@@ -183,11 +159,8 @@ impl Store {
         }
     }
 
-    /// What a slot said at a moment in the past.
-    ///
-    /// The question a validity interval exists to answer, and the reason a contradicted fact is
-    /// closed rather than removed. Without it, "what was the deploy target in March" has no
-    /// answer at all.
+    /// What a slot said at a moment in the past. The question a validity interval exists to
+    /// answer, and the reason a contradicted fact is closed rather than removed.
     pub fn slot_at(
         &self,
         scope: &str,
@@ -220,9 +193,8 @@ impl Store {
             self.matching(ask)?
         };
 
-        // What the query is *about*, whatever words it used. Deliberately able to ADD
-        // candidates rather than only reorder the ones full-text search found: a boost that
-        // can only reorder decides, in advance, what can never be found at all.
+        // What the query is *about*, whatever words it used. Able to ADD candidates rather than
+        // only reorder: a boost that can only reorder decides what can never be found at all.
         let by_entity = if ask.scope_name.is_empty() {
             Vec::new()
         } else {
@@ -238,16 +210,14 @@ impl Store {
                     continue;
                 }
                 if let Some(memory) = self.get(id)? {
-                    // Neutral on the lexical axis. It did not match the words, and scoring
-                    // that as a failure would bury it under anything matching a stopword.
+                    // Neutral on the lexical axis: it did not match the words.
                     candidates.push((memory, 0.0));
                 }
             }
         }
 
-        // A query with a vector and no lexical foothold is the case two-stage retrieval is
-        // worst at, and it is not a rare one: `deployment` shares no token with `we deploy
-        // with fly`. Topping up lets the vector answer where the words could not.
+        // A query with a vector and no lexical foothold is what two-stage retrieval is worst at.
+        // Topping up lets the vector answer where the words could not.
         if ask.embedding.is_some() && candidates.len() < THIN {
             let seen: Vec<String> = candidates
                 .iter()
@@ -255,8 +225,7 @@ impl Store {
                 .collect();
             for (memory, _) in self.everything(ask)? {
                 if !seen.contains(&memory.id.to_string()) {
-                    // Neutral on the lexical axis: it did not match, and scoring it as a
-                    // failure would bury it under anything that matched a stopword.
+                    // Neutral on the lexical axis: it did not match the words.
                     candidates.push((memory, 0.0));
                 }
             }
@@ -287,8 +256,7 @@ impl Store {
                     .and_then(|(query, held)| cosine(query, held));
 
                 // An absent semantic term is neutral rather than zero, and its weight goes to
-                // the lexical one. Scoring "we could not compare" as "they do not match" would
-                // push everything on an unembedded store to the bottom of one axis.
+                // the lexical one.
                 let (semantic_term, lexical_weight) = match semantic {
                     Some(value) => (w.semantic * value, w.lexical),
                     None => (0.0, w.lexical + w.semantic),
@@ -314,18 +282,15 @@ impl Store {
             })
             .collect();
 
-        // Answering less than the caller asked for is not answering. A bare recall lets
-        // everything through and shows the breakdown; the injection path raises the bar.
+        // Answering less than the caller asked for is not answering.
         scored.retain(|hit| hit.relevance() >= ask.relevance);
         scored.sort_by(|a, b| b.score.total_cmp(&a.score));
         scored.truncate(ask.limit);
         Ok(scored)
     }
 
-    /// Candidates from full-text search, with their lexical scores.
-    ///
-    /// `bm25` answers a negative number where more negative is better, which is the opposite of
-    /// every other signal here, so it is mapped into `0..1` before it meets them.
+    /// Candidates from full-text search, with their lexical scores. `bm25` answers a negative
+    /// number where more negative is better, so it is mapped into `0..1` before it meets them.
     fn matching(&self, ask: &Recall) -> Result<Vec<(Memory, f64)>, StoreError> {
         let sql = format!(
             "SELECT {}, bm25(memory_fts) AS rank FROM memory_fts \
@@ -344,15 +309,11 @@ impl Store {
                 Ok((row::memory(r), rank))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        // bm25 answers a negative number whose *magnitude* depends on how big the store is —
-        // a term in every document scores near zero however well it matched. So the scale is
-        // taken from this result set rather than assumed: the best match here is 1.0 and the
-        // rest are a fraction of it. A lexical score is a ranking, not a measurement.
+        // bm25's magnitude depends on how big the store is, so the scale is taken from this
+        // result set: the best match here is 1.0 and the rest are a fraction of it.
         let best = found.iter().map(|(_, rank)| *rank).fold(0.0_f64, f64::min);
-        // Relative ranking alone cannot tell a weak match from a strong one: the only result
-        // in a set is always the best in it, so "production box" scored exactly what "staging
-        // box" did against a memory about the staging box. Coverage is the absolute half —
-        // how much of what was asked the memory actually contains.
+        // Relative ranking alone cannot tell a weak match from a strong one: the only result in
+        // a set is always the best in it. Coverage is the absolute half.
         let wanted = terms_of(&ask.query);
         found
             .into_iter()
@@ -376,8 +337,7 @@ impl Store {
         let found = statement
             .query_map(params![CANDIDATES as i64], |r| Ok(row::memory(r)))?
             .collect::<Result<Vec<_>, _>>()?;
-        // No query means no lexical signal, so the term is neutral rather than zero: scoring
-        // everything at zero on one axis would let strength alone decide the order.
+        // No query means no lexical signal, so the term is neutral rather than zero.
         found.into_iter().map(|m| Ok((m?, 0.5))).collect()
     }
 
@@ -401,12 +361,8 @@ impl Store {
 
     /// Scratch saying the same thing in `at_least` different runs.
     ///
-    /// The CALLUS query, and the reason it counts **sessions** rather than rows: one run
-    /// repeating itself would otherwise look exactly like several runs agreeing, and the whole
-    /// point of the path is that those are different things.
-    ///
-    /// Grouped by content hash, which is exact and free. A distiller clusters better; its
-    /// absence does not stop this.
+    /// Counts *sessions* rather than rows: one run repeating itself is not several runs
+    /// agreeing. Grouped by content hash, which is exact and free.
     /// The scratch memories in this store saying exactly this, by digest.
     fn saying(
         &self,
@@ -525,8 +481,7 @@ mod tests {
 
     #[test]
     fn a_word_that_matches_everything_is_dropped() {
-        // FTS5 has no stopword list, so "the" was a term like any other — and a question
-        // containing it matched every memory containing it, which is most of them.
+        // FTS5 has no stopword list, so "the" is a term like any other.
         assert_eq!(
             fts_query("what is the deploy target"),
             "\"deploy\" OR \"target\""
@@ -535,13 +490,8 @@ mod tests {
 
     #[test]
     fn a_question_made_of_nothing_matches_nothing() {
-        // The correct answer to "what is it" is nothing, not everything — and not an error.
-        //
-        // This test used to assert the sentinel contained a NUL, which encoded the defect
-        // rather than the requirement: FTS5 reads a NUL inside a quoted string as the end of
-        // the string, so `balthasar recall "what is it"` failed with "unterminated string" instead
-        // of answering nothing. What matters is that the sentinel is a term the parser accepts
-        // and the tokenizer can never produce.
+        // The correct answer to "what is it" is nothing, not everything — and not an error. The
+        // sentinel must be a term the parser accepts and the tokenizer can never produce.
         for empty in ["  ", "what is it", "how do you do that"] {
             let q = fts_query(empty);
             assert!(
@@ -560,8 +510,6 @@ mod tests {
 
     #[test]
     fn matching_half_the_question_is_worth_half() {
-        // The defect this exists for: relative ranking made the only result in a set the best
-        // in it, so a weak match and a perfect one scored the same.
         let wanted = terms_of("production box");
         assert_eq!(wanted, ["production", "box"]);
         assert!((coverage(&wanted, "the staging box is at 10.0.0.7") - 0.5).abs() < 1e-9);
@@ -573,9 +521,7 @@ mod tests {
 
     #[test]
     fn the_scoring_stage_agrees_with_the_stage_that_found_it() {
-        // FTS5 stems, so `tests` finds a memory about `make test`. Scoring it as having
-        // matched nothing meant the retrieval stage and the scoring stage disagreed, and a
-        // whole category of question came back empty.
+        // FTS5 stems, so `tests` must find a memory about `make test`.
         let wanted = terms_of("tests");
         assert!(coverage(&wanted, "`make test` is what works here") > 0.9);
         assert!(coverage(&terms_of("boxes"), "the box is over there") > 0.9);
@@ -600,9 +546,7 @@ mod tests {
 
     #[test]
     fn a_tiny_bm25_magnitude_still_ranks() {
-        // With two documents sharing a term, bm25 answers around -1.7e-6. Scoring that as
-        // "no lexical match" threw the whole signal away on exactly the small stores a
-        // person starts with.
+        // With two documents sharing a term, bm25 answers around -1.7e-6.
         assert_eq!(relative(-1.69e-6, -1.69e-6), 1.0);
         assert!(relative(-1.3e-6, -1.69e-6) > 0.5);
     }
@@ -644,8 +588,7 @@ mod topping_up {
 
     #[test]
     fn a_query_sharing_no_words_finds_nothing_without_a_vector() {
-        // The limitation, asserted so a change to it is deliberate. Two-stage retrieval gates
-        // on the lexical stage, and this query does not reach it.
+        // The limitation, asserted so a change to it is deliberate.
         let store = stored("we deploy with fly");
         let found = store
             .recall(&Recall::of("kubernetes orchestration", NOW))

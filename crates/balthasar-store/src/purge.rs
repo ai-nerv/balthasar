@@ -1,46 +1,25 @@
 //! The one place a row is removed.
 //!
-//! Everything else in this crate closes an interval, sets `archived_at`, or draws an edge. This
-//! function deletes, and it exists for exactly one sentence: "delete the API key I pasted"
-//! must be answerable with yes.
-//!
-//! `gate-no-delete` greps for `DELETE FROM` outside this file and the ledger's retention. Adding
-//! a third is not a style violation; it is the commitment failing.
-//!
-//! **The closure is the whole difficulty.** A memory is not one row. It has evidence, asserted
-//! edges, derived edges, an entity index, a full-text row, an embedding, and a trail through the
-//! ledger — and a purge that removes the memory while leaving any of those has not answered the
-//! sentence above. Worse, some of them can reconstruct what was purged: a derived edge still
-//! points at the id, and the entity index still says what it was about.
+//! `gate-no-delete` greps for `DELETE FROM` outside this file and the ledger's retention. A
+//! memory is not one row: evidence, asserted and derived edges, an entity index, a full-text
+//! row, an embedding and a ledger trail all go with it, and some can reconstruct what was purged.
 
 use crate::{Store, StoreError};
 use balthasar_model::MemoryId;
 use rusqlite::params;
 
 /// What a purge would remove, counted before anything goes.
-///
-/// Shown first because a purge cannot be undone, and "this will also remove four derived
-/// relationships and nine ledger rows" is something a person deserves to see while they can
-/// still say no.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Closure {
-    /// Pieces of evidence.
     pub witnesses: usize,
     /// Asserted links, in either direction.
     pub links: usize,
     /// Derived relationships, in either direction.
     pub relations: usize,
-    /// Entity index rows.
     pub entities: usize,
-    /// Ledger rows naming this memory.
     pub ledger: usize,
-    /// Whether it carries an embedding.
     pub embedded: bool,
     /// Memories distilled or consolidated out of this one, which go with it.
-    ///
-    /// Counted separately from `links` because these are not rows that point at a memory — they
-    /// are memories, and removing this one removes them too. A confirmation that said "four
-    /// links" when it meant "four beliefs" would be the wrong prompt.
     pub derived: usize,
 }
 
@@ -78,10 +57,8 @@ pub fn closure_of(store: &Store, id: &MemoryId) -> Result<Closure, StoreError> {
 }
 
 impl Store {
-    /// Every memory a run owns.
-    ///
-    /// Owning is not having seen: a memory another run wrote and this one merely witnessed
-    /// belongs to the other, and forgetting this run must leave it standing.
+    /// Every memory a run owns. Owning is not having seen: a memory another run wrote and this
+    /// one merely witnessed belongs to the other.
     pub fn owned_by(
         &self,
         session: &balthasar_model::SessionId,
@@ -98,16 +75,8 @@ impl Store {
     }
 }
 
-/// Remove one run's own scratch, permanently.
-///
-/// The third place a run lives. Its memories are in the project store, its turns are in the
-/// scrollback, and everything it thought but never promoted is in a directory of its own —
-/// which is where a pasted key would still be sitting after the other two were cleared.
-///
-/// **The run's directory, not one agent's.** This used to take the parent of one scratch file,
-/// which was the run's directory when a run had exactly one file and is one subagent's the
-/// moment it has several — so "forget that session" would have left every other agent's copy
-/// of the key on disk. A run is the unit somebody forgets; an agent is a subdivision of one.
+/// Remove one run's own scratch, permanently. The run's directory, not one agent's: a run may
+/// have several agents, and each has its own scratch file under the run.
 pub fn purge_scratch(
     pad: &mut crate::Scratchpad,
     session: &balthasar_model::SessionId,
@@ -117,25 +86,19 @@ pub fn purge_scratch(
         return Ok(false);
     }
     // Before removing the files, not after: an open connection to a file that has stopped
-    // existing is a store that answers questions out of a deleted inode. Every agent of the
-    // run, because every one of their files is about to stop existing.
+    // existing is a store that answers questions out of a deleted inode.
     pad.close(session);
     std::fs::remove_dir_all(dir).map_err(|why| StoreError::Foreign(why.to_string()))?;
     Ok(true)
 }
 
-/// Remove one run's turns from the scrollback, permanently.
-///
-/// The other half of forgetting a run. The scrollback is a separate file, so `purge_session`
-/// cannot reach it and a caller answering "forget that session" has to do both — the memories
-/// it owned and the conversation it held.
+/// Remove one run's turns from the scrollback, permanently. The scrollback is a separate file,
+/// so `purge_session` cannot reach it and a caller answering "forget that session" does both.
 pub fn purge_run(
     scrollback: &crate::Transcript,
     session: &balthasar_model::SessionId,
 ) -> Result<usize, StoreError> {
-    // The search index holds a second copy of every word. Deleting the turn and leaving the
-    // index is the failure this whole file exists to prevent, and the byte-level purge test
-    // catches it the moment the index is added — which is how this line came to be written.
+    // The search index holds a second copy of every word, so it goes before the turn.
     scrollback.db().execute(
         "DELETE FROM turn_fts WHERE session = ?1",
         params![session.as_str()],
@@ -153,19 +116,9 @@ pub fn purge_run(
 
 /// Remove a memory and everything that points at it, permanently.
 ///
-/// Answers how many memories went. The caller is responsible for having asked a person first;
-/// there is no confirmation in here, because a library that prompts cannot be scripted and a
-/// library that prompts *sometimes* is worse.
-///
-/// Order matters: everything referring to the memory goes before the memory, because the
-/// foreign keys point that way and a partial failure that left evidence for nothing would be
-/// worse than not starting. The embedding needs no statement of its own — it is a column, and
-/// it goes with the row.
-///
-/// **Derivations go too.** A memory distilled or consolidated out of this one is a copy of it
-/// under another name, and leaving it standing means the claim survives the delete — worse, the
-/// next consolidation pass rewrites it back out of the survivor while the record says it was
-/// erased. Descendants are removed first, so no edge is ever left pointing at nothing.
+/// Order matters: everything referring to the memory goes before the memory, because the foreign
+/// keys point that way. The embedding is a column and goes with the row. Derivations go too, and
+/// descendants are removed first, so no edge is ever left pointing at nothing.
 pub fn purge(store: &mut Store, id: &MemoryId) -> Result<usize, StoreError> {
     let mut gone = 0;
     for derived in descendants(store, id)? {
@@ -174,11 +127,8 @@ pub fn purge(store: &mut Store, id: &MemoryId) -> Result<usize, StoreError> {
     Ok(gone + purge_one(store, id)?)
 }
 
-/// Everything made out of this memory, deepest first.
-///
-/// Breadth-first with a seen set, so a cycle in the derivation graph terminates and a memory
-/// reached by two paths is removed once. Reversed on the way out, so a descendant is always
-/// purged before whatever it was derived from.
+/// Everything made out of this memory, deepest first. Breadth-first with a seen set, so a cycle
+/// terminates; reversed on the way out, so a descendant is purged before its source.
 fn descendants(store: &Store, root: &MemoryId) -> Result<Vec<MemoryId>, StoreError> {
     let mut seen = vec![root.clone()];
     let mut order = Vec::new();
@@ -214,18 +164,14 @@ fn purge_one(store: &mut Store, id: &MemoryId) -> Result<usize, StoreError> {
         "DELETE FROM link WHERE src = ?1 OR dst = ?1",
         params![id.as_str()],
     )?;
-    // Derived edges. No foreign key holds these, so nothing would have complained — they would
-    // simply have stayed, pointing at an id that no longer exists, and a traversal would still
-    // have reached the hole where the secret was.
+    // Derived edges. No foreign key holds these, so nothing would complain about a dangling row.
     tx.execute(
         "DELETE FROM relation_view WHERE from_memory = ?1 OR to_memory = ?1",
         params![id.as_str()],
     )?;
-    // The entity index. This one has a foreign key, so leaving it out did not leave a dangling
-    // row — it made the whole purge fail on any memory that had ever been indexed.
+    // The entity index. It has a foreign key, so leaving it out fails the purge outright.
     tx.execute("DELETE FROM entity WHERE memory = ?1", params![id.as_str()])?;
-    // The ledger's trail. These carry no content, but they name the id, and a purge that leaves
-    // a record of what was retrieved has not removed what somebody asked to have removed.
+    // The ledger's trail. These carry no content, but they name the id.
     tx.execute(
         "DELETE FROM recall_candidate WHERE memory_id = ?1",
         params![id.as_str()],
@@ -249,15 +195,8 @@ fn purge_one(store: &mut Store, id: &MemoryId) -> Result<usize, StoreError> {
     Ok(gone)
 }
 
-/// Everything one run left behind.
-///
-/// §10.8's trajectory scope. A person who says "forget that session" means the whole of it —
-/// what it observed, what it distilled, and the evidence it filed — not one memory they can
-/// name. Returns how many memories went.
-///
-/// Memories a run merely *witnessed* are not removed. A fact three runs agree on does not
-/// belong to any of them, and taking it with one would be a different and much worse operation
-/// than the one somebody asked for; its witness from this run goes, and the fact stays with the
+/// Everything one run left behind. Returns how many memories went. Memories a run merely
+/// *witnessed* are not removed: its witness from this run goes, and the fact stays with the
 /// evidence that remains.
 pub fn purge_session(
     store: &mut Store,
@@ -270,8 +209,7 @@ pub fn purge_session(
         gone += purge(store, id)?;
     }
 
-    // The run's own evidence for things it did not own, and its bookkeeping. Neither can
-    // reconstruct a memory, and leaving them would keep the run's shape after the run is gone.
+    // The run's own evidence for things it did not own, and its bookkeeping.
     let tx = store.db_mut().transaction()?;
     tx.execute(
         "DELETE FROM witness WHERE session = ?1",
@@ -289,16 +227,9 @@ pub fn purge_session(
     Ok(gone)
 }
 
-/// Everything that came from one source.
-///
-/// §10.8's environment scope, and the one an incident actually needs: a page turned out to be
-/// hostile, and the question is what it touched. Removes every memory whose evidence comes only
-/// from that domain.
-///
-/// A memory with evidence from elsewhere as well is kept, with the tainted witness removed —
-/// because it stands on what remains, and deleting it would let one poisoned source take honest
-/// memories with it. That is the denial-of-service version of this operation and it is worth
-/// refusing.
+/// Everything that came from one source: every memory whose evidence comes only from `domain`. A
+/// memory with evidence from elsewhere as well is kept, with the tainted witness removed, so one
+/// poisoned source cannot take honest memories with it.
 pub fn purge_domain(
     store: &mut Store,
     domain: &balthasar_model::Domain,
@@ -335,7 +266,6 @@ pub fn purge_domain(
                 params![id.as_str(), domain.as_str()],
             )?;
             // Confidence is derived, so it has to be recomputed now that the evidence changed.
-            // Leaving it would state a number the remaining witnesses do not support.
             store.rescore(id, balthasar_model::Timestamp::default())?;
         }
     }

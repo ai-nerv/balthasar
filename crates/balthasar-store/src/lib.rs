@@ -1,19 +1,9 @@
 //! Where memory is kept.
 //!
-//! SQLite, one file per scope, WAL. Not interesting and not negotiable: the reference
-//! implementations reach 156 µs ingest and 568 µs search on it, and a memory layer that needs a
-//! server running is a memory layer nobody runs.
-//!
-//! Two rules hold everywhere below, and everything else is detail.
-//!
-//! **Nothing is deleted.** Superseded, contradicted, decayed past the floor, forgotten on
-//! purpose — every one of those is a column, not a `DELETE`. There is exactly one statement in
-//! this crate that removes a row and it lives in [`purge`], behind a confirmation, because
-//! "delete the key I pasted" must be answerable with yes.
-//!
-//! **A fact answers for itself.** The partial unique index in the schema makes two
-//! simultaneously-true answers to one slot impossible at the database level, so contradiction
-//! handling is a constraint that fails loudly rather than a policy code must remember.
+//! SQLite, one file per scope, WAL. Nothing is deleted: superseded, contradicted, decayed past
+//! the floor and forgotten on purpose are all columns, and the one statement in this crate that
+//! removes a row lives in [`purge`]. The partial unique index in the schema makes two
+//! simultaneously-true answers to one slot impossible at the database level.
 
 mod collide;
 mod decay;
@@ -76,18 +66,11 @@ pub enum StoreError {
     /// The store's directory could not be made.
     #[error("{0}: {1}")]
     Io(PathBuf, #[source] std::io::Error),
-    /// A row came back with a column this build does not understand.
-    ///
-    /// Its own variant rather than a generic decode failure: it means the file was written by
-    /// a different balthasar, and telling somebody that is more useful than telling them a string
-    /// did not parse.
+    /// A row came back with a column this build does not understand, meaning the file was
+    /// written by a different balthasar.
     #[error("this store holds a '{0}' that this build does not know")]
     Foreign(String),
     /// A caller referred to something that is not in this store.
-    ///
-    /// Its own variant rather than a foreign-key failure reaching the surface: "no injection
-    /// called 'i-nope'" tells a caller what to fix, and "FOREIGN KEY constraint failed" tells
-    /// them to read someone else's schema.
     #[error("no {0}")]
     Unknown(String),
 }
@@ -101,14 +84,9 @@ pub struct Store {
 impl Store {
     /// Open the store at `path`, creating and migrating it if need be.
     ///
-    /// WAL, because consolidation reads while a session writes and the default journal mode
-    /// makes those wait for each other. `foreign_keys` on, so a witness cannot outlive the
-    /// memory it is evidence for.
-    ///
-    /// `secure_delete` on, because SQLite does not zero a freed page by default: the row leaves
-    /// the table and the words stay in the file, where `strings` finds them. For a store that
-    /// answers "delete the key I pasted" with yes, a purge that only unlinks a row is a wrong
-    /// answer — and one nobody notices, because every way back through the store is closed.
+    /// WAL, because consolidation reads while a session writes. `foreign_keys` on, so a witness
+    /// cannot outlive the memory it is evidence for. `secure_delete` on, because SQLite does not
+    /// zero a freed page by default and the words stay in the file where `strings` finds them.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(parent.to_owned(), e))?;
@@ -137,10 +115,8 @@ impl Store {
         })
     }
 
-    /// How many bytes this store occupies.
-    ///
-    /// Asked of SQLite rather than the filesystem, so it answers the same way for an in-memory
-    /// store as for a file — a benchmark runs in memory and still has to report what it cost.
+    /// How many bytes this store occupies. Asked of SQLite rather than the filesystem, so an
+    /// in-memory store answers too.
     pub fn bytes(&self) -> Result<u64, StoreError> {
         let pages: i64 = self
             .connection
@@ -156,12 +132,10 @@ impl Store {
         &self.path
     }
 
-    /// The connection, for the modules that make up this crate.
     pub(crate) fn db(&self) -> &Connection {
         &self.connection
     }
 
-    /// The connection, mutably, for the ones that need a transaction.
     pub(crate) fn db_mut(&mut self) -> &mut Connection {
         &mut self.connection
     }
@@ -188,8 +162,7 @@ mod tests {
 
     #[test]
     fn full_text_search_is_available() {
-        // FTS5 is the retrieval floor: without it there is no non-embedding path, and
-        // commitment 3 is a sentence rather than a fact. Better to find out here than at M4.
+        // FTS5 is the retrieval floor: without it there is no non-embedding path.
         let store = Store::ephemeral().expect("open");
         store
             .db()

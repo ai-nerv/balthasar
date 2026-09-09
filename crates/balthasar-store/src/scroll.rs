@@ -1,41 +1,25 @@
 //! Reading part of a scrollback, when the whole of it will not fit.
 //!
-//! `replay` hands back every turn a run ever produced. That is right for restoring a session and
-//! wrong for everything else: a long run is unbounded by construction — balthasar is the only copy —
-//! and a model's context is not. So the reads here are bounded by a **token budget**, because
-//! that is the constraint that actually exists; bounding by turns instead would let one pasted
-//! stack trace eat the whole allowance.
+//! `replay` hands back every turn a run ever produced. The reads here are bounded by a token
+//! budget instead: bounding by turns would let one pasted stack trace eat the whole allowance.
 //!
-//! Four questions, and they are the ones a harness actually asks:
-//!
-//! - **the tail** — what was just happening, for a run picking up where it left off;
-//! - **a span** — a cursor range, which is what an episode is;
-//! - **around a cursor** — the context for a citation, so `balthasar why` can quote in situ;
-//! - **matching** — turns that mention something, within one run.
-//!
-//! Every read says what it left out. A bounded read that silently drops half a session is worse
-//! than an unbounded one, because the caller cannot tell the difference between "that is all
-//! there was" and "that is all you asked for".
+//! Four questions: the tail, a cursor span, the turns around a cursor, and turns matching words
+//! within one run. Every read says what it left out, so a caller can tell "that is all there
+//! was" from "that is all you asked for".
 
 use crate::{StoreError, Transcript, Turn};
 use balthasar_model::SessionId;
 use rusqlite::params;
 
-/// Characters per token, for estimating what a turn costs.
-///
-/// The same rough four as everywhere else in balthasar. Wrong in the third decimal and right about
-/// the order, which is what a budget needs.
+/// Characters per token, for estimating what a turn costs. The same rough four as elsewhere.
 const CHARS_PER_TOKEN: usize = 4;
 
 /// How much may come back.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
-    /// The token allowance.
     pub tokens: usize,
-    /// A hard cap on turns, whatever the tokens say.
-    ///
-    /// Ten thousand one-word turns fit a generous token budget and are still useless to read,
-    /// and assembling them costs the memory the budget was protecting.
+    /// A hard cap on turns, whatever the tokens say. Ten thousand one-word turns fit a generous
+    /// budget and are still useless to read.
     pub turns: usize,
 }
 
@@ -65,12 +49,9 @@ pub enum Want {
         /// The turn being cited.
         cursor: u64,
     },
-    /// Turns mentioning all of these words, within this run.
-    ///
-    /// A scan rather than an index. The transcript is already the largest thing balthasar stores and
-    /// a full-text index over it would roughly double that; within one run a scan is bounded by
-    /// the run, and *across* runs the right entry point is the memory store — its witnesses
-    /// carry cursors, and it already has an index.
+    /// Turns mentioning all of these words, within this run. A scan rather than an index: a
+    /// full-text index over the transcript would roughly double the largest thing balthasar
+    /// stores.
     Matching {
         /// The words, lowercased on the way in.
         terms: Vec<String>,
@@ -86,11 +67,8 @@ pub struct Read {
     pub tokens: usize,
     /// How many turns matched but did not fit.
     pub omitted: usize,
-    /// Where to continue from, when the budget stopped it short.
-    ///
-    /// `Some` means there is more in the direction being read. A caller that wants the rest asks
-    /// again from here, which is what makes a long span readable in chunks rather than not at
-    /// all.
+    /// Where to continue from, when the budget stopped it short. `Some` means there is more in
+    /// the direction being read; a caller that wants the rest asks again from here.
     pub next: Option<u64>,
 }
 
@@ -114,22 +92,15 @@ impl Read {
     }
 }
 
-/// Drop a leading part-message.
-///
-/// One assistant message is several blocks — prose, a thought, three tool calls — written as
-/// separate turns so a span can address one of them. A read that cut into the middle would hand
-/// a model an assistant turn without the tool call it made, or a tool result with nothing that
-/// asked for it, which is worse than not showing the message at all.
-///
-/// Only the front is trimmed. A read growing backwards from the end stops where the budget runs
-/// out, and that edge is the one that lands mid-message; the other edge is the end of the run.
+/// Drop a leading part-message: one assistant message is several blocks written as separate
+/// turns, and a read that cut into the middle would hand a model an assistant turn without the
+/// tool call it made. Only the front is trimmed; the other edge is the end of the run.
 fn on_a_boundary(turns: &mut Vec<Turn>, all: &[Turn]) {
     let Some(first) = turns.first() else { return };
     let Some(entry) = first.entry.clone() else {
         return;
     };
-    // Whether anything earlier belongs to the same message. If not, this already starts on a
-    // boundary and nothing needs dropping.
+    // Whether anything earlier belongs to the same message.
     let started_earlier = all
         .iter()
         .any(|t| t.cursor < first.cursor && t.entry.as_ref() == Some(&entry));
@@ -138,11 +109,8 @@ fn on_a_boundary(turns: &mut Vec<Turn>, all: &[Turn]) {
     }
 }
 
-/// What a turn costs.
-///
-/// The harness's own count when it has one — it billed the request and balthasar guessed at it. Four
-/// characters to a token is right about the order and wrong about the number, and a budget spent
-/// against the guess drifts further the longer the window gets.
+/// What a turn costs. The harness's own count when it has one; four characters to a token is
+/// right about the order and wrong about the number, and a budget spent against it drifts.
 #[must_use]
 pub fn tokens_of(turn: &Turn) -> usize {
     match turn.tokens {
@@ -181,8 +149,7 @@ impl Transcript {
         let mut tokens = 0;
         for turn in all.iter() {
             let cost = tokens_of(turn);
-            // Always take the first, however large. A budget smaller than one turn should give
-            // that turn and say the budget was exceeded, not give nothing and look empty.
+            // Always take the first, however large: a budget smaller than one turn still gives it.
             if !turns.is_empty() && (tokens + cost > budget.tokens || turns.len() >= budget.turns) {
                 break;
             }
@@ -220,8 +187,8 @@ impl Transcript {
         turns.reverse();
         on_a_boundary(&mut turns, &all);
         let omitted = all.len() - turns.len();
-        // Reading backwards, "more" is what came *before* — so continuing means asking for the
-        // span that ends just before the earliest turn returned.
+        // Reading backwards, "more" is what came *before*, so continuing asks for the span that
+        // ends just before the earliest turn returned.
         let next = (omitted > 0).then(|| turns.first().map_or(0, |t| t.cursor.saturating_sub(1)));
         Ok(Read {
             turns,
@@ -231,11 +198,8 @@ impl Transcript {
         })
     }
 
-    /// The turns either side of one cursor.
-    ///
-    /// Grown outward a turn at a time rather than by a fixed radius, so a citation surrounded by
-    /// long turns gets fewer of them and one surrounded by short turns gets more. What a reader
-    /// needs is a paragraph of context, not a turn count.
+    /// The turns either side of one cursor. Grown outward a turn at a time rather than by a fixed
+    /// radius, so a citation surrounded by long turns gets fewer of them.
     fn centred(
         &self,
         session: &SessionId,
@@ -337,9 +301,8 @@ impl Transcript {
                     ok, ms, args, revisions FROM turn \
              WHERE session = ?1 AND cursor >= ?2 AND cursor <= ?3 ORDER BY cursor",
         )?;
-        // Clamped, because SQLite has no unsigned integer and `u64::MAX as i64` is -1 — which
-        // made `cursor <= ?3` match nothing, so every read that scanned to the end came back
-        // empty while a bounded span worked fine.
+        // Clamped, because SQLite has no unsigned integer and `u64::MAX as i64` is -1, which
+        // makes `cursor <= ?3` match nothing.
         let ceiling = i64::try_from(to).unwrap_or(i64::MAX);
         let floor = i64::try_from(from).unwrap_or(i64::MAX);
         let rows = statement

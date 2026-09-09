@@ -1,31 +1,18 @@
 //! What a memory is *about*.
 //!
-//! Full-text search matches words; an entity index matches things. They come apart exactly
-//! where it matters: `deployment` shares no token with `we deploy with fly`, but both are about
-//! *fly*, and a query naming a rare thing is a much stronger signal than a query naming a
-//! common one.
+//! Full-text search matches words; an entity index matches things. `deployment` shares no token
+//! with `we deploy with fly`, but both are about *fly*.
 //!
-//! Two ideas taken from elsewhere, and one deliberate departure.
-//!
-//! **Rarity weighting**, from mem0's entity store: an entity linked to two memories is far more
-//! informative than one linked to a thousand. It is IDF, applied to things rather than words.
-//!
-//! **Query expansion**, from cortex: the entities in a query pull in memories that mention
-//! them, bounded on both time and term count so the cost never scales with the store.
-//!
-//! **The departure.** In mem0 the entity signal can only *reorder* what vector search already
-//! found — if the first stage missed a memory, nothing rescues it. Here entities may *add*
-//! candidates, for the same reason the vector top-up exists: a gate with no way out of it is a
-//! gate that decides what can never be found.
+//! Rarity weighting: an entity linked to two memories is far more informative than one linked to
+//! a thousand. Query expansion: the entities in a query pull in memories that mention them,
+//! bounded on both time and term count. Entities may *add* candidates, not only reorder them.
 
 use crate::{Store, StoreError};
 use balthasar_model::MemoryId;
 use rusqlite::params;
 
-/// What kind of thing a name refers to.
-///
-/// Kept because it decides how much a match is worth: two memories about `src/lib.rs` are
-/// about the same file, and two memories mentioning `Docker` might be about anything.
+/// What kind of thing a name refers to. Decides how much a match is worth: two memories about
+/// `src/lib.rs` are about the same file, two mentioning `Docker` might be about anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     /// A path: `src/lib.rs`, `config/init.lua`.
@@ -50,10 +37,8 @@ impl Kind {
         }
     }
 
-    /// How much a match on this kind counts, before rarity.
-    ///
-    /// A path or a command names one thing and names it exactly. A capitalised word might be a
-    /// product, a person, or the first word of a sentence that got through.
+    /// How much a match on this kind counts, before rarity. A path or a command names one thing
+    /// exactly; a capitalised word might be a product, a person, or a sentence opener.
     #[must_use]
     pub fn confidence(self) -> f64 {
         match self {
@@ -75,14 +60,10 @@ pub struct Entity {
     pub kind: Kind,
 }
 
-/// How many entities one memory may contribute.
-///
-/// A bound, so a memory that happens to be a wall of paths does not fill the index on its own.
+/// How many entities one memory may contribute, so one wall of paths cannot fill the index.
 const PER_MEMORY: usize = 12;
 
-/// How many entities a query may be expanded on.
-///
-/// cortex's cap, and for its reason: the downstream SQL stays small however long the question.
+/// How many entities a query may be expanded on, so the downstream SQL stays small.
 const PER_QUERY: usize = 8;
 
 /// Words that are capitalised for grammar rather than because they name anything.
@@ -95,16 +76,13 @@ const NOT_A_NAME: &[&str] = &[
     "to", "by", "as", "if", "or", "so", "run", "use", "used", "using", "make", "just", "only",
 ];
 
-/// Pull the things a piece of text is about out of it.
-///
-/// No model. Backticks, paths, identifiers and capitalised words carry most of what a coding
-/// agent's memories are about, and all four are visible without one.
+/// Pull the things a piece of text is about out of it. No model: backticks, paths, identifiers
+/// and capitalised words carry most of what a coding agent's memories are about.
 #[must_use]
 pub fn extract(text: &str) -> Vec<Entity> {
     let mut out: Vec<Entity> = Vec::new();
 
-    // Backticks first, and their contents are not re-scanned: `make test` is one command, not
-    // the word "make" and the word "test".
+    // Backticks first, and their contents are not re-scanned: `make test` is one command.
     let mut rest = String::with_capacity(text.len());
     let mut in_ticks = false;
     let mut held = String::new();
@@ -197,20 +175,16 @@ fn has_inner_capital(word: &str) -> bool {
 
 /// How much a match on an entity is worth, given how many memories mention it.
 ///
-/// Rarity weighted, mem0's idea: an entity linked to two memories is far more informative than
-/// one linked to a thousand. `1 / (1 + ln(1 + n))` — one memory scores `0.59`, ten `0.29`, a
-/// thousand `0.13`. It never reaches zero, because a common entity is still a weak signal
-/// rather than no signal.
+/// `1 / (1 + ln(1 + n))` — one memory scores `0.59`, ten `0.29`, a thousand `0.13`. It never
+/// reaches zero, because a common entity is a weak signal rather than no signal.
 #[must_use]
 pub fn rarity(linked: u32) -> f64 {
     1.0 / (1.0 + f64::from(linked).ln_1p())
 }
 
 impl Store {
-    /// Index what a memory is about.
-    ///
-    /// Called on write. Replacing rather than adding, so re-indexing after a better extractor
-    /// does not leave the old names behind.
+    /// Index what a memory is about. Called on write, replacing rather than adding, so
+    /// re-indexing after a better extractor does not leave the old names behind.
     pub fn index_entities(
         &mut self,
         id: &MemoryId,
@@ -239,10 +213,8 @@ impl Store {
 
     /// Memories a query's entities point at, with what each match is worth.
     ///
-    /// Bounded on the number of entities and on how many memories any one of them may pull in,
-    /// so the cost of a question never scales with the size of the store. Answers an empty map
-    /// rather than an error when it runs out of budget: an error channel would be an oracle for
-    /// how much is held.
+    /// Bounded on the number of entities and on how many memories any one may pull in. Answers
+    /// an empty map rather than an error when it runs out of budget.
     pub fn by_entity(
         &self,
         scope: &str,
@@ -293,10 +265,8 @@ impl Store {
         Ok(out)
     }
 
-    /// How many memories each entity is linked to, for rarity weighting.
-    ///
-    /// One query rather than one per term: deriving relationships over a few hundred memories
-    /// asks about the same names repeatedly, and a round trip each would dominate the work.
+    /// How many memories each entity is linked to, for rarity weighting. One query rather than
+    /// one per term: a round trip each would dominate the work.
     pub fn entity_counts(
         &self,
         scope: &str,
@@ -347,8 +317,7 @@ mod tests {
 
     #[test]
     fn a_backticked_span_is_one_command() {
-        // `make test` is one thing. Splitting it into "make" and "test" would index two words
-        // that name nothing and lose the thing that was actually said.
+        // `make test` is one thing; splitting it indexes two words that name nothing.
         let found = extract("run `make test` to check");
         assert!(
             found
@@ -397,8 +366,7 @@ mod tests {
 
     #[test]
     fn a_rare_entity_is_worth_more_than_a_common_one() {
-        // mem0's idea: a memory linked to one of two "Paris" memories is likelier to be the
-        // one you want than one of a thousand.
+        // A memory linked to one of two "Paris" memories is likelier to be the one you want.
         assert!(rarity(1) > rarity(10));
         assert!(rarity(10) > rarity(1000));
     }
@@ -418,8 +386,7 @@ mod tests {
 
     #[test]
     fn a_path_counts_for_more_than_a_capitalised_word() {
-        // A path names one file exactly. A capitalised word might be a product, a person, or
-        // a sentence opener that got through.
+        // A path names one file exactly. A capitalised word might be a product or a person.
         assert!(Kind::Path.confidence() > Kind::Proper.confidence());
     }
 

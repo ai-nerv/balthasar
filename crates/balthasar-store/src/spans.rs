@@ -1,46 +1,26 @@
-//! Searching what was said.
-//!
-//! The other half of recall. `memory` holds only what crossed the ladder; this reads the turns
+//! Searching what was said. `memory` holds only what crossed the ladder; this reads the turns
 //! themselves, so a claim stated once and never written down is findable by its own words.
-//!
-//! Kept apart from `transcript.rs` because it is a different question about the same file —
-//! that one is about what a run said and in what order, this one is about finding it again.
 
 use crate::{StoreError, Transcript};
 use balthasar_model::{SessionId, Timestamp};
 use rusqlite::params;
 
-/// Something that was said, found by searching what was said.
-///
-/// Deliberately not a [`Memory`](balthasar_model::Memory) and deliberately not convertible into one.
-/// A span has no witnesses, so it has no derived confidence, so nothing can assert it — it is
-/// offered as evidence that a thing was said, which is a different claim from the thing being
-/// true. Everything that reads one is required to keep that distinction.
+/// Something that was said, found by searching what was said. Not a
+/// [`Memory`](balthasar_model::Memory): a span has no witnesses, so nothing can assert it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Span {
-    /// Which run said it.
     pub session: SessionId,
-    /// Where in that run, so it can be quoted and re-read.
     pub cursor: u64,
-    /// What was said, verbatim.
     pub text: String,
-    /// When.
     pub at: Timestamp,
-    /// Who said it.
     pub role: String,
     /// The full-text rank. Negative, and smaller is better.
     pub rank: f64,
 }
 
 impl Transcript {
-    /// The turns whose words match, best first.
-    ///
-    /// The half of recall that no memory can answer: a claim stated once, never repeated, never
-    /// marked and never extracted is in here and nowhere else. Bounded like every other read on
-    /// this file, which has no upper size.
-    ///
-    /// Ranked by `bm25` and then by recency, because two spans that match equally well are not
-    /// equally useful — the later one is what somebody believes now.
+    /// The turns whose words match, best first. Ranked by `bm25` and then by recency, because
+    /// the later of two equally-matching spans is what somebody believes now.
     pub fn spans_matching(&self, terms: &str, limit: usize) -> Result<Vec<Span>, StoreError> {
         let mut statement = self.db().prepare(
             "SELECT turn_fts.session, turn_fts.cursor, turn_fts.text, turn.at, turn.role, \
@@ -68,10 +48,7 @@ impl Transcript {
         Ok(found)
     }
 
-    /// Rebuild the search index over every turn held.
-    ///
-    /// For a scrollback written before the index existed, and for `balthasar reindex`. Cheap to run
-    /// again: the table is dropped and refilled rather than diffed.
+    /// Rebuild the search index over every turn held. The table is dropped and refilled.
     pub fn reindex(&self) -> Result<usize, StoreError> {
         self.db().execute("DELETE FROM turn_fts", [])?;
         let n = self.db().execute(
