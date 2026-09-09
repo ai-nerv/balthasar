@@ -747,13 +747,14 @@ mod tests {
         let shared = std::env::temp_dir();
         assert!(too_broad(&shared), "{}", shared.display());
 
-        let under = shared.join("balthasar-git-ceiling-probe");
-        std::fs::create_dir_all(&under).expect("mkdir");
+        // Owned rather than made and unmade by hand. The name was fixed, so two runs at once
+        // deleted each other's, and the unlink came after the assertions — which an `assert_eq!`
+        // unwinds straight past, so a failing run left the directory in `$TMPDIR` for good.
+        let under = balthasar_model::scratch::Scratch::new("balthasar-git-ceiling", "probe");
         // Whatever this machine happens to have at the top of its temporary directory, a
         // directory under it scopes to itself and not to that.
         assert_eq!(git_common_dir(&under), None);
         assert_eq!(scope_of(&under).as_str(), under.to_string_lossy());
-        let _ = std::fs::remove_dir(&under);
     }
 
     #[test]

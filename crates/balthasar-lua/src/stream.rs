@@ -110,8 +110,18 @@ pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
 
         match UnixStream::connect(&path) {
             Ok(socket) => {
-                let _ = socket.set_read_timeout(Some(timeout));
-                let _ = socket.set_write_timeout(Some(timeout));
+                // Handed back as a failure to connect, not swallowed. This VM has no way to
+                // interrupt a blocking read, so a handle whose deadline never took would hang
+                // the whole harness on a daemon that stopped answering — which is exactly the
+                // case the timeout exists for and exactly the case where it went missing.
+                let deadlines = socket
+                    .set_read_timeout(Some(timeout))
+                    .and_then(|()| socket.set_write_timeout(Some(timeout)));
+                if let Err(why) = deadlines {
+                    let message = luna::String::from_slice(&ctx, why.to_string().as_bytes());
+                    stack.replace(ctx, (Value::Nil, message));
+                    return Ok(CallbackReturn::Return);
+                }
                 let held: Handle = Rc::new(RefCell::new(Some(socket)));
                 stack.replace(ctx, handle_table(ctx, held));
             }

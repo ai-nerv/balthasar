@@ -81,7 +81,7 @@ pub struct Refused {
 
 /// The settings a coordinator may set.
 ///
-/// The thresholds and decay rates `init.lua` documents. A registrar — `    std::fs::write(path, source).map_err(|source| LuaError::Io {`, `section`,
+/// The thresholds and decay rates `init.lua` documents. A registrar — `source`, `section`,
 /// `extractor`, `tool` — is called rather than assigned, so it is declared in [`needs`] but not
 /// listed here.
 const SETTINGS: &[&str] = &[
@@ -268,8 +268,34 @@ fn remember(path: &std::path::Path, source: &str) -> Result<(), LuaError> {
 }
 
 /// Forget what a coordinator said, so a restart reads the files again.
-pub fn forget() {
-    let _ = std::fs::remove_file(given());
+///
+/// # Errors
+/// When the file is there and will not go. That used to be swallowed, and the caller was told
+/// it had been forgotten either way — so a coordinator that asked to forget, and whose settings
+/// came back at the next start-up, had nothing anywhere to look at.
+///
+/// Nothing to forget is not a failure: a balthasar that was never configured has no file.
+pub fn forget() -> Result<(), LuaError> {
+    forget_from(&given())
+}
+
+/// The half that does not read the environment, so a test can exercise it.
+///
+/// Split the way `configure_into` is split from `configure`: `given()` resolves through
+/// `$XDG_RUNTIME_DIR`, and `set_var` is `unsafe` under this edition and denied across the
+/// workspace, so the only testable half is the one handed a path.
+///
+/// # Errors
+/// When the file is there and will not go.
+pub fn forget_from(path: &std::path::Path) -> Result<(), LuaError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(why) if why.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(LuaError::Io {
+            file: path.display().to_string(),
+            source,
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -318,6 +344,28 @@ mod tests {
         let path = mine("broken");
         configure_into(&path, "this is not lua at all !!").expect_err("must fail");
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn forgetting_what_was_never_said_is_not_a_failure() {
+        let path = mine("nothing");
+        forget_from(&path).expect("a balthasar nobody configured has no file to remove");
+    }
+
+    #[test]
+    fn forgetting_says_so_when_the_file_will_not_go() {
+        // The failure this used to swallow. `configure --forget` replied with a plain success
+        // whatever happened, so a coordinator whose settings came back at the next start-up had
+        // nothing anywhere to look at. A directory in the file's place is the cheapest way to
+        // make `remove_file` refuse without asking the machine to be broken.
+        let path = mine("stuck");
+        std::fs::create_dir_all(&*path).expect("mkdir");
+        std::fs::write(path.join("occupied"), "x").expect("write");
+        let why = forget_from(&path).expect_err("a directory does not unlink");
+        assert!(
+            why.to_string().contains(&path.display().to_string()),
+            "it has to name the file: {why}"
+        );
     }
 
     #[test]

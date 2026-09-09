@@ -13,8 +13,30 @@ use balthasar_store::Store;
 
 const NOW: balthasar_model::Timestamp = 1_756_000_000;
 
+/// A served socket whose file goes when the test ends, however the test ends.
+///
+/// The accept loop never returns, so the [`Listener`] moved into the serving thread outlives the
+/// test and its `Drop` never runs. Every test here used to unlink on its last line instead, which
+/// an `assert!` unwinds straight past — so a *failing* run left `api@stub-*.sock` in the runtime
+/// directory permanently, and that directory is shared with every balthasar on the machine.
+struct Serving(std::path::PathBuf);
+
+impl std::ops::Deref for Serving {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Serving {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Serve a seeded store on a socket, for as long as the handle lives.
-fn serving(name: &str, seed: &[&str]) -> (std::path::PathBuf, std::thread::JoinHandle<()>) {
+fn serving(name: &str, seed: &[&str]) -> Serving {
     let instance = format!("stub-{name}-{}", std::process::id());
     let listener = Listener::bind(&instance).expect("bind");
     let path = listener.path().to_owned();
@@ -42,7 +64,7 @@ fn serving(name: &str, seed: &[&str]) -> (std::path::PathBuf, std::thread::JoinH
         );
     }
 
-    let thread = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let _ = listener.serve(|peer: &Peer, request: Request| {
             let mut at = Answering {
                 store: &mut store,
@@ -58,7 +80,7 @@ fn serving(name: &str, seed: &[&str]) -> (std::path::PathBuf, std::thread::JoinH
             balthasar_host::answer(&mut at, &Door::Socket(peer.clone()), &request)
         });
     });
-    (path, thread)
+    Serving(path)
 }
 
 /// Run a script with the stub loaded and connected, and take what it left in `balthasar.answer`.
@@ -87,52 +109,47 @@ fn through_the_stub(path: &std::path::Path, script: &str) -> String {
 
 #[test]
 fn the_stub_connects_and_is_answered() {
-    let (path, _thread) = serving("connect", &["we deploy with fly"]);
+    let path = serving("connect", &["we deploy with fly"]);
     assert_eq!(through_the_stub(&path, "mem.verbs() ~= nil"), "true");
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn the_stub_recalls_and_unpacks_what_came_back() {
     // The reply shape, end to end. A client that unpacked a bare-value server would read this
     // as having returned nothing at all, and the bug would present as an empty memory.
-    let (path, _thread) = serving("recall", &["we deploy with fly"]);
+    let path = serving("recall", &["we deploy with fly"]);
     let answer = through_the_stub(&path, "mem.recall(\"deploy\")[1].text");
     assert_eq!(answer, "we deploy with fly");
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn the_stub_gets_which_project_and_which_run() {
-    let (path, _thread) = serving("origin", &["we deploy with fly"]);
+    let path = serving("origin", &["we deploy with fly"]);
     let answer = through_the_stub(&path, "mem.recall(\"deploy\")[1].project");
     assert_eq!(answer, "/w/thing");
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn one_stub_connection_carries_several_calls() {
     // The deviation from the sibling that reconnects per call, proven rather than asserted.
-    let (path, _thread) = serving("many", &["a thing"]);
+    let path = serving("many", &["a thing"]);
     let answer = through_the_stub(
         &path,
         "(mem.verbs() and mem.status() and mem.sessions()) ~= nil",
     );
     assert_eq!(answer, "true");
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn the_stub_reports_a_refusal_rather_than_raising() {
     // A refused verb has to arrive as a value the caller can branch on. A client that raised
     // would take down whatever was using it over a question it was entitled to ask.
-    let (path, _thread) = serving("refuse", &[]);
+    let path = serving("refuse", &[]);
     let answer = through_the_stub(
         &path,
         "select(2, mem:call(\"prompt\", \"rm -rf /\")) ~= nil",
     );
     assert_eq!(answer, "true");
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
@@ -159,11 +176,10 @@ fn the_library_that_speaks_this_surface_comes_back_over_the_wire() {
     // harness had a copy of this file that predated a fix, so every session on that machine
     // silently had no memory tools and nothing anywhere said why. `balthasar lua-api` prints the same source,
     // which is enough for a host that can shell out and useless to a sandboxed VM that cannot.
-    let (path, _thread) = serving("client", &[]);
+    let path = serving("client", &[]);
     let source = through_the_stub(&path, r#"select(1, mem:call("client"))"#);
     assert!(
         source.contains("balthasar's client library"),
         "it is the file this crate ships: {source:.120}"
     );
-    let _ = std::fs::remove_file(&path);
 }

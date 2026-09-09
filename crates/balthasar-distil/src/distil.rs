@@ -113,12 +113,17 @@ impl Distil for Spawned {
             .spawn()
             .map_err(|why| DistilFailure::Unreachable(format!("{program}: {why}")))?;
 
+        // A model that will not read the whole prompt is a model that will answer about half of
+        // it, so this stays a failure — but not *this* failure, and not yet. A backend that
+        // refuses outright says why on stderr and exits before it ever reads stdin, so the write
+        // loses its race and the caller was told "Broken pipe (os error 32)" instead of "no api
+        // key". Which of the two happens depends on scheduling, which is why the suite's own
+        // version of it failed about one run in fifty. What the child said comes first.
+        let mut written = Ok(());
         if let Some(mut stdin) = child.stdin.take() {
-            // A model that will not read the whole prompt is a model that will answer about
-            // half of it, so a broken pipe here is a failure rather than something to ignore.
-            stdin
+            written = stdin
                 .write_all(prompt.as_bytes())
-                .map_err(|why| DistilFailure::Refused(self.name(), why.to_string()))?;
+                .map_err(|why| DistilFailure::Refused(self.name(), why.to_string()));
         }
 
         let out = child
@@ -137,6 +142,10 @@ impl Distil for Spawned {
                 },
             ));
         }
+        // Only once the child has been given its chance to explain itself. A child that exited
+        // *successfully* without reading the whole prompt answered half a question, and that is
+        // the case the write is still checked for.
+        written?;
 
         let mut answer = String::from_utf8_lossy(&out.stdout).into_owned();
         answer.truncate(budget.max_bytes);
@@ -226,6 +235,20 @@ mod tests {
         let backend = spawned(&["sh", "-c", "echo 'no api key' >&2; exit 1"]);
         let why = backend
             .complete("anything", Budget::default())
+            .expect_err("it failed");
+        assert!(why.to_string().contains("no api key"), "{why}");
+    }
+
+    #[test]
+    fn a_command_that_refuses_before_reading_still_says_why() {
+        // The same refusal as above, made certain rather than left to the scheduler. A prompt
+        // larger than a pipe's buffer cannot be written to a child that has already exited, so
+        // the write always fails here — and what the caller needs is still "no api key", not
+        // the broken pipe that failing to write it produced.
+        let backend = spawned(&["sh", "-c", "echo 'no api key' >&2; exit 1"]);
+        let long = "x".repeat(1024 * 1024);
+        let why = backend
+            .complete(&long, Budget::default())
             .expect_err("it failed");
         assert!(why.to_string().contains("no api key"), "{why}");
     }

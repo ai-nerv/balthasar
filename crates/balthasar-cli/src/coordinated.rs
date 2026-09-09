@@ -82,8 +82,10 @@ pub fn acknowledge(args: &AcknowledgeArgs) -> anyhow::Result<()> {
 pub fn configure(args: &ConfigureArgs) -> anyhow::Result<()> {
     let mut out = std::io::stdout().lock();
     if args.forget {
-        setup::forget();
-        reply(&mut out, args.cbor, &[setup::Applied::default()]);
+        match setup::forget() {
+            Ok(()) => reply(&mut out, args.cbor, &[setup::Applied::default()]),
+            Err(why) => refuse(&mut out, args.cbor, &why.to_string()),
+        }
         return Ok(());
     }
 
