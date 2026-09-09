@@ -1,8 +1,6 @@
 //! `balthasar replay` — everything a run said, back out again.
 //!
-//! For a harness that keeps no journal of its own this is how a session is restored, and the
-//! `raw` field is the point: what comes back is exactly what was written, byte for byte, in
-//! whatever shape the harness uses. balthasar stores those records and never parses them.
+//! The `raw` field is exactly what was written, byte for byte. balthasar never parses it.
 
 use crate::Which;
 use crate::{open, render, scrollback};
@@ -28,8 +26,7 @@ pub struct Args {
 
     /// The most recent turns, within a token budget, instead of the whole run.
     ///
-    /// A long run has no upper bound — balthasar is the only copy of it — so reading all of one to
-    /// look at the end is the wrong shape as soon as a session gets long.
+    /// A long run has no upper bound — balthasar is the only copy of it.
     #[arg(long, value_name = "TOKENS")]
     tail: Option<usize>,
 
@@ -99,8 +96,7 @@ pub fn run(
         return Ok(());
     };
 
-    // A name is what gets printed, so a name is what somebody will type. The memory store is
-    // what knows them.
+    // A name is what gets printed, so a name is what somebody will type.
     let store = open(store_path, scope, tool)?;
     let session = store
         .session(handle)?
@@ -113,8 +109,7 @@ pub fn run(
         return Ok(());
     }
 
-    // Bounded when asked, whole otherwise. Restoring a session needs every turn and truncating
-    // it would hand back a run quietly missing its beginning; looking at one needs a slice.
+    // Bounded when asked, whole otherwise: restoring a session needs every turn.
     let (turns, note) = match wanted(args)? {
         None => (held.replay(&session)?, None),
         Some(want) => {
@@ -133,9 +128,7 @@ pub fn run(
 
     for turn in &turns {
         if args.raw {
-            // Exactly what the harness wrote. A turn balthasar was given no record for is skipped
-            // rather than invented — a replay that made something up would be worse than a
-            // short one.
+            // Exactly what the harness wrote. A turn with no record is skipped, not invented.
             if let Some(raw) = &turn.raw {
                 crate::say!("{raw}");
             }
@@ -154,8 +147,7 @@ pub fn run(
             );
         }
     }
-    // Said last, where it is read after the turns rather than before them. A slice that did
-    // not say it was a slice would be indistinguishable from the whole run.
+    // Said last: a slice that did not say it was a slice reads as the whole run.
     if let Some(said) = note {
         crate::say!();
         crate::say!("{}", render::dim(&said));

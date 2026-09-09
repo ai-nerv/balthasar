@@ -1,11 +1,6 @@
 //! `balthasar needs` and `balthasar configure` — being driven by a coordinator.
 //!
-//! balthasar reads its own configuration and always will. This is the other way in, for when
-//! something is coordinating it: it starts one, asks what it takes, and says. Two
-//! configurations that have to agree are one that will not, so under a coordinator there is one.
-//!
-//! Both answer in the family's shape — `{"ok":true,"n":N,"result":[…]}` — in JSON or in CBOR, so
-//! the caller needs no second parser to find out that a call was refused.
+//! Both answer in the family's shape — `{"ok":true,"n":N,"result":[…]}` — in JSON or in CBOR.
 
 use balthasar_lua::setup;
 use clap::Parser;
@@ -56,13 +51,7 @@ pub struct AcknowledgeArgs {
 
 /// Acknowledge the installed packages, so their declarations may run.
 ///
-/// A file in your own `plugin/` directory runs on sight: you put it there, and a prompt about
-/// your own configuration is one nobody reads. A package under `site/pack/` is somebody else's
-/// code that arrived by being fetched, so it runs once you have said it may — and stops running
-/// again the moment it changes. Fetching is `git clone`; this is the lockfile.
-///
-/// # Errors
-/// Never — a manifest that cannot be written comes back as a refusal, which is a reply.
+/// A package under `site/pack/` runs once acknowledged, and stops the moment it changes.
 pub fn acknowledge(args: &AcknowledgeArgs) -> anyhow::Result<()> {
     let cwd = std::env::current_dir().unwrap_or_default();
     let mut out = std::io::stdout().lock();
@@ -96,9 +85,7 @@ pub fn configure(args: &ConfigureArgs) -> anyhow::Result<()> {
     }
     match setup::configure(&source) {
         Ok(applied) => reply(&mut out, args.cbor, &[applied]),
-        // A chunk that will not run is a refusal, not a crash: the coordinator sent something,
-        // and what it needs back is which part was wrong. The exit stays zero, because a
-        // non-zero exit is how a program says it did not run.
+        // A chunk that will not run is a refusal, not a crash; the exit stays zero.
         Err(why) => refuse(&mut out, args.cbor, &why.to_string()),
     }
     Ok(())
@@ -106,17 +93,8 @@ pub fn configure(args: &ConfigureArgs) -> anyhow::Result<()> {
 
 /// The revision of the *registrar* surface — what a third party writes against.
 ///
-/// Separate from `balthasar_ipc::FAMILY`, because they change for different reasons and a consumer
-/// cares about different halves. `family` is the wire between these programs: the reply shape, the
-/// encodings, which verbs exist. `surface` is what somebody's plugin file is written against: the
-/// registrar names, the fields each declaration owes, and what a callback is handed.
-///
-/// **It goes up when something already published stops working.** Adding a registrar, a field, or
-/// a handler does not move it — a file written against 1 keeps running. Renaming one, removing
-/// one, or changing what a field means does, and that is the number a plugin checks if it wants to
-/// refuse rather than fail halfway.
-///
-/// Reported on `verbs`, beside `family`. See EXTENDING.md.
+/// It goes up when something already published stops working; adding a registrar, a field or a
+/// handler does not move it. Reported on `verbs`, beside `family`. See EXTENDING.md.
 const SURFACE: u16 = 1;
 fn reply<T: serde::Serialize>(out: &mut impl Write, cbor: bool, values: &[T]) {
     let body = serde_json::json!({
@@ -146,13 +124,7 @@ fn refuse(out: &mut impl Write, cbor: bool, why: &str) {
 
 /// Write one body in the encoding the caller asked for.
 ///
-/// Shared with the one-shot door in `serve.rs`, so that "which encodings does balthasar answer
-/// in" has one answer rather than one per subcommand.
-///
-/// A body that will not encode is answered in JSON instead of not at all. Every body here is a
-/// `serde_json::Value` and CBOR can carry all of them, so this is unreachable — but the failing
-/// branch used to write *nothing* and exit zero, which a caller cannot tell from a reply it
-/// simply did not receive.
+/// A body that will not encode is answered in JSON instead of not at all.
 pub(crate) fn emit(out: &mut impl Write, cbor: bool, body: &serde_json::Value) {
     if cbor {
         let mut bytes = Vec::new();
@@ -189,10 +161,6 @@ mod tests {
 
     #[test]
     fn a_one_shot_reply_says_which_wire_it_is() {
-        // The socket door has carried this since the version check landed; these did not, so
-        // the only replies in the family with no version on them were the ones a coordinator
-        // reads first. A missing `family` is taken for a peer older than the check, which is
-        // exactly the wrong thing to say about the current build.
         let mut out = Vec::new();
         reply(&mut out, false, &["a"]);
         let value: serde_json::Value = serde_json::from_slice(&out).expect("decode");
@@ -233,18 +201,8 @@ pub struct VerbsArgs {
 
 /// Every verb this program answers, on each of its doors.
 ///
-/// **The command line half is read off clap rather than listed.** A hand-kept list is a second
-/// place for the surface to live, and the family contract's own rule — everything advertised is
-/// dispatched — is then a thing somebody has to remember rather than something that cannot be
-/// otherwise. Derived, it cannot drift: a subcommand that exists is advertised, and one that is
-/// advertised exists, because they are the same list.
-///
-/// The socket half is [`balthasar_host::SURFACE`], which is written out by hand for the
-/// opposite and equally good reason: reading that file tells you what a peer can ask of your
-/// memory, and a surface you have to run something to learn is one nobody audits.
-///
-/// # Errors
-/// When the answer cannot be written.
+/// The command line half is read off clap rather than listed; the socket half is
+/// [`balthasar_host::SURFACE`], written out by hand so the file can be read.
 pub fn verbs(args: &VerbsArgs) -> anyhow::Result<()> {
     use clap::CommandFactory;
 
@@ -260,8 +218,7 @@ pub fn verbs(args: &VerbsArgs) -> anyhow::Result<()> {
         .collect();
     listed.extend(balthasar_host::SURFACE.iter().map(|verb| {
         serde_json::json!({
-            // `verb` is the family's field. `name` rides along for one revision because the
-            // socket has always answered with it and a reply is not worth breaking over a word.
+            // `name` rides along for one revision because the socket has always answered with it.
             "verb": verb.name,
             "name": verb.name,
             "about": verb.about,
@@ -270,8 +227,6 @@ pub fn verbs(args: &VerbsArgs) -> anyhow::Result<()> {
         })
     }));
 
-    // The one verb that says which registrar surface this program offers -- a fact about the
-    // program, not about the reply, so it rides on the self-description and nowhere else.
     let body = serde_json::json!({
         "ok": true,
         "family": balthasar_ipc::FAMILY,

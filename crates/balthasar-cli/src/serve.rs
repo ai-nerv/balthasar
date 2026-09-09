@@ -1,8 +1,4 @@
 //! `balthasar serve`, `balthasar api` and `balthasar lua-api` — the three ways in from outside.
-//!
-//! Both doors reach the same dispatcher, which reaches the same functions the CLI calls. That
-//! is the arrangement that keeps a socket answer and a terminal answer from describing a
-//! memory differently.
 
 use crate::{Which, now, open, render, runs_under};
 use balthasar_host::{Answering, Door};
@@ -19,14 +15,6 @@ pub struct ServeArgs {
     instance: String,
 
     /// End this when the process with this id ends, and let the kernel be what enforces it.
-    ///
-    /// The caller names itself rather than being inferred, because "who started me" is a
-    /// question with no reliable answer once the answer has changed: an orphan has already been
-    /// handed to whatever reaps on this machine, and that is init on some and the user's own
-    /// session manager on others. A pid to compare against is the same test on both.
-    ///
-    /// Absent by default: a balthasar started at a terminal or by a unit file is meant to
-    /// outlive the thing that typed the command, and would otherwise leave with the shell.
     #[arg(long, value_name = "PID")]
     tied: Option<u32>,
 }
@@ -39,32 +27,16 @@ pub struct ApiArgs {
     /// Its arguments, each as JSON.
     args: Vec<String>,
     /// Answer in CBOR rather than JSON.
-    ///
-    /// The same option `needs` and `configure` take, and the same one melchior's `ask` takes.
-    /// This door answered in JSON alone, so a caller that had asked every other door in the
-    /// family for CBOR had to keep a JSON parser for this one.
     #[arg(long)]
     cbor: bool,
 }
 
 /// Ask the kernel to end this process when whoever started it ends.
 ///
-/// `PR_SET_PDEATHSIG`, and it has to be the kernel because of the case that matters: nothing
-/// runs in a process that is killed outright, so a caller cannot be relied on to take its own
-/// children with it. A cleanup on the way out covers the exits that have a way out. This covers
-/// the rest — a panic, a `kill -9`, an OOM — which are exactly the ones that leave a memory
-/// layer running with nobody to answer.
-///
-/// The signal only watches from the moment it is set, so a caller that died in the window
-/// between the spawn and this call is a death nothing was ever sent for — and without the check
-/// below this would serve forever, watching a parent that had already gone. Asking whether the
-/// caller is still our parent settles that, and settles the other gap too: the signal arrives
-/// when the *thread* that spawned this exits rather than the whole process.
-///
-/// Against the pid the caller gave rather than against whatever `getppid` said a moment ago,
-/// which was the version that did not work: an orphan is reparented before it gets here, so the
-/// value read first and the value read second are the same reaper, and the comparison passed
-/// while the caller was already dead.
+/// `PR_SET_PDEATHSIG` only watches from the moment it is set, and arrives when the *thread* that
+/// spawned this exits rather than the whole process, so the parent is checked as well. Against
+/// the pid the caller gave rather than `getppid`, which reads the reaper an orphan has already
+/// been handed to and so compares equal while the caller is dead.
 fn tie_to_caller(caller: u32) -> anyhow::Result<()> {
     rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))?;
     let ours = rustix::process::getppid().is_some_and(|parent| {
@@ -85,10 +57,8 @@ pub fn serve(
     floors: balthasar_lua::Floors,
     loaded: &mut crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
-    // Before the tie, and so before any socket exists. `PR_SET_PDEATHSIG` is `SIGTERM`, and a
-    // parent that dies in the window between asking for the signal and blocking it would end
-    // this process where it stands — which is survivable only because there is nothing on disk
-    // yet to leave behind. Once the socket is bound there is, and by then the block is in place.
+    // Before the tie, and so before any socket exists: `PR_SET_PDEATHSIG` is `SIGTERM`, and a
+    // parent dying before the block is in place would end this process where it stands.
     if !balthasar_ipc::hold_stop_signals() {
         eprintln!(
             "{}",
@@ -98,13 +68,10 @@ pub fn serve(
     if let Some(caller) = args.tied {
         tie_to_caller(caller)?;
     }
-    // Here rather than in `bind`, for the reason the signal block is here: the sweep dials every
-    // socket in the runtime directory, and a dial costs whatever answers one of its eight seats.
-    // Starting a daemon is the one moment that is worth paying for.
+    // Here rather than in `bind`: the sweep dials every socket in the runtime directory.
     balthasar_ipc::swept(&balthasar_ipc::socket_dir());
     let listener = Listener::bind(&args.instance)?;
-    // Written whether or not anybody connects: a caller that finds no socket falls back to
-    // spawning, and it can only do that if we left it an absolute path to spawn.
+    // Written whether or not anybody connects: a caller that finds no socket spawns from this path.
     let descriptor = balthasar_ipc::tool_descriptor()?;
 
     eprintln!("{}", render::bold(&listener.path().display().to_string()));
@@ -114,13 +81,11 @@ pub fn serve(
         render::dim(&format!("descriptor {}", descriptor.display()))
     );
 
-    // One store per tool, opened when that tool first speaks. A harness and a shell reaching
-    // the same daemon are two memories, and neither is opened on the chance that it might be.
+    // One store per tool, opened when that tool first speaks.
     let mut opened: std::collections::HashMap<balthasar_store::Tool, Opened> =
         std::collections::HashMap::new();
     let fallback = tool.tool.clone();
-    // Read once at startup rather than per request: a configuration that changed mid-session
-    // would make half a run's ledger and half not, which is worse than either.
+    // Read once at startup rather than per request, so a mid-session change cannot halve a ledger.
     let capture = loaded.settings().ledger().capture;
 
     let served = listener.serve(|peer: &Peer, request: Request| {
@@ -128,8 +93,7 @@ pub fn serve(
         let held = match opened.entry(named.clone()) {
             std::collections::hash_map::Entry::Occupied(seat) => seat.into_mut(),
             std::collections::hash_map::Entry::Vacant(seat) => {
-                // The kernel named it, so this counts as named: a peer reads its own memory
-                // rather than every tool's, which is what a program asking for context wants.
+                // The kernel named it, so this counts as named.
                 let which = Which {
                     tool: named.clone(),
                     named: true,
@@ -168,10 +132,7 @@ pub fn serve(
         })
     });
 
-    // The socket goes before the stores do, and the order is deliberate rather than incidental:
-    // closing a store checkpoints its WAL and fsyncs, and a caller that connects during that is
-    // better off finding nothing and spawning its own than waiting on a daemon that has already
-    // stopped answering. `opened` drops on the way out of this function, after this line.
+    // The socket goes before the stores: closing a store checkpoints its WAL and fsyncs.
     drop(listener);
     served?;
     Ok(())
@@ -179,10 +140,8 @@ pub fn serve(
 
 /// Answer one question on standard output and exit successfully.
 ///
-/// Two rules, both learned the hard way by the siblings. The reply is the **wire** shape rather
-/// than what the human CLI prints, so a client needs one parser and not two. And a refused verb
-/// is `{"ok":false,…}` with exit status zero, because a real error arriving as "exited 1" is
-/// indistinguishable from the binary being missing.
+/// The reply is the wire shape, not what the human CLI prints. A refused verb is
+/// `{"ok":false,…}` with exit status zero: "exited 1" cannot be told from a missing binary.
 pub fn api(
     store_path: Option<&Path>,
     scope: &ScopeId,
@@ -195,8 +154,7 @@ pub fn api(
         .args
         .iter()
         .map(|raw| {
-            // A bare word is a string. Every caller that shells out has to quote its JSON, and
-            // making them quote `"recall"` twice is a papercut with no upside.
+            // A bare word is a string.
             serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.clone()))
         })
         .collect();
@@ -222,8 +180,7 @@ pub fn api(
                 live_floor: floors.live,
                 capture,
             };
-            // One-shot is the owner's own door: it is this process, started by whoever ran it,
-            // with no socket in between and nobody else to attribute it to.
+            // One-shot is the owner's own door: this process, with no socket in between.
             balthasar_host::answer_with(&mut at, &Door::Owner, &request, |entry| loaded.mask(entry))
         }
         Err(why) => Reply::refused(why.to_string()),
@@ -251,26 +208,10 @@ const AGENT: &str = "BALTHASAR_AGENT";
 
 /// Which agent inside a run a connection belongs to.
 ///
-/// Read from the peer's own environment rather than taken from a call, which is the same shape
-/// as `named_by_kernel` above and exists for the same reason: a dimension a caller can vary per
-/// call is not isolation, it is a parameter, and a subagent that could name a sibling's agent
-/// would read a sibling's scratch by asking for it. What can be varied here is the peer's own
-/// name for itself, which is no more than it already gets to decide by being that process.
-///
-/// **A peer that names none falls back to this process's own**, and only then to
-/// [`AgentId::main`]. `/proc/<pid>/environ` is the block the kernel wrote at `exec` and nothing
-/// else: `setenv` allocates on the heap and never touches it, so the one process that cannot put
-/// its name there is the one that learned it after starting — which is exactly the harness that
-/// spawned this balthasar, since it is told its name by a layer it starts itself. It hands the
-/// name down at the spawn instead, where this process's own environment is the only place it can
-/// arrive.
-///
-/// Safe because it is one balthasar per harness: the fallback is the agent of whoever convened
-/// this one. A subagent spawned with its own name has it in its own initial block, so the peer
-/// read finds it and the fallback is never reached — which is why the order is peer first.
-///
-/// Naming none at all is one directory per run, exactly the arrangement that existed before there
-/// were agents, so a harness that has never heard of them is unchanged.
+/// Read from the peer's own environment rather than taken from a call, which a caller could vary
+/// per call. A peer that names none falls back to this process's own, and only then to
+/// [`AgentId::main`]: `/proc/<pid>/environ` is the block the kernel wrote at `exec`, which
+/// `setenv` never touches, so a harness that learns its name later hands it down at the spawn.
 fn agent_of(peer: &Peer) -> balthasar_model::AgentId {
     std::fs::read(format!("/proc/{}/environ", peer.pid))
         .ok()
@@ -289,11 +230,7 @@ fn named_in(body: &[u8]) -> Option<balthasar_model::AgentId> {
         .map(balthasar_model::AgentId::new)
 }
 
-/// Which agent this process itself is: the door that has no peer, and the fallback for one whose
-/// peer named none.
-///
-/// `balthasar api` is one process answering one question for whoever ran it, so the environment
-/// to read is our own. `serve` reaches here for the harness that spawned it — see [`agent_of`].
+/// Which agent this process itself is, and the fallback for a peer that named none.
 fn agent_here() -> balthasar_model::AgentId {
     std::env::var(AGENT)
         .ok()
@@ -307,9 +244,7 @@ fn agent_here() -> balthasar_model::AgentId {
 
 /// Which tool a connection belongs to, as the kernel names it.
 ///
-/// This is the whole reason a tool dimension is safe: the caller is not asked, so it cannot
-/// answer wrongly. A peer the kernel will not name, or whose name nothing survives, falls back
-/// to whatever the daemon was started as rather than being filed under a guess.
+/// A peer the kernel will not name falls back to whatever the daemon was started as.
 fn named_by_kernel(peer: &Peer) -> Option<balthasar_store::Tool> {
     peer.program
         .as_deref()
@@ -321,12 +256,10 @@ fn named_by_kernel(peer: &Peer) -> Option<balthasar_store::Tool> {
         .and_then(|name| balthasar_store::Tool::from_program(&name))
 }
 
-/// The peer's own name comes first, and the fallback exists at all.
 #[cfg(test)]
 mod agents {
     use super::*;
 
-    /// One `/proc/<pid>/environ` block: NUL-separated, and no trailing separator to rely on.
     fn environ(entries: &[&str]) -> Vec<u8> {
         entries.join("\0").into_bytes()
     }
@@ -342,8 +275,6 @@ mod agents {
 
     #[test]
     fn a_peer_that_names_nothing_is_none_rather_than_main() {
-        // The distinction the fallback turns on. Answering `main` here would be this function
-        // deciding the question, and the caller would have nothing left to fall back *to*.
         for body in [
             environ(&["PATH=/usr/bin"]),
             environ(&["BALTHASAR_AGENT="]),
@@ -361,8 +292,6 @@ mod agents {
 
     #[test]
     fn a_name_is_not_matched_on_a_variable_that_merely_ends_in_it() {
-        // `strip_prefix` on an entry, not a search through the whole block: a harness setting
-        // `MY_BALTHASAR_AGENT` would otherwise name every agent of the run.
         let body = environ(&["MY_BALTHASAR_AGENT=wrong"]);
         assert_eq!(named_in(&body), None);
     }

@@ -1,8 +1,6 @@
 //! `balthasar export` and `balthasar import` — the backup, and the way back.
 //!
-//! JSONL, one memory per line, witnesses and links included. A memory system without an export
-//! is a memory system that owns you, and the export is also the only way to inspect what a
-//! store holds without trusting the code that prints it.
+//! JSONL, one memory per line, witnesses and links included.
 
 use crate::Which;
 use crate::{now, open};
@@ -56,10 +54,8 @@ pub fn export(
 
 /// Read memories back in.
 ///
-/// Each line goes through `remember`, not through a raw insert: an import is evidence arriving,
-/// and it must land on the same ladder as everything else. Importing a store into itself
-/// therefore reinforces rather than duplicating, which is the property that makes an import
-/// safe to re-run.
+/// Each line goes through `remember` rather than a raw insert, so importing a store into itself
+/// reinforces rather than duplicating.
 pub fn import(
     store_path: Option<&Path>,
     scope: &ScopeId,
@@ -82,8 +78,7 @@ pub fn import(
         }
         let memory: Memory =
             serde_json::from_str(&line).map_err(|e| anyhow::anyhow!("line {}: {e}", number + 1))?;
-        // A memory with no evidence cannot be imported as a durable one: the whole design is
-        // that a fact answers for itself, and an import is not an exception to that.
+        // A memory with no evidence cannot be imported as a durable one.
         let Some(witness) = memory.witnesses.first().cloned() else {
             skipped += 1;
             continue;

@@ -1,8 +1,4 @@
 //! Reading the configuration, once, before anything else happens.
-//!
-//! Everything a command decides is downstream of this: which memory it works in, where
-//! assertion begins, how fast things fade. A command that read the configuration itself would
-//! be a command that could disagree with the others about all three.
 
 use balthasar_lua::{Engine, LuaError, Roots, Settings};
 use balthasar_model::ScopeId;
@@ -37,21 +33,17 @@ pub struct Loaded {
 impl Loaded {
     /// Read the runtimepath for `cwd`.
     ///
-    /// A file that exists and does not load is fatal. It expressed an intention that has not
-    /// been carried out, and applying half of it is worse than refusing.
+    /// A file that exists and does not load is fatal.
     pub fn read(cwd: &Path) -> Result<Self, LuaError> {
         let roots = Roots::discovered(cwd);
         let mut files = balthasar_lua::runtimepath(&roots);
 
-        // **A package runs when you have said it may, and not before.** Your own files run on
-        // sight; this holds back what arrived under `site/pack/` by being fetched until it has
-        // been acknowledged, and again the moment it changes. `balthasar trust` is where you say
-        // so. See `balthasar_lua::acknowledged`.
+        // A package under `site/pack/` runs once acknowledged, and again only once it has been
+        // re-acknowledged after a change. See `balthasar_lua::acknowledged`.
         let held = withheld(&roots);
         files.retain(|(path, _)| !held.contains(path));
 
-        // Trust is decided after the owner's own files have run, because `balthasar.trusted` is one
-        // of the things they set. A project file listed under it may declare like any other.
+        // Trust is decided after the owner's own files have run; they set `balthasar.trusted`.
         let mut engine = Engine::new();
 
         let owned: Vec<(std::path::PathBuf, bool)> =
@@ -77,8 +69,7 @@ impl Loaded {
 
     /// A configuration that says nothing, for `--no-config` and for tests.
     ///
-    /// Not "no configuration at all": the shipped defaults still apply, because a run with a
-    /// broken config and a run with none must not behave differently in a way nobody notices.
+    /// Not "no configuration at all": the shipped defaults still apply.
     #[must_use]
     pub fn bare() -> Self {
         Self {
@@ -103,8 +94,7 @@ impl Loaded {
 
     /// The query as a vector, when there is something to embed it with.
     ///
-    /// `None` is the ordinary case on a store nobody has reindexed, and the scorer redistributes
-    /// the semantic weight rather than scoring every candidate at zero.
+    /// `None` is ordinary on a store nobody has reindexed; the scorer redistributes the weight.
     #[must_use]
     pub fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
         if text.trim().is_empty() {
@@ -125,8 +115,7 @@ impl Loaded {
 
     /// Which memory a directory belongs to.
     ///
-    /// Lua first, so a monorepo can be one scope and `~/scratch` can be none. What nothing
-    /// claims falls to the repository root, which is what makes worktrees share a memory.
+    /// Lua first. What nothing claims falls to the repository root, so worktrees share a memory.
     pub fn scope_of(&mut self, cwd: &Path) -> ScopeId {
         let asked = self
             .engine
@@ -141,9 +130,6 @@ impl Loaded {
     }
 
     /// Walk a source's transcripts and offer what they teach.
-    ///
-    /// Here rather than in the command, because ingest needs the VM as well as the settings and
-    /// this is the one place that holds both.
     pub fn ingest(
         &mut self,
         store: &mut balthasar_store::Store,
@@ -154,9 +140,6 @@ impl Loaded {
     }
 
     /// Read one of this project's own runs and offer what it taught.
-    ///
-    /// Here rather than in the command, for the same reason `ingest` is: the pass needs the VM's
-    /// promote gate as well as the settings, and this is the one place holding both.
     pub fn distil(
         &mut self,
         store: &mut balthasar_store::Store,
@@ -187,8 +170,7 @@ impl Loaded {
 
     /// Ask the configuration whether a line may leave, and in what form.
     ///
-    /// `None` withholds it. A handler that rewrites answers the rewritten text, so a key can be
-    /// masked rather than the whole memory dropped.
+    /// `None` withholds it. A handler that rewrites answers the rewritten text.
     pub fn redact(
         &mut self,
         text: &str,
@@ -223,9 +205,7 @@ impl Loaded {
 
     /// What a masked tool result should say instead.
     ///
-    /// Keyed on the tool, because only its author knows what a useful stub is: "`make test` —
-    /// exit 1, 41 failures" is worth sending and "[output omitted]" is not. `None` leaves the
-    /// turn alone, which is right when nobody has said.
+    /// Keyed on the tool. `None` leaves the turn alone.
     pub fn mask(&mut self, entry: &balthasar_store::Turn) -> Option<String> {
         let tool = entry.tool.as_deref()?;
         let item = serde_json::json!({
@@ -250,9 +230,6 @@ impl Loaded {
 }
 
 /// Installed package files that are not cleared to run.
-///
-/// Named rather than silently dropped: a package that does not run and does not say so is a
-/// package somebody spends an afternoon debugging.
 fn withheld(roots: &Roots) -> std::collections::BTreeSet<std::path::PathBuf> {
     let Some(config) = &roots.config else {
         return std::collections::BTreeSet::new();

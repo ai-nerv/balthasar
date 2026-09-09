@@ -1,9 +1,6 @@
 //! `balthasar init` — say that memory for this subtree belongs here.
 //!
-//! Not needed for an ordinary project: opening a store in a checkout creates its home at the
-//! repository root. This is for the case the root gets wrong — a monorepo where each package
-//! should remember separately, or a directory that is not a checkout at all and would otherwise
-//! keep its memory in the data directory.
+//! Not needed in an ordinary checkout, where opening a store creates a home at the root.
 
 use crate::render;
 use clap::Parser;

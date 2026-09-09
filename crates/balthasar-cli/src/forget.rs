@@ -1,8 +1,6 @@
 //! `balthasar forget` — the two kinds of forgetting, which are not the same kind.
 //!
-//! Archiving keeps everything and stops asserting it. Purging removes it. The first is what
-//! "I do not need this any more" means; the second is what "delete the key I pasted" means, and
-//! conflating them would make one of those two sentences unanswerable.
+//! Archiving keeps everything and stops asserting it. Purging removes it.
 
 use crate::Which;
 use crate::{now, open, render, scrollback};
@@ -22,15 +20,13 @@ pub struct Args {
 
     /// Forget a whole run rather than one memory.
     ///
-    /// A run lives in three places — what it promoted into the project, what it said, and the
-    /// scratch it never promoted — and forgetting one of those is not forgetting the run.
+    /// A run lives in three places: what it promoted, what it said, and the scratch it kept.
     #[arg(long)]
     session: bool,
 
     /// Remove it entirely, rather than archiving it.
     ///
-    /// Irreversible, and the only thing in balthasar that removes a row. Asks first unless
-    /// `--yes` is given.
+    /// Irreversible, and the only thing in balthasar that removes a row. Asks unless `--yes`.
     #[arg(long)]
     purge: bool,
 
@@ -74,8 +70,7 @@ pub fn run(
         return Ok(());
     }
 
-    // What else goes, before anything goes. A person asked to confirm removing one claim, and
-    // being told afterwards that it took three beliefs with it is the wrong order.
+    // What else goes, before anything goes.
     let closure = balthasar_store::closure_of(&store, &id)?;
     if closure.derived > 0 {
         crate::say!(
@@ -124,8 +119,7 @@ fn run_session(
     let owned = store.owned_by(&session)?;
     let held = scrollback(store_path, scope, tool)?;
     let turns = held.replay(&session)?.len();
-    // A handle that names no run is a typo, and a typo must not report a successful purge of
-    // nothing — the next thing somebody does is stop looking for the run they meant.
+    // A handle that names no run is a typo, and must not report a successful purge of nothing.
     anyhow::ensure!(
         !owned.is_empty() || turns > 0,
         "no run called '{}'",
@@ -138,17 +132,14 @@ fn run_session(
     });
 
     if !args.purge {
-        // Both files. Archiving keeps every word, so the turns stay — but a run's scratch is
-        // as much a thing it learned as what it promoted, and archiving one and not the other
-        // would leave half the run still asserting itself.
+        // Both files: a run's scratch is as much a thing it learned as what it promoted.
         let mut archived = 0;
         for id in &owned {
             store.archive(id, at)?;
             archived += 1;
         }
         let mut pad = balthasar_store::Scratchpad::at(crate::runs_under(store_path, scope, tool));
-        // Every agent of the run. Archiving what one subagent thought and leaving its siblings
-        // asserting the same thing is half an answer to "stop asserting what that run learned".
+        // Every agent of the run.
         for agent in pad.agents_of(&session) {
             let Some(own) = pad.peek(&session, &agent)? else {
                 continue;
@@ -182,8 +173,7 @@ fn run_session(
         return Ok(());
     }
 
-    // All three, or the run is not forgotten. A purge that cleared the project store and left
-    // the transcript would answer "delete the key I pasted" with the key still in the file.
+    // All three, or the run is not forgotten.
     let memories = balthasar_store::purge_session(&mut store, &session)?;
     let gone = balthasar_store::purge_run(&held, &session)?;
     let mut pad = balthasar_store::Scratchpad::at(crate::runs_under(store_path, scope, tool));
@@ -203,8 +193,7 @@ fn run_session(
 
 /// Ask, and take silence for no.
 ///
-/// Reading from a pipe answers "no" rather than "yes": a script that pipes into `balthasar forget
-/// --purge` without `--yes` has not consented to anything.
+/// Reading from a pipe answers "no" rather than "yes": a script has consented to nothing.
 fn confirmed(what: &str) -> anyhow::Result<bool> {
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         anyhow::bail!("purging needs --yes when there is nobody to ask");
@@ -218,13 +207,8 @@ fn confirmed(what: &str) -> anyhow::Result<bool> {
 
 /// A memory from as much of its id as somebody was willing to type.
 ///
-/// A ULID is twenty-six characters and nobody types one. What is printed is the trailing
-/// handle (see [`render::short`]), so that is what this matches first — and a pasted full id
-/// or leading prefix works too, because somebody who copied one should not be told it is not
-/// an id.
-///
-/// An ambiguous handle is an error rather than a guess. Acting on the wrong memory is worse
-/// than being asked again, and `--purge` makes that difference permanent.
+/// Matched on the trailing handle (see [`render::short`]) first, then a full id or a leading
+/// prefix. An ambiguous handle is an error rather than a guess.
 pub fn resolve(store: &Store, handle: &str) -> anyhow::Result<MemoryId> {
     anyhow::ensure!(!handle.is_empty(), "which memory?");
     let wanted = handle.to_uppercase();

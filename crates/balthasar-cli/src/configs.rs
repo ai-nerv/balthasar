@@ -1,7 +1,4 @@
 //! `balthasar configs` — put the shipped configuration where balthasar reads it.
-//!
-//! The binary carries a copy, so a fresh install already behaves correctly. Installing gives
-//! you the real files to edit; it does not turn anything on that was off.
 
 use crate::render;
 use clap::Parser;
@@ -19,10 +16,7 @@ pub struct Args {
     dry_run: bool,
 }
 
-// The files balthasar ships, compiled in so a binary is enough on its own.
-//
-// Built by `build.rs`, which walks `config/`. A new source adapter is then a file and nothing
-// else: no list to add it to, and no Rust file naming the harness it reads.
+// The files balthasar ships, compiled in by `build.rs`, which walks `config/`.
 include!(concat!(env!("OUT_DIR"), "/shipped.rs"));
 
 /// Write them out.
@@ -33,8 +27,6 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
     let mut written = 0;
     for (name, body) in SHIPPED {
         let path = into.join(name);
-        // An existing file is somebody's edits. Overwriting one because a new version shipped
-        // is how a tool loses a person's configuration without ever reporting an error.
         if path.exists() && !args.force {
             crate::say!("  {} {}", render::dim("kept"), name);
             continue;
