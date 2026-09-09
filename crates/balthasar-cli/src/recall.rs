@@ -185,9 +185,12 @@ pub fn run(
     );
 
     if args.how.framed() {
+        // One memory per row: `n` is how many were found.
+        let mut listed = Vec::with_capacity(found.len());
         for hit in &found {
-            args.how.emit(&serde_json::to_value(&hit.memory)?);
+            listed.push(serde_json::to_value(&hit.memory)?);
         }
+        args.how.rows(listed);
         return Ok(());
     }
 

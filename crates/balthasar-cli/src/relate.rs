@@ -71,7 +71,7 @@ pub fn run(
     let census = store.relation_census()?;
 
     if args.how.framed() {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "memories": held.len(),
             "written": written,
             "kinds": census.iter().map(|(view, n)| {

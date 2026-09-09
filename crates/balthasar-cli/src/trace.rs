@@ -44,7 +44,7 @@ pub fn trace(
         .ok_or_else(|| anyhow::anyhow!("no recall called '{}'", args.recall))?;
 
     if args.how.framed() {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "recall": held.recall,
             "query_hash": held.query_hash,
             "requested_at": held.requested_at,
@@ -120,7 +120,7 @@ pub fn utility(
     let (considered, returned) = store.times_retrieved(&id)?;
 
     if args.how.framed() {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "memory": id.to_string(),
             "verified_helpful": held.verified_helpful,
             "verified_harmful": held.verified_harmful,
@@ -233,9 +233,11 @@ pub fn dataset(
 
     // The rows themselves when they were going to standard output anyway; a count when a file
     // was named, because that is what there is left to report.
+    // A corpus rather than an answer: one row per line, which is what `import` and a training
+    // pipeline read back. Written down in FAMILY.md's Doors table as a deliberate difference.
     if args.how.framed() && args.into.is_none() {
         for row in &rows {
-            args.how.emit(&serde_json::to_value(row)?);
+            args.how.stream(&serde_json::to_value(row)?);
         }
         return Ok(());
     }
@@ -250,7 +252,7 @@ pub fn dataset(
         Some(path) => {
             std::fs::write(path, &out)?;
             if args.how.framed() {
-                args.how.emit(&serde_json::json!({
+                args.how.one(serde_json::json!({
                     "rows": rows.len(),
                     "into": path.display().to_string(),
                 }));
@@ -318,7 +320,7 @@ pub fn outcomes(
     }
 
     if args.how.framed() {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "session": session.id.to_string(),
             "name": session.name,
             "actions": rows.iter().map(|(used, verdict)| serde_json::json!({

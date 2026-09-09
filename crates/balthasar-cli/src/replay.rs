@@ -80,13 +80,18 @@ pub fn run(
     let Some(handle) = &args.session else {
         let (runs, turns) = held.census()?;
         if args.how.framed() {
-            for run in held.runs(30)? {
-                args.how.emit(&serde_json::json!({
-                    "session": run.session.to_string(),
-                    "turns": run.turns,
-                    "closed": run.closed,
-                }));
-            }
+            args.how.rows(
+                held.runs(30)?
+                    .iter()
+                    .map(|run| {
+                        serde_json::json!({
+                            "session": run.session.to_string(),
+                            "turns": run.turns,
+                            "closed": run.closed,
+                        })
+                    })
+                    .collect(),
+            );
             return Ok(());
         }
         crate::say!("{}", render::bold(scope.as_str()));
@@ -118,8 +123,12 @@ pub fn run(
     if args.resume {
         let next = held.next_cursor(&session)?;
         let turns = held.replay(&session)?.len();
-        args.how
-            .emit(&serde_json::json!({ "next": next, "turns": turns }));
+        let where_ = serde_json::json!({ "next": next, "turns": turns });
+        if args.how.framed() {
+            args.how.one(where_);
+        } else {
+            crate::say!("{where_}");
+        }
         return Ok(());
     }
 
@@ -136,15 +145,20 @@ pub fn run(
         }
     };
     if args.how.framed() {
-        for turn in &turns {
-            args.how.emit(&serde_json::json!({
-                "cursor": turn.cursor,
-                "role": turn.role,
-                "text": turn.text,
-                "revisions": turn.revisions,
-                "raw": turn.raw,
-            }));
-        }
+        args.how.rows(
+            turns
+                .iter()
+                .map(|turn| {
+                    serde_json::json!({
+                        "cursor": turn.cursor,
+                        "role": turn.role,
+                        "text": turn.text,
+                        "revisions": turn.revisions,
+                        "raw": turn.raw,
+                    })
+                })
+                .collect(),
+        );
         return Ok(());
     }
 

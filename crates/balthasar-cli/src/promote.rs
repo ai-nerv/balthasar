@@ -133,7 +133,7 @@ fn keep(
     );
 
     if args.how.framed() {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "id": after.id.to_string(),
             "was": before.tier.as_str(),
             "now": after.tier.as_str(),

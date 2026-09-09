@@ -59,7 +59,7 @@ pub fn run(
     }
 
     if args.how.framed() {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "dry_run": report.dry_run,
             "read": read.sessions,
             "read_promoted": read.promoted,

@@ -38,7 +38,7 @@ pub fn run(
     };
 
     if args.how.framed() {
-        args.how.emit(&as_json(&report));
+        args.how.one(as_json(&report));
         return Ok(());
     }
     say(&report);

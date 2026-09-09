@@ -32,7 +32,7 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
 
     if args.how.framed() {
         args.how
-            .emit(&serde_json::json!({ "home": home.to_string_lossy(), "existed": existed }));
+            .one(serde_json::json!({ "home": home.to_string_lossy(), "existed": existed }));
         return Ok(());
     }
     crate::say!("{}", render::bold(&home.display().to_string()));

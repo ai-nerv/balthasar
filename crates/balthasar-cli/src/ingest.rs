@@ -73,7 +73,7 @@ pub fn run(
     let report = loaded.ingest(&mut store, &settings, &ask)?;
 
     if args.how.framed() {
-        args.how.emit(&as_json(&report));
+        args.how.one(as_json(&report));
         return Ok(());
     }
     say(&report, args.explain);

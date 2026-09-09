@@ -102,7 +102,7 @@ pub fn import(
     }
 
     if args.how.framed() {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "dry_run": args.dry_run,
             "added": added,
             "reinforced": reinforced,

@@ -41,7 +41,7 @@ pub fn run(
     let Some(embedder) = loaded.embedder() else {
         if args.how.framed() {
             args.how
-                .emit(&serde_json::json!({ "model": null, "embedded": 0 }));
+                .one(serde_json::json!({ "model": null, "embedded": 0 }));
             return Ok(());
         }
         crate::say!(
@@ -84,7 +84,7 @@ pub fn run(
     }
 
     if args.how.framed() {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "model": model,
             "embedded": done,
             "dry_run": args.dry_run,

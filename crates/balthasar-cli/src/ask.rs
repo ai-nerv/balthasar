@@ -37,7 +37,7 @@ pub fn run(
         .ok_or_else(|| anyhow::anyhow!("no memory called {}", args.id))?;
 
     if args.how.framed() {
-        args.how.emit(&serde_json::to_value(&memory)?);
+        args.how.one(serde_json::to_value(&memory)?);
         return Ok(());
     }
 

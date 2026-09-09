@@ -172,7 +172,7 @@ fn say(
             Landing::Superseded { was, .. } => Some(was.to_string()),
             _ => None,
         };
-        how.emit(&serde_json::json!({
+        how.one(serde_json::json!({
             "landing": what,
             "id": id.to_string(),
             "was": was,

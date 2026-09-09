@@ -144,11 +144,33 @@ pub fn main() -> ExitCode {
     };
     match dispatch(&cli) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(why) => {
-            eprintln!("balthasar: {why:#}");
-            ExitCode::FAILURE
+        // Asked for the family's shape, answered in it however it went: "exited 1, a sentence on
+        // stderr" is what a missing binary looks like. A verb meaning `failed` says so itself.
+        Err(why) => match asked_framed() {
+            Some(how) => {
+                how.answer(&balthasar_ipc::Reply::refused(format!("{why:#}")));
+                ExitCode::SUCCESS
+            }
+            None => {
+                eprintln!("balthasar: {why:#}");
+                ExitCode::FAILURE
+            }
+        },
+    }
+}
+
+/// Which encoding this invocation asked for, read off argv rather than out of the verb that never
+/// got to answer. Clap has parsed, so a `--json` before the `--` separator was a flag.
+fn asked_framed() -> Option<render::How> {
+    let mut how = render::How::default();
+    for word in std::env::args().skip(1).take_while(|word| word != "--") {
+        match word.as_str() {
+            "--json" => how.json = true,
+            "--cbor" => how.cbor = true,
+            _ => {}
         }
     }
+    how.framed().then_some(how)
 }
 
 /// Refuse a verb that does not exist, naming what was asked for.

@@ -56,6 +56,7 @@ dependencies = [
  "balthasar-cli",
  "balthasar-model",
  "balthasar-store",
+ "serde_json",
 ]
 
 [[package]]

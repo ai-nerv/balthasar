@@ -84,7 +84,7 @@ pub fn run(
         return Ok(());
     }
     if args.how.framed() {
-        args.how.emit(&as_json(&context));
+        args.how.one(as_json(&context));
         return Ok(());
     }
     say(&context, args.budget, &withheld);

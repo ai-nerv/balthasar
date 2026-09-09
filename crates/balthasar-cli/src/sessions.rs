@@ -41,7 +41,7 @@ pub fn run(
         let kept = store.session_yield(&session.id)?;
 
         if args.how.framed() {
-            args.how.emit(&serde_json::json!({
+            args.how.one(serde_json::json!({
                 "id": session.id.to_string(),
                 "name": session.name,
                 "project": session.scope.to_string(),
@@ -74,15 +74,20 @@ pub fn run(
 
     let sessions = store.sessions(args.limit)?;
     if args.how.framed() {
-        for session in &sessions {
-            args.how.emit(&serde_json::json!({
-                "id": session.id.to_string(),
-                "name": session.name,
-                "project": session.scope.to_string(),
-                "title": session.title,
-                "kept": store.session_yield(&session.id).unwrap_or(0),
-            }));
-        }
+        args.how.rows(
+            sessions
+                .iter()
+                .map(|session| {
+                    serde_json::json!({
+                        "id": session.id.to_string(),
+                        "name": session.name,
+                        "project": session.scope.to_string(),
+                        "title": session.title,
+                        "kept": store.session_yield(&session.id).unwrap_or(0),
+                    })
+                })
+                .collect(),
+        );
         return Ok(());
     }
 

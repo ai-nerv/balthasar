@@ -61,7 +61,7 @@ pub fn run(
     let inferred = witnesses.iter().all(|w| w.channel.is_inferred()) && !witnesses.is_empty();
 
     if args.how.framed() {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "memory": id.to_string(),
             "witnesses": witnesses.len(),
             "sessions": sessions.len(),

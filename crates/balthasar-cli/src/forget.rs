@@ -69,7 +69,7 @@ pub fn run(
             &[described.clone(), serde_json::json!("archived")],
         );
         if args.how.framed() {
-            args.how.emit(&went("archived", &described));
+            args.how.one(went("archived", &described));
             return Ok(());
         }
         crate::say!("archived {}", render::dim(&memory.text()));
@@ -99,7 +99,7 @@ pub fn run(
     anyhow::ensure!(gone == 1, "nothing was removed");
     loaded.tell("forget", &[described.clone(), serde_json::json!("purged")]);
     if args.how.framed() {
-        args.how.emit(&went("purged", &described));
+        args.how.one(went("purged", &described));
         return Ok(());
     }
     crate::say!("purged {}", render::dim(&memory.text()));
@@ -175,7 +175,7 @@ fn run_session(
             &[described.clone(), serde_json::json!("archived")],
         );
         if args.how.framed() {
-            args.how.emit(&went("archived", &described));
+            args.how.one(went("archived", &described));
             return Ok(());
         }
         crate::say!(
@@ -209,7 +209,7 @@ fn run_session(
 
     loaded.tell("forget", &[described.clone(), serde_json::json!("purged")]);
     if args.how.framed() {
-        args.how.emit(&went("purged", &described));
+        args.how.one(went("purged", &described));
         return Ok(());
     }
     crate::say!("purged {}", render::bold(&render::short(session.as_str())));

@@ -2,6 +2,7 @@
 //!
 //! Terminal output: escape codes where a terminal is attached, plain text where one is not.
 
+use balthasar_ipc::Reply;
 use balthasar_model::{Memory, Timestamp, Witness};
 use std::io::Write;
 
@@ -51,14 +52,33 @@ impl How {
         writeln!(out, "{value}")
     }
 
-    /// The same, to standard output, stopping quietly when nobody is reading.
-    pub fn emit(self, value: &serde_json::Value) {
+    /// Write one value to standard output, unframed, stopping quietly when nobody is reading.
+    ///
+    /// A corpus rather than an answer: the export pair and the training rows, where one object per
+    /// line is the format the other end reads. Everything that answers a question uses [`Self::one`]
+    /// or [`Self::rows`].
+    pub fn stream(self, value: &serde_json::Value) {
         let mut out = std::io::stdout().lock();
         if let Err(why) = self.write(&mut out, value)
             && why.kind() == std::io::ErrorKind::BrokenPipe
         {
             std::process::exit(0);
         }
+    }
+
+    /// Answer in the family's reply shape.
+    pub fn answer(self, reply: &Reply) {
+        self.stream(&serde_json::to_value(reply).unwrap_or(serde_json::Value::Null));
+    }
+
+    /// Answer with one record.
+    pub fn one(self, value: serde_json::Value) {
+        self.answer(&Reply::one(value));
+    }
+
+    /// Answer with a listing: each thing its own row, never the whole listing as one.
+    pub fn rows(self, values: Vec<serde_json::Value>) {
+        self.answer(&Reply::rows(values));
     }
 }
 

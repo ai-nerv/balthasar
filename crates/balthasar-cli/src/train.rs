@@ -71,7 +71,7 @@ pub fn run(
             // command that returns an error status for "not enough data yet" is one people
             // wire into a script and then silence.
             if args.how.framed() {
-                args.how.emit(&serde_json::json!({
+                args.how.one(serde_json::json!({
                     "trained": false,
                     "rows": rows.len(),
                     "labelled": examples.len(),
@@ -102,7 +102,7 @@ pub fn run(
         .unwrap_or_else(|| model_path(scope, &tool.tool));
 
     if args.how.framed() {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "trained": true,
             "written": earned && !args.dry_run,
             "path": into.to_string_lossy(),

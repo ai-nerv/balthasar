@@ -110,7 +110,7 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
     if args.full {
         let held = balthasar_testkit::Full::measure(&scenario, name, START);
         if args.how.framed() {
-            args.how.emit(&serde_json::to_value(&held)?);
+            args.how.one(serde_json::to_value(&held)?);
         } else {
             say_full(&held);
         }
@@ -118,7 +118,7 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
     }
 
     if args.how.framed() {
-        args.how.emit(&serde_json::to_value(&baseline)?);
+        args.how.one(serde_json::to_value(&baseline)?);
         return Ok(());
     }
     crate::say!(

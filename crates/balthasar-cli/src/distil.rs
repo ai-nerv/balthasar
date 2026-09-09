@@ -62,7 +62,7 @@ pub fn run(
     let total = pass(&mut store, &held, scope, &runs, at, !args.commit, loaded)?;
 
     if args.how.framed() {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "dry_run": total.dry_run,
             "runs": total.sessions,
             "turns": total.observations,

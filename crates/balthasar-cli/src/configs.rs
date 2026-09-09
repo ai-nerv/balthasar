@@ -60,7 +60,7 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
     }
 
     if framed {
-        args.how.emit(&serde_json::json!({
+        args.how.one(serde_json::json!({
             "home": into.display().to_string(),
             "written": written,
             "files": taken,
