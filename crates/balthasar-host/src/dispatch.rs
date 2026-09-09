@@ -83,14 +83,15 @@ pub fn answer_with(
     };
 
     match verb.name {
-        "verbs" => Reply::one(serde_json::json!(
+        // A listing is the rows. Wrapping it in one value is the mistake FAMILY.md names.
+        "verbs" => Reply::rows(
             verbs::SURFACE
                 .iter()
                 .map(
-                    |v| serde_json::json!({ "name": v.name, "writes": v.writes, "about": v.about })
+                    |v| serde_json::json!({ "name": v.name, "writes": v.writes, "about": v.about }),
                 )
-                .collect::<Vec<_>>()
-        )),
+                .collect::<Vec<_>>(),
+        ),
         // Shipped in the binary and identical for every session, so it answers like `verbs`.
         "client" => Reply::one(serde_json::json!(balthasar_lua::CLIENT)),
         "status" => status(at),
@@ -195,8 +196,10 @@ fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
         None
     };
 
+    // One row per memory. With a ledger on, the answer is instead one record: the search and
+    // what it served, which is a single thing rather than a listing wrapped in a row.
     match injection {
-        None => Reply::one(serde_json::json!(described)),
+        None => Reply::rows(described),
         Some(id) => Reply::one(serde_json::json!({
             "injection": id,
             "memories": described,
@@ -341,20 +344,22 @@ fn why(at: &mut Answering<'_>, request: &Request) -> Reply {
 /// The runs this project has had.
 fn sessions(at: &mut Answering<'_>) -> Reply {
     match at.store.sessions(50) {
-        Ok(found) => Reply::one(serde_json::json!(
+        Ok(found) => Reply::rows(
             found
                 .into_iter()
-                .map(|s| serde_json::json!({
-                    "id": s.id.to_string(),
-                    "name": s.name,
-                    "title": s.title,
-                    "project": s.scope.to_string(),
-                    "harness": s.harness,
-                    "opened": s.opened,
-                    "open": s.is_open(),
-                }))
-                .collect::<Vec<_>>()
-        )),
+                .map(|s| {
+                    serde_json::json!({
+                        "id": s.id.to_string(),
+                        "name": s.name,
+                        "title": s.title,
+                        "project": s.scope.to_string(),
+                        "harness": s.harness,
+                        "opened": s.opened,
+                        "open": s.is_open(),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ),
         Err(why) => Reply::refused(why.to_string()),
     }
 }

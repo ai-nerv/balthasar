@@ -50,6 +50,11 @@ impl Held {
             .cloned()
             .unwrap_or(serde_json::Value::Null)
     }
+
+    /// Every row a listing verb answered with. `replay` sends one turn per row.
+    fn rows(reply: &Reply) -> Vec<serde_json::Value> {
+        reply.result.clone()
+    }
 }
 
 /// A turn in the shape a harness sends, carrying its own record.
@@ -75,8 +80,7 @@ fn what_a_harness_wrote_comes_back_byte_for_byte() {
         vec![serde_json::json!(S), turn(0, "tool", "ok", raw.clone())],
     );
 
-    let back = Held::value(&held.ask("replay", vec![serde_json::json!(S)]));
-    let turns = back.as_array().expect("a list");
+    let turns = Held::rows(&held.ask("replay", vec![serde_json::json!(S)]));
     assert_eq!(turns.len(), 1);
     let stored: serde_json::Value =
         serde_json::from_str(turns[0]["raw"].as_str().expect("raw")).expect("json");
@@ -101,8 +105,10 @@ fn the_same_turn_twice_is_two_turns() {
             ],
         );
     }
-    let back = Held::value(&held.ask("replay", vec![serde_json::json!(S)]));
-    assert_eq!(back.as_array().expect("a list").len(), 2);
+    assert_eq!(
+        Held::rows(&held.ask("replay", vec![serde_json::json!(S)])).len(),
+        2
+    );
 }
 
 #[test]
@@ -135,8 +141,7 @@ fn a_tool_call_is_revised_where_it_stands() {
     );
     assert!(reply.ok, "{:?}", reply.error);
 
-    let back = Held::value(&held.ask("replay", vec![serde_json::json!(S)]));
-    let turns = back.as_array().expect("a list");
+    let turns = Held::rows(&held.ask("replay", vec![serde_json::json!(S)]));
     assert_eq!(turns.len(), 1, "a revision is not a second turn");
     assert_eq!(turns[0]["revisions"], serde_json::json!(1));
     assert!(
@@ -267,11 +272,8 @@ fn two_runs_keep_separate_scrollbacks() {
             ],
         );
     }
-    let a = Held::value(&held.ask("replay", vec![serde_json::json!("a")]));
-    assert_eq!(
-        a.as_array().expect("a list")[0]["text"],
-        serde_json::json!("one")
-    );
+    let a = Held::rows(&held.ask("replay", vec![serde_json::json!("a")]));
+    assert_eq!(a[0]["text"], serde_json::json!("one"));
 }
 
 // ── what a harness with no journal requires ──────────────────────────────────────────────────────
@@ -302,10 +304,8 @@ fn a_record_sent_as_text_comes_back_the_same_bytes() {
 
     held.ask("observe", vec![serde_json::json!(S), carrying(0, NOW, raw)]);
 
-    let back = Held::value(&held.ask("replay", vec![serde_json::json!(S)]));
-    let got = back.as_array().expect("a list")[0]["raw"]
-        .as_str()
-        .expect("raw is text");
+    let back = Held::rows(&held.ask("replay", vec![serde_json::json!(S)]));
+    let got = back[0]["raw"].as_str().expect("raw is text");
     assert_eq!(got, raw, "byte for byte");
     assert_eq!(got.as_bytes(), raw.as_bytes(), "and as bytes");
 }
@@ -324,10 +324,7 @@ fn order_is_by_cursor_even_when_the_clock_disagrees() {
             ],
         );
     }
-    let back = Held::value(&held.ask("replay", vec![serde_json::json!(S)]));
-    let seen: Vec<u64> = back
-        .as_array()
-        .expect("a list")
+    let seen: Vec<u64> = Held::rows(&held.ask("replay", vec![serde_json::json!(S)]))
         .iter()
         .map(|t| t["cursor"].as_u64().expect("cursor"))
         .collect();
@@ -350,9 +347,7 @@ fn a_gap_in_the_cursors_replays_as_what_is_there() {
     }
     let reply = held.ask("replay", vec![serde_json::json!(S)]);
     assert!(reply.ok, "a gap is not an error");
-    let seen: Vec<u64> = Held::value(&reply)
-        .as_array()
-        .expect("a list")
+    let seen: Vec<u64> = Held::rows(&reply)
         .iter()
         .map(|t| t["cursor"].as_u64().expect("cursor"))
         .collect();
@@ -373,8 +368,7 @@ fn amending_a_cursor_returns_only_the_final_state() {
             ],
         );
     }
-    let back = Held::value(&held.ask("replay", vec![serde_json::json!(S)]));
-    let turns = back.as_array().expect("a list");
+    let turns = Held::rows(&held.ask("replay", vec![serde_json::json!(S)]));
     assert_eq!(turns.len(), 1, "one cursor, one turn");
     assert_eq!(
         turns[0]["raw"].as_str().expect("raw"),
@@ -432,4 +426,34 @@ fn a_refusal_and_a_lost_turn_are_different_answers() {
         Some(balthasar_ipc::Fault::Failed),
         "and it says which kind of no, so the caller knows to stop"
     );
+}
+
+#[test]
+fn replay_answers_one_row_per_turn_rather_than_one_row_that_is_the_run() {
+    // The same failure FAMILY.md names for `verbs`: a listing wrapped in a single value, with
+    // `n` reporting 1 whether the run said one thing or a thousand.
+    let mut held = Held::new();
+    for cursor in 0..3 {
+        held.ask(
+            "observe",
+            vec![
+                serde_json::json!(S),
+                turn(
+                    cursor,
+                    "user",
+                    "a turn",
+                    serde_json::json!({ "type": "user" }),
+                ),
+            ],
+        );
+    }
+    let reply = held.ask("replay", vec![serde_json::json!(S)]);
+    assert_eq!(reply.n, 3, "three turns, three rows: {reply:?}");
+    assert_eq!(reply.n, reply.result.len());
+    for row in &reply.result {
+        assert!(
+            row.get("cursor").is_some(),
+            "a row is a turn, not the listing: {row}"
+        );
+    }
 }

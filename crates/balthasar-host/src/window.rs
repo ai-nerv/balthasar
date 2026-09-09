@@ -315,7 +315,7 @@ pub fn replay(at: &mut Answering<'_>, request: &Request) -> Reply {
     };
     // Unbounded on purpose, and only here. Everything wanting part of a scrollback asks `scroll`.
     match scrollback.replay(&session) {
-        Ok(turns) => Reply::one(serde_json::json!(turns)),
+        Ok(turns) => Reply::rows(turns.iter().map(|turn| serde_json::json!(turn)).collect()),
         Err(why) => Reply::refused(why.to_string()),
     }
 }

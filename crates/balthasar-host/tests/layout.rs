@@ -109,14 +109,9 @@ impl Held {
 
     /// How many memories a reply actually carries.
     ///
-    /// `Reply::n` counts result values, and a recall returns one value that is an array — so
-    /// asserting on `n` would pass whether the search found six things or none.
+    /// One row per memory, so the count is the count.
     fn found(reply: &Reply) -> usize {
-        reply
-            .result
-            .first()
-            .and_then(serde_json::Value::as_array)
-            .map_or(0, Vec::len)
+        reply.result.len()
     }
 
     fn said(&mut self, run: &str, text: &str) {

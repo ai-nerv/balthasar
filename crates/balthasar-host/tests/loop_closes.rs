@@ -112,14 +112,11 @@ fn nothing_is_recorded_when_capture_is_off() {
 
     assert!(reply.ok, "{reply:?}");
     assert!(Harness::field(&reply, "injection").is_none());
-    // And the shape a caller sees is the old one: a bare list.
-    assert!(
-        reply
-            .result
-            .first()
-            .is_some_and(serde_json::Value::is_array),
-        "the reply shape changed for callers that did not ask for a ledger"
-    );
+    // And what a caller sees is the listing: one memory per row, none of them a list.
+    assert!(!reply.result.is_empty(), "{reply:?}");
+    for row in &reply.result {
+        assert!(row.get("id").is_some(), "a row is a memory: {row}");
+    }
 }
 
 #[test]

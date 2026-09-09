@@ -337,9 +337,33 @@ local SURFACE = {
   "forget",    -- (id)           -> { archived }
 }
 
+-- The verbs that answer one row per thing.
+--
+-- `result` is the rows and `n` is how many, so a listing arrives as N return values rather than
+-- as one value that is a list. The library gathers them back into a table, which is what a caller
+-- asking a memory layer for memories wants and is what `ipairs` reads.
+local LISTINGS = {
+  verbs = true, recall = true, sessions = true, replay = true,
+}
+
+--- Gather a listing verb's rows into one table, leaving every other verb alone.
+local function gathered(verb, ...)
+  if not LISTINGS[verb] then return ... end
+  local out = table.pack(...)
+  -- A refusal is `nil, why, fault` and passes through as it stands.
+  if out.n > 0 and out[1] == nil then return ... end
+  -- With its ledger on, balthasar answers `recall` with one record -- the injection and what it
+  -- served -- rather than with rows. That is a single thing and is handed over as one.
+  if verb == "recall" and out.n == 1 and type(out[1]) == "table" and out[1].memories then
+    return out[1]
+  end
+  out.n = nil
+  return out
+end
+
 local function attach(session)
   for _, verb in ipairs(SURFACE) do
-    session[verb] = function(...) return session:call(verb, ...) end
+    session[verb] = function(...) return gathered(verb, session:call(verb, ...)) end
   end
   return session
 end
@@ -579,7 +603,7 @@ function M.fetch(where, verb, ...)
   if session then
     local out = table.pack(session:call(verb, ...))
     session:close()
-    return table.unpack(out, 1, out.n)
+    return gathered(verb, table.unpack(out, 1, out.n))
   end
 
   local tool = type(where) == "table" and where.tool or (type(where) == "string" and where or M._NAME)
@@ -612,7 +636,8 @@ function M.fetch(where, verb, ...)
   if not reply.ok then
     return nil, reply.error or "the tool refused the call", reply.fault or "refused"
   end
-  return table.unpack(reply.result or {}, 1, reply.n or #(reply.result or {}))
+  local values = reply.result or {}
+  return gathered(verb, table.unpack(values, 1, reply.n or #values))
 end
 
 --- The socket path that would be tried first, without connecting. For a diagnostic.

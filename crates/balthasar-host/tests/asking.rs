@@ -60,9 +60,8 @@ fn verbs_ships_from_the_first_version() {
     let mut held = Held::new();
     let reply = held.ask(&Door::Owner, &call("verbs", vec![]));
     assert!(reply.ok);
-    let names: Vec<String> = value(&reply)
-        .as_array()
-        .expect("a list")
+    let names: Vec<String> = reply
+        .result
         .iter()
         .filter_map(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_owned))
         .collect();
@@ -257,12 +256,7 @@ fn recall_says_whether_each_answer_is_asserted() {
         &call("recall", vec![serde_json::json!("deploy")]),
     );
 
-    let found = value(&reply);
-    let first = found
-        .as_array()
-        .expect("a list")
-        .first()
-        .expect("something");
+    let first = reply.result.first().expect("something");
     assert!(first.get("asserted").is_some());
     assert!(
         first.get("project").is_some(),

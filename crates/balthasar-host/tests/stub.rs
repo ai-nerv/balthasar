@@ -183,3 +183,15 @@ fn the_library_that_speaks_this_surface_comes_back_over_the_wire() {
         "it is the file this crate ships: {source:.120}"
     );
 }
+
+#[test]
+fn the_stub_gathers_a_listing_back_into_one_table() {
+    // The wire carries a listing as N rows, which reaches a Lua caller as N return values. The
+    // library gathers them, so `#mem.recall(q)` is how many were found rather than always 1.
+    let path = serving(
+        "gather",
+        &["we deploy with fly", "we deploy the worker separately"],
+    );
+    assert_eq!(through_the_stub(&path, "#mem.recall(\"deploy\")"), "2");
+    assert_eq!(through_the_stub(&path, "#mem.verbs() > 1"), "true");
+}
