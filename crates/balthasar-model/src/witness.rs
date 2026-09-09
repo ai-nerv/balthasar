@@ -1,7 +1,6 @@
 //! How a memory knows what it knows.
 //!
-//! Every durable memory carries the evidence that promoted it. This is the record of one piece
-//! of that evidence, and the reason `balthasar why` can print an argument rather than a number.
+//! Every durable memory carries the evidence that promoted it. This is one piece of it.
 
 use crate::{ScopeId, SessionId, Timestamp, WitnessId};
 use std::fmt;
@@ -9,9 +8,8 @@ use std::str::FromStr;
 
 /// Which of the six paths across the gate produced this evidence.
 ///
-/// The weights are the plan's, and the ordering they impose is the design: what a person asked
-/// for outranks what they corrected, which outranks what cost something to learn, which
-/// outranks what merely recurred, which outranks what happened to scroll out of a window.
+/// The weights impose an ordering: what a person asked for outranks what they corrected, which
+/// outranks what cost something to learn, then what recurred, then what scrolled out of a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WitnessKind {
@@ -29,10 +27,7 @@ pub enum WitnessKind {
     Consolidation,
     /// A model read the session and proposed it. Never crosses alone.
     ///
-    /// The only witness balthasar did not work out for itself, and it is deliberately worth less
-    /// than any of them. A model is good at reading what a person meant and has no way to know
-    /// whether it is true — so what it produces is a candidate that must find corroboration,
-    /// never a fact. Every one records which backend said it, so `balthasar why` can name it.
+    /// Deliberately worth less than any other kind. Every one records which backend said it.
     Inferred,
     /// Typed at the CLI, or written by a peer. Proposes; does not assert.
     Manual,
@@ -56,8 +51,7 @@ impl WitnessKind {
 
     /// Whether one witness of this kind is enough to leave the session it was learned in.
     ///
-    /// Measured against the promotion floor rather than asserted, so the two cannot drift:
-    /// changing a weight changes what crosses, which is the intent.
+    /// Measured against the promotion floor rather than asserted, so the two cannot drift.
     #[must_use]
     pub fn crosses_alone(self, floor: f64) -> bool {
         self.weight() >= floor
@@ -90,36 +84,26 @@ impl WitnessKind {
 pub struct Witness {
     /// Its own identity, so a duplicate ingest can be idempotent.
     pub id: WitnessId,
-    /// Which path produced it.
     pub kind: WitnessKind,
     /// The run that saw it. Counted for diversity, which is why it is not optional.
     pub session: SessionId,
-    /// Where it was seen.
     pub scope: ScopeId,
-    /// When.
     pub at: Timestamp,
     /// Where in that session's transcript, so `balthasar why` can point at it.
     pub cursor: Option<u64>,
-    /// What this one is worth. Defaults from the kind, and may be damped by a caller that
-    /// knows better — several mentions in one session are one witness, not several.
+    /// What this one is worth. Defaults from the kind, and may be damped by a caller.
     pub weight: f64,
     /// Which backend produced it, or which peer asked for it.
-    ///
-    /// Distilled output that came out of the rules must not be indistinguishable from output
-    /// that came out of a model, and a write from a peer must name the peer.
     pub note: Option<String>,
     /// How the content reached balthasar.
     ///
-    /// The process boundary and the information source are different questions: a trusted local
-    /// peer can submit a web page it just fetched.
+    /// The process boundary and the information source are different questions.
     #[serde(default)]
     pub channel: crate::Channel,
     /// Where it ultimately came from, when that is narrower than the session.
     ///
-    /// `None` means the session is the domain, which is the ordinary case and what every
-    /// witness written before trust domains existed means. Set explicitly when several
-    /// witnesses share an origin — the same document read in ten runs is ten sessions and one
-    /// source, and only this can say so.
+    /// `None` means the session is the domain. Set explicitly when several witnesses share an
+    /// origin — the same document read in ten runs is ten sessions and one source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<crate::Domain>,
 }
@@ -150,8 +134,7 @@ impl Witness {
 
     /// Say how this reached balthasar, and where it came from.
     ///
-    /// The domain is what makes repetition stop counting as corroboration, so a caller that
-    /// knows several witnesses share an origin has to say so here or the store cannot tell.
+    /// The domain is what makes repetition stop counting as corroboration.
     #[must_use]
     pub fn through(mut self, channel: crate::Channel, domain: Option<crate::Domain>) -> Self {
         self.channel = channel;
@@ -161,9 +144,7 @@ impl Witness {
 
     /// The domain this counts towards for diversity.
     ///
-    /// The session when nothing narrower was recorded. A person meeting the same problem in two
-    /// runs is two occasions and genuinely worth two; a document quoted in two runs is one
-    /// source, and only an explicit domain can tell them apart.
+    /// The session when nothing narrower was recorded.
     #[must_use]
     pub fn domain_of(&self) -> String {
         match &self.domain {
@@ -172,7 +153,6 @@ impl Witness {
         }
     }
 
-    /// Where in the transcript this was seen.
     #[must_use]
     pub fn at_cursor(mut self, cursor: u64) -> Self {
         self.cursor = Some(cursor);
@@ -195,9 +175,7 @@ impl Witness {
 
     /// How much this still counts for at `now`.
     ///
-    /// Evidence ages, but it does not expire: something witnessed two years ago was still
-    /// witnessed. The floor keeps old evidence meaningful, and the curve keeps recent evidence
-    /// worth more.
+    /// Evidence ages, but it does not expire: the floor keeps old evidence meaningful.
     #[must_use]
     pub fn value(&self, now: Timestamp) -> f64 {
         const FLOOR: f64 = 0.25;
@@ -262,8 +240,6 @@ mod tests {
 
     #[test]
     fn distillation_alone_does_not_reach_the_promotion_floor() {
-        // The main defence against "the model said it once and balthasar believes it forever":
-        // a thing that merely scrolled out of the window is a candidate, not a fact.
         assert!(!WitnessKind::Distillation.crosses_alone(0.5));
         assert!(!WitnessKind::Consolidation.crosses_alone(0.5));
         assert!(!WitnessKind::Repetition.crosses_alone(0.5));
@@ -278,7 +254,6 @@ mod tests {
 
     #[test]
     fn a_peers_write_does_not_cross_alone() {
-        // A socket peer proposes. The ladder still decides.
         assert!(!WitnessKind::Manual.crosses_alone(0.5));
     }
 
@@ -328,8 +303,6 @@ mod inferred_tests {
 
     #[test]
     fn a_model_may_propose_and_may_not_decide() {
-        // The whole shape of the optional model path. An inferred claim has to find a second
-        // witness, which means the thing that decides is still the evidence and not the model.
         assert!(!WitnessKind::Inferred.crosses_alone(crate::floor::PROMOTE));
         assert!(
             WitnessKind::Inferred.weight() >= crate::floor::HOLD,
@@ -340,8 +313,6 @@ mod inferred_tests {
 
     #[test]
     fn a_model_is_worth_less_than_the_person_it_read() {
-        // If this ever inverts, a model's reading of what somebody said outweighs what they
-        // actually typed, and the ladder has stopped meaning anything.
         for louder in [
             WitnessKind::Imperative,
             WitnessKind::Correction,

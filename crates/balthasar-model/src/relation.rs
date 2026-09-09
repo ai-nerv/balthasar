@@ -1,27 +1,13 @@
 //! Derived relationships between memories.
 //!
-//! Kept apart from the asserted links in [`crate::LinkRelation`], and the separation is the
-//! whole design. An asserted edge is part of what a memory means: *this replaced that* is a
-//! claim, and deleting it would change what the store believes. A derived edge is a retrieval
-//! aid: *these happened near each other* is an observation about the index, and throwing every
-//! one away should cost nothing but a rebuild.
-//!
-//! Two rules follow from that, and both have tests.
-//!
-//! **A derived edge never raises confidence.** Two memories being related is not evidence that
-//! either is true. If it were, a system could manufacture belief by computing more edges.
-//!
-//! **Every edge names where it came from.** A causal label whose derivation is unknown is an
-//! assertion wearing the costume of a measurement, and a reader has no way to discount it.
+//! Kept apart from the asserted links in [`crate::LinkRelation`]: a derived edge is a retrieval
+//! aid, and throwing every one away costs nothing but a rebuild. A derived edge never raises
+//! confidence, and every edge names where it came from.
 
 use std::fmt;
 use std::str::FromStr;
 
 /// What kind of relationship one memory has to another.
-///
-/// Four families, and a query is usually about exactly one of them. "What happened before this"
-/// wants temporal; "why did it fail" wants causal; "what do we know about this file" wants
-/// entity; "have we solved something like this" wants semantic.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -63,9 +49,7 @@ impl View {
 
     /// The edge pointing the other way, when there is one.
     ///
-    /// `Before` and `After` are each other; `Overlaps` and the same-ness edges are their own
-    /// opposites. Causal edges are deliberately one-directional — a fix resolves a failure, and
-    /// the failure does not resolve the fix.
+    /// Causal edges are deliberately one-directional.
     #[must_use]
     pub fn inverse(self) -> Option<Self> {
         match self {
@@ -153,10 +137,6 @@ impl Family {
     }
 
     /// Whether this family survives with no embedder.
-    ///
-    /// Three of the four do, which is what keeps commitment 3 true: turning embeddings off
-    /// costs the semantic family's *proposals* and nothing else. Even semantic keeps a floor,
-    /// because exact entity and content overlap need no vectors.
     #[must_use]
     pub fn needs_no_embedder(self) -> bool {
         !matches!(self, Self::Semantic)
@@ -170,10 +150,6 @@ impl fmt::Display for Family {
 }
 
 /// What produced an edge.
-///
-/// Recorded on every row so that a reader can discount it. A causal label proposed by a model
-/// and one derived from a failure followed by a repair in the same transcript are not the same
-/// claim, and a system that printed them identically would be lying by omission.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -194,8 +170,7 @@ pub enum Derivation {
 impl Derivation {
     /// Whether this can be recomputed from what the store already holds.
     ///
-    /// A manual assertion cannot: somebody said it, and rebuilding the index must not throw it
-    /// away. Everything else is disposable by construction.
+    /// A manual assertion cannot: rebuilding the index must not throw it away.
     #[must_use]
     pub fn is_rebuildable(self) -> bool {
         !matches!(self, Self::Manual)
@@ -264,9 +239,6 @@ pub struct Relation {
 
 impl Relation {
     /// The sentence a person reads, with its provenance attached.
-    ///
-    /// Never the label alone. "resolved" tells a reader nothing about whether to believe it;
-    /// "resolved (from transcript structure)" tells them exactly how much to.
     #[must_use]
     pub fn explain(&self) -> String {
         format!("{} (from {})", self.view, self.source)
@@ -279,9 +251,6 @@ mod tests {
 
     #[test]
     fn a_causal_edge_does_not_point_both_ways() {
-        // A fix resolves a failure. The failure does not resolve the fix, and an inverse that
-        // pretended otherwise would let a traversal walk from a repair to the thing it repaired
-        // and call that a cause.
         assert_eq!(View::Resolved.inverse(), None);
         assert_eq!(View::Caused.inverse(), None);
         assert_eq!(View::FailedBecause.inverse(), None);
@@ -308,8 +277,6 @@ mod tests {
 
     #[test]
     fn three_families_survive_with_no_embedder() {
-        // Commitment 3 as a property of the vocabulary: turning embeddings off may cost
-        // proposals, never whole families.
         assert!(Family::Temporal.needs_no_embedder());
         assert!(Family::Causal.needs_no_embedder());
         assert!(Family::Entity.needs_no_embedder());
@@ -318,7 +285,6 @@ mod tests {
 
     #[test]
     fn what_a_person_asserted_is_not_rebuildable() {
-        // Rebuilding the index must not silently discard something somebody said.
         assert!(!Derivation::Manual.is_rebuildable());
         for source in [
             Derivation::Rule,
@@ -340,8 +306,6 @@ mod tests {
 
     #[test]
     fn an_edge_never_prints_its_label_without_its_source() {
-        // A causal claim whose derivation is hidden is an assertion wearing the costume of a
-        // measurement.
         let held = Relation {
             from: crate::MemoryId::new("a"),
             to: crate::MemoryId::new("b"),

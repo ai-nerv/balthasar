@@ -1,27 +1,12 @@
 //! Whether using a memory helped.
 //!
-//! The fourth judgment, and deliberately not a fifth column on confidence. Truth and utility
-//! are independent: a fact can be perfectly true and harmful to inject, and a habit can have
-//! worked twice and be wrong for this machine. Collapsing them into one number would make both
-//! unanswerable.
-//!
-//! Two rules hold everywhere below.
-//!
-//! **Recall is not use.** Retrieving a memory ten times is not ten pieces of evidence that it
-//! helped. It is one piece of evidence that it matches a query, which is a statement about the
-//! query. Only an attributed outcome is evidence of utility.
-//!
-//! **Unknown is a real answer.** An action whose outcome nobody reported is unknown, not
-//! failed. Treating silence as failure would punish every caller that does not report, which is
-//! most of them, and would make the measure say more about instrumentation than about memory.
+//! Truth and utility are independent. Only an attributed outcome is evidence of utility, and an
+//! action whose outcome nobody reported is unknown rather than failed.
 
 use std::fmt;
 use std::str::FromStr;
 
 /// How an action that used a memory turned out.
-///
-/// Deliberately small and deterministic. A model's opinion of quality may be recorded as an
-/// evaluator observation, but it may never be the only thing that closes an outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutcomeKind {
@@ -50,8 +35,7 @@ impl OutcomeKind {
 
     /// Whether this is evidence the memory hurt.
     ///
-    /// `Ignored` is neither: a memory nobody looked at tells you about the ranking, not about
-    /// the memory. `Abstained` is neither: declining to act on a memory may be exactly right.
+    /// `Ignored` and `Abstained` are neither.
     #[must_use]
     pub fn is_harmful(self) -> bool {
         matches!(self, Self::Failed | Self::Corrected | Self::Reverted)
@@ -102,10 +86,6 @@ impl fmt::Display for OutcomeKind {
 }
 
 /// How sure we are that this memory had anything to do with that outcome.
-///
-/// Attribution is the hard part. A memory was in the context and something happened afterwards
-/// is not evidence that the memory caused it, and a utility measure built on that assumption
-/// would credit whatever was injected most rather than whatever worked.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -122,9 +102,7 @@ pub enum Attribution {
 impl Attribution {
     /// Whether this is strong enough to move a habit's counters on its own.
     ///
-    /// Proximal is not. It is the difference between "this was on screen" and "this was used",
-    /// and a procedural memory that gained authority from the former would gain it from being
-    /// popular rather than from working.
+    /// Proximal is not.
     #[must_use]
     pub fn is_countable(self) -> bool {
         matches!(self, Self::Explicit | Self::Structural)
@@ -161,9 +139,6 @@ impl fmt::Display for Attribution {
 }
 
 /// How a memory was placed in a context.
-///
-/// Distinct from confidence, and the thing a reader needs in order to know what weight to give
-/// it. The same memory may be asserted in one context and shown as evidence in another.
 #[derive(
     Debug,
     Clone,
@@ -187,18 +162,11 @@ pub enum Presentation {
     /// Historical or uncertain material, offered for reasoning rather than belief.
     Evidence,
     /// Kept and findable, never placed in an ordinary context.
-    ///
-    /// Not deleted — excluded. Something that looks like an attack is worth keeping precisely
-    /// because it is worth analysing, and a defence whose only move is to forget leaves nothing
-    /// to learn from. Reaching it takes an explicit request.
     Quarantined,
 }
 
 impl Presentation {
     /// Whether a memory in this mode may be placed in an ordinary context.
-    ///
-    /// The one gate that matters for quarantine: everything else about the mode is advice to
-    /// the reader, and this is the part enforced.
     #[must_use]
     pub fn may_inject(self) -> bool {
         !matches!(self, Self::Quarantined)
@@ -212,8 +180,7 @@ impl Presentation {
 
     /// The weaker of two modes.
     ///
-    /// Combining is always downward. A memory that is advisory for one reason and quarantined
-    /// for another is quarantined, and no amount of other evidence promotes it back.
+    /// Combining is always downward: nothing promotes a quarantined memory back.
     #[must_use]
     pub fn and(self, other: Self) -> Self {
         self.max(other)
@@ -253,10 +220,7 @@ impl fmt::Display for Presentation {
 
 /// What the ledger adds up to for one memory.
 ///
-/// Counts rather than a score. A single float would have to choose a prior, a decay and a way
-/// of weighting attribution strengths, and it would hide all three behind a number that looks
-/// like a measurement. These are the observations; a policy that wants a score derives one and
-/// says so.
+/// Counts rather than a score; a policy that wants a score derives one and says so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Utility {
     /// Countably attributed outcomes that went well.
@@ -282,8 +246,7 @@ impl Utility {
 
     /// Helpful share of countable outcomes, when there are any.
     ///
-    /// `None` rather than a default, because "no evidence" and "evidence that it is useless"
-    /// are different answers and a caller must not be able to confuse them by accident.
+    /// `None` rather than a default: "no evidence" and "evidence that it is useless" differ.
     #[must_use]
     pub fn helpfulness(&self) -> Option<f64> {
         let known = self.verified_helpful + self.verified_harmful;
@@ -297,23 +260,17 @@ mod tests {
 
     #[test]
     fn being_ignored_is_not_being_harmful() {
-        // A memory nobody looked at tells you about the ranking that surfaced it, not about the
-        // memory. Counting it as harm would punish a memory for a retrieval decision.
         assert!(!OutcomeKind::Ignored.is_harmful());
         assert!(!OutcomeKind::Ignored.is_helpful());
     }
 
     #[test]
     fn abstaining_is_not_a_failure() {
-        // Declining to act on a memory is sometimes exactly right, and a system that scored it
-        // as failure would push agents to act on everything they are shown.
         assert!(!OutcomeKind::Abstained.is_harmful());
     }
 
     #[test]
     fn unknown_is_a_real_state_and_not_a_failure() {
-        // Most callers never report. Treating their silence as failure would make the measure
-        // describe instrumentation rather than memory.
         assert!(!OutcomeKind::Unknown.is_known());
         assert!(!OutcomeKind::Unknown.is_harmful());
         assert!(!OutcomeKind::Unknown.is_helpful());
@@ -321,16 +278,12 @@ mod tests {
 
     #[test]
     fn being_corrected_is_evidence_against() {
-        // Followed and then fixed: the memory was close enough to act on and wrong enough to
-        // need repair, which is exactly what a utility measure should catch.
         assert!(OutcomeKind::Corrected.is_harmful());
         assert!(OutcomeKind::Reverted.is_harmful());
     }
 
     #[test]
     fn proximity_alone_never_moves_a_counter() {
-        // The rejected shortcut: do not infer causality from temporal adjacency. Proximal
-        // evidence is recorded for analysis and cannot change what a habit claims about itself.
         assert!(!Attribution::Proximal.is_countable());
         assert!(Attribution::Structural.is_countable());
         assert!(Attribution::Explicit.is_countable());
@@ -344,8 +297,6 @@ mod tests {
 
     #[test]
     fn no_evidence_is_not_the_same_as_useless() {
-        // `None` rather than zero, so a caller cannot accidentally read "nobody has reported"
-        // as "this never helps".
         assert_eq!(Utility::default().helpfulness(), None);
         let harmful = Utility {
             verified_harmful: 3,
@@ -356,8 +307,6 @@ mod tests {
 
     #[test]
     fn helpfulness_ignores_what_was_never_attributed() {
-        // Ten proximal observations and one verified failure is a verified failure, not a
-        // mostly-good memory.
         let held = Utility {
             verified_harmful: 1,
             proximal: 10,
@@ -369,8 +318,6 @@ mod tests {
 
     #[test]
     fn every_word_survives_a_round_trip() {
-        // The ledger stores these as text, so a spelling that does not come back is a row that
-        // cannot be read.
         for kind in [
             OutcomeKind::Succeeded,
             OutcomeKind::Failed,

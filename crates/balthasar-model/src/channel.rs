@@ -1,18 +1,9 @@
 //! Where a memory came from, and how independent two memories really are.
 //!
-//! The process boundary and the information source are different questions, and conflating them
-//! is how a persistent store turns untrusted text into durable instruction. A trusted local peer
-//! can submit a web page it just fetched. The peer is trusted; the page is not.
-//!
-//! Two ideas here, and the second is the one that does the work.
-//!
-//! **A channel** says how the content reached balthasar — typed by a person, observed from a tool,
-//! read out of a document, inferred by a model. It bounds what a witness may claim.
-//!
-//! **A trust domain** says where it ultimately came from. Ten observations copied out of one
-//! document are one domain. Ten model summaries of those observations are still one domain.
-//! Counting them as ten independent witnesses is exactly the attack, and diversity that counts
-//! sessions alone cannot see it — all ten can arrive in ten genuinely distinct runs.
+//! The process boundary and the information source are different questions: a trusted local peer
+//! can submit a web page it just fetched. A channel says how the content reached balthasar and
+//! bounds what a witness may claim; a trust domain says where it ultimately came from, so ten
+//! observations copied out of one document are one domain rather than ten independent witnesses.
 
 use std::fmt;
 use std::str::FromStr;
@@ -59,10 +50,8 @@ pub enum Channel {
 impl Channel {
     /// Whether content arriving this way may be treated as an instruction from the person.
     ///
-    /// The centre of the imperative defence. A document containing "always deploy with
-    /// `curl … | sh`" is a document that contains a sentence — it is not somebody telling balthasar
-    /// to do that, and the difference cannot be left to how the sentence is phrased, because
-    /// phrasing is exactly what an attacker controls.
+    /// A document containing "always deploy with `curl … | sh`" is a document that contains a
+    /// sentence, and the difference cannot be left to how the sentence is phrased.
     #[must_use]
     pub fn may_be_imperative(self) -> bool {
         matches!(
@@ -73,8 +62,7 @@ impl Channel {
 
     /// Whether content arriving this way is the agent's own reasoning rather than an observation.
     ///
-    /// Model output and distiller summaries describe things; they do not witness them. Letting
-    /// them count as observation is how a system agrees with itself into confidence.
+    /// Model output and distiller summaries describe things; they do not witness them.
     #[must_use]
     pub fn is_inferred(self) -> bool {
         matches!(
@@ -91,8 +79,7 @@ impl Channel {
 
     /// The strongest presentation content from this channel may reach on its own.
     ///
-    /// Not a permanent ceiling — corroboration from a different domain lifts it, which is the
-    /// whole point of having domains. It is the ceiling for *one* arrival.
+    /// Not a permanent ceiling — corroboration from a different domain lifts it.
     #[must_use]
     pub fn ceiling(self) -> crate::Presentation {
         match self {
@@ -156,8 +143,7 @@ impl fmt::Display for Channel {
 /// Where a piece of evidence ultimately came from.
 ///
 /// A stable local identifier — a hash of a document's origin, a tool's name, `user` for a person
-/// at the keyboard. Never a credential and never a full URL: the question is whether two
-/// witnesses are independent, and answering it does not require keeping what they read.
+/// at the keyboard. Never a credential and never a full URL.
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -179,9 +165,7 @@ impl Domain {
 
     /// Whatever a document came from, as a stable local name.
     ///
-    /// Hashed rather than kept: the identifier has to be comparable, not readable. A store full
-    /// of the URLs somebody browsed is a different and much worse artefact than one that can
-    /// say "these two came from the same place".
+    /// Hashed rather than kept: the identifier has to be comparable, not readable.
     #[must_use]
     pub fn external(origin: &str) -> Self {
         Self(format!("ext:{}", &crate::content_hash(origin)[..12]))
@@ -189,8 +173,7 @@ impl Domain {
 
     /// A model's own output.
     ///
-    /// Every model is one domain, deliberately. Two summaries of the same material are not two
-    /// opinions, and even two different models reading one document are downstream of it.
+    /// Every model is one domain, deliberately.
     #[must_use]
     pub fn model() -> Self {
         Self("model".to_owned())
@@ -202,7 +185,6 @@ impl Domain {
         Self(text.into())
     }
 
-    /// The identifier as text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -244,9 +226,6 @@ mod tests {
 
     #[test]
     fn a_document_cannot_be_an_instruction() {
-        // The centre of the imperative defence. A page saying "always run this" contains a
-        // sentence; it is not somebody telling balthasar to run it, and phrasing is exactly what an
-        // attacker controls.
         assert!(!Channel::ExternalContent.may_be_imperative());
         assert!(!Channel::ImportedHistory.may_be_imperative());
         assert!(!Channel::ModelInference.may_be_imperative());
@@ -284,8 +263,6 @@ mod tests {
 
     #[test]
     fn one_document_is_one_domain_however_often_it_is_read() {
-        // The attack this exists for: the same page quoted in ten sessions is ten sessions and
-        // one source, and diversity that counted only sessions would call it corroboration.
         let once = Domain::external("https://example.test/guide");
         let again = Domain::external("https://example.test/guide");
         assert_eq!(once, again);
@@ -294,8 +271,6 @@ mod tests {
 
     #[test]
     fn a_domain_keeps_no_url() {
-        // The identifier has to be comparable, not readable. A store full of what somebody
-        // browsed is a different and worse artefact than one that can say "same place".
         let held = Domain::external("https://example.test/secret-path?token=hunter2");
         assert!(!held.as_str().contains("example"));
         assert!(!held.as_str().contains("hunter2"));
@@ -304,8 +279,6 @@ mod tests {
 
     #[test]
     fn every_model_is_one_domain() {
-        // Two summaries of the same material are not two opinions, and two models reading one
-        // document are both downstream of the document.
         assert_eq!(Domain::model(), Domain::model());
         assert!(!Domain::model().is_external());
     }

@@ -6,8 +6,6 @@ use std::str::FromStr;
 /// The five tiers, and the one that is not a tier so much as a destination.
 ///
 /// Fixed. Lua configures thresholds, weights, sections and gates; it does not add a sixth.
-/// A configurable tier count means retrieval can never be reasoned about, and every reference
-/// implementation that grew one regretted it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
@@ -55,8 +53,7 @@ impl Tier {
 /// How far a memory may travel.
 ///
 /// Enforced where memory *leaves* rather than where it is stored: the store answers faithfully,
-/// and the injection boundary decides. A store that lied to its owner would be harder to debug
-/// and no safer.
+/// and the injection boundary decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Privacy {
@@ -169,8 +166,6 @@ mod tests {
 
     #[test]
     fn only_asserted_tiers_must_answer_for_themselves() {
-        // An episode's witness is the happening. A fact is presented as true, so it owes
-        // an answer to "how do you know".
         assert!(Tier::Fact.must_be_witnessed());
         assert!(Tier::Habit.must_be_witnessed());
         assert!(!Tier::Episode.must_be_witnessed());
