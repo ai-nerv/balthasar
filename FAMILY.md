@@ -163,10 +163,14 @@ flaky test for weeks.
 
 The rule is one line to obey: **on any failure to send a whole call or read a whole reply, close
 the connection.** Dial again for the next call; a connect is cheaper than a conversation that is
-quietly one behind. A client that holds its handle across calls — which is what the family's own
-clients do, and what `client` serves to every consumer — must do this at *every* point a read can
-fail, including the one that has already consumed a frame header and would otherwise desynchronise
-on a partial frame.
+quietly one behind.
+
+The rule binds a client that **holds its handle across calls**, which is what a program asked
+several times a turn will want to do. Such a client must close at *every* point a read can fail,
+including the one that has already consumed a frame header and would otherwise desynchronise on a
+partial frame. A client that dials per call is already in step by construction — the connection
+dies with the call it was made for — and needs nothing. Both shapes exist in this family and both
+are correct; what is not correct is holding a handle and keeping it through a failure.
 
 **The send half is the same fault seen from the other end.** A write that fails partway has put
 the head of a call on the wire that this side will never finish, and the far end reads whatever
