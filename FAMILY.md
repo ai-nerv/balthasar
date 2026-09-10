@@ -161,11 +161,21 @@ refusal as the answer to `observe` — in 96 microseconds, from a call it had ne
 transcript it believed it had written was dropped, and `--resume` came back empty. It read as a
 flaky test for weeks.
 
-The rule is one line to obey: **on any failure to read a whole reply, close the connection.** Dial
-again for the next call; a connect is cheaper than a conversation that is quietly one behind. A
-client that holds its handle across calls — which is what the family's own clients do, and what
-`client` serves to every consumer — must do this at *every* point a read can fail, including the
-one that has already consumed a frame header and would otherwise desynchronise on a partial frame.
+The rule is one line to obey: **on any failure to send a whole call or read a whole reply, close
+the connection.** Dial again for the next call; a connect is cheaper than a conversation that is
+quietly one behind. A client that holds its handle across calls — which is what the family's own
+clients do, and what `client` serves to every consumer — must do this at *every* point a read can
+fail, including the one that has already consumed a frame header and would otherwise desynchronise
+on a partial frame.
+
+**The send half is the same fault seen from the other end.** A write that fails partway has put
+the head of a call on the wire that this side will never finish, and the far end reads whatever
+comes next as the rest of it. The reply to that half-call, if one comes, answers nothing that was
+asked. Both directions close.
+
+**Closing means the handle is gone, not merely shut.** The next call must meet "this connection is
+closed" and not a nil handle, a reused file descriptor, or a second error from the transport — a
+caller that cannot tell a closed line from a broken one will retry on the wrong one.
 
 ---
 
