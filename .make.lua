@@ -374,7 +374,7 @@ make.recipe{
 make.recipe{
   name = "verify",
   desc = "the whole local gate",
-  deps = { "fmt-check", "check", "test", "clippy", "rustdoc", "gates", "gate-hermetic", "gate-family", "machete", "gate-no-llm" },
+  deps = { "fmt-check", "check", "test", "clippy", "rustdoc", "gates", "gate-hermetic", "gate-family", "gate-role", "machete", "gate-no-llm" },
 }
 make.alias("v", "verify")
 
@@ -393,5 +393,19 @@ make.recipe{
     if not oslo.fs.exists(where) then where = "target/release/balthasar" end
     local ran = oslo.run{ "scripts/gate-family.sh", where  }
     assert(ran.ok, "gate-family failed")
+  end,
+}
+
+-- The role, as against the family contract: what this program is *for*, not how it talks. See
+-- ROLES.md. Core verbs fail the gate; extensions are reported and do not.
+make.recipe{
+  name = "gate-role",
+  desc = "the binary fills the memory role",
+  deps = { "build" },
+  run = function()
+    local where = "target/x86_64-unknown-linux-musl/release/balthasar"
+    if not oslo.fs.exists(where) then where = "target/release/balthasar" end
+    local ran = oslo.run{ "scripts/gate-role.sh", "memory", where }
+    assert(ran.ok, "gate-role failed")
   end,
 }

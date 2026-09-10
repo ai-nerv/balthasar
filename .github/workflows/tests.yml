@@ -73,6 +73,8 @@ jobs:
               */gate-no-llm.sh|*/gate-hermetic.sh) continue ;;
               # Needs a built binary rather than a grep over the source; its own step, below.
               */gate-family.sh) continue ;;
+              # Takes a role and a binary; run from `make verify` with the role named. See ROLES.md.
+              */gate-role.sh) continue ;;
             esac
             printf '\n== %s\n' "$g"
             nix develop --command "$g"
