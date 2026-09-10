@@ -12,5 +12,8 @@ pub use corpses::swept;
 pub use encoding::Wire;
 pub use frame::{FAMILY, Fault, MAX_FRAME, Reply, Request, SURFACE, WireError, recv, send};
 pub use peer::Peer;
-pub use serve::{Listener, socket_dir, socket_path, tool_descriptor};
+pub use serve::{
+    Listener, legacy_socket_dir, legacy_socket_path, socket_dir, socket_dirs, socket_path,
+    tool_descriptor,
+};
 pub use stop::hold as hold_stop_signals;

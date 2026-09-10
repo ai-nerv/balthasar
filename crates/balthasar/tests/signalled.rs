@@ -11,10 +11,10 @@ use std::time::{Duration, Instant};
 /// How long to wait for a process to start, or to notice it has been told to go.
 const WITHIN: Duration = Duration::from_secs(10);
 
-/// A `balthasar serve` of our own, and where it said it would listen.
+/// A `balthasar serve` of our own, and every name it said it would listen under.
 struct Serving {
     child: Child,
-    socket: PathBuf,
+    sockets: Vec<PathBuf>,
 }
 
 impl Serving {
@@ -33,18 +33,30 @@ impl Serving {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("start a balthasar");
-        let socket = dir
-            .join("run")
-            .join("balthasar")
-            .join(format!("api@{instance}.sock"));
-        let listening = Self { child, socket };
-        assert!(
-            waited_for(|| listening.socket.exists()),
-            "it never bound {}",
-            listening.socket.display()
-        );
+        // Both names, because both are bound and both are files somebody has to take away again.
+        let sockets = names(dir, instance);
+        let listening = Self { child, sockets };
+        for socket in &listening.sockets {
+            assert!(
+                waited_for(|| socket.exists()),
+                "it never bound {}",
+                socket.display()
+            );
+        }
         listening
     }
+}
+
+/// Every path one instance binds under `dir`: the role's own name, then the program's.
+fn names(dir: &Path, instance: &str) -> Vec<PathBuf> {
+    ["memory", "balthasar"]
+        .into_iter()
+        .map(|named| {
+            dir.join("run")
+                .join(named)
+                .join(format!("api@{instance}.sock"))
+        })
+        .collect()
 }
 
 impl Drop for Serving {
@@ -52,6 +64,31 @@ impl Drop for Serving {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// A caller and the balthasar tied to it, both ended however the test ends.
+///
+/// Without this an assertion that fails between the spawn and the kill leaves two processes
+/// running for the rest of the machine's day, one of them holding this test's own pipe open.
+struct Tie {
+    caller: Child,
+    served: Option<u32>,
+}
+
+impl Drop for Tie {
+    fn drop(&mut self) {
+        let _ = self.caller.kill();
+        let _ = self.caller.wait();
+        // The pid the caller wrote down and no other: a `balthasar serve` this test did not start
+        // is somebody's session, and a name match would end it.
+        if let Some(served) = self.served {
+            let _ = Command::new("kill")
+                .args(["-9", &served.to_string()])
+                // Already gone is the passing case, and its complaint reads like a failure.
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
     }
 }
 
@@ -90,17 +127,21 @@ fn ends_cleanly(named: &str, instance: &str) {
     let dir = Scratch::new("balthasar-signalled", instance);
     std::fs::create_dir_all(dir.join("run")).expect("mkdir");
     let mut serving = Serving::starting(&dir, instance);
-    let socket = serving.socket.clone();
-    assert!(socket.exists(), "before: {}", socket.display());
+    let sockets = serving.sockets.clone();
+    for socket in &sockets {
+        assert!(socket.exists(), "before: {}", socket.display());
+    }
 
     signal(serving.child.id(), named);
 
     let ended = serving.child.wait().expect("it ended");
-    assert!(
-        waited_for(|| !socket.exists()),
-        "{named} left {} behind",
-        socket.display()
-    );
+    for socket in &sockets {
+        assert!(
+            waited_for(|| !socket.exists()),
+            "{named} left {} behind",
+            socket.display()
+        );
+    }
     // Zero rather than 128+n: the signal woke a waiting thread and `main` returned normally.
     assert_eq!(ended.code(), Some(0), "{named} should end this cleanly");
 }
@@ -127,42 +168,52 @@ fn a_tied_balthasar_leaves_no_socket_when_its_caller_is_killed() {
         binary = env!("CARGO_BIN_EXE_balthasar"),
         pids = pids.display(),
     );
-    let mut caller = Command::new("sh")
-        .arg("-c")
-        .arg(script)
-        .current_dir(&*dir)
-        .env("XDG_RUNTIME_DIR", dir.join("run"))
-        .env("XDG_DATA_HOME", dir.join("data"))
-        .env("XDG_CONFIG_HOME", dir.join("config"))
-        .spawn()
-        .expect("start the caller");
+    let mut tie = Tie {
+        caller: Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .current_dir(&*dir)
+            .env("XDG_RUNTIME_DIR", dir.join("run"))
+            .env("XDG_DATA_HOME", dir.join("data"))
+            .env("XDG_CONFIG_HOME", dir.join("config"))
+            .spawn()
+            .expect("start the caller"),
+        served: None,
+    };
 
-    let socket = dir.join("run").join("balthasar").join("api@tied.sock");
-    assert!(waited_for(|| socket.exists()), "it never bound");
+    let sockets = names(&dir, "tied");
+    for socket in &sockets {
+        assert!(
+            waited_for(|| socket.exists()),
+            "it never bound {}",
+            socket.display()
+        );
+    }
     let served: u32 = std::fs::read_to_string(&pids)
         .ok()
         .and_then(|text| text.trim().parse().ok())
         .expect("the caller said which balthasar it started");
+    tie.served = Some(served);
 
     // The pid the caller wrote down: watching the shell would pass on the wrong process.
     assert!(alive(served), "it was running before its caller was killed");
 
     // Checked, not attempted: a kill that silently did nothing would report the bug as present.
-    caller.kill().expect("kill the caller outright");
-    caller.wait().expect("reap the caller");
+    tie.caller.kill().expect("kill the caller outright");
+    tie.caller.wait().expect("reap the caller");
 
-    let gone = waited_for(|| !socket.exists());
+    let gone: Vec<bool> = sockets
+        .iter()
+        .map(|socket| waited_for(|| !socket.exists()))
+        .collect();
     // Both: unlinking the socket and carrying on serving nothing is not what the tie promises.
     let ended = waited_for(|| !alive(served));
-    let _ = Command::new("kill")
-        .args(["-9", &served.to_string()])
-        // Already gone is the passing case, and its complaint reads like a failure.
-        .stderr(std::process::Stdio::null())
-        .status();
-    assert!(
-        gone,
-        "a tied balthasar must not leave {} for the next one to disprove",
-        socket.display()
-    );
+    for (socket, gone) in sockets.iter().zip(gone) {
+        assert!(
+            gone,
+            "a tied balthasar must not leave {} for the next one to disprove",
+            socket.display()
+        );
+    }
     assert!(ended, "and it must not still be running afterwards");
 }

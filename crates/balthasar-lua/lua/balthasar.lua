@@ -444,27 +444,36 @@ local function list_candidates(dir)
   return (ok and found) or {}
 end
 
---- The directory balthasar binds its control sockets in.
+--- The directories the memory role binds its control sockets in, the role's own name first.
 ---
---- Mirrors balthasar's own socket directory: the default session binds straight under `<runtime>/balthasar`,
---- and only a NAMED instance gets a subdirectory. Appending "default" unconditionally looked
---- reasonable and found nothing at all.
-local function socket_dir()
+--- Mirrors balthasar's own socket directories: the default session binds straight under
+--- `<runtime>/memory`, and only a NAMED instance gets a subdirectory. Appending "default"
+--- unconditionally looked reasonable and found nothing at all.
+---
+--- `<runtime>/balthasar` is still searched, second: a daemon that has not been rebuilt binds
+--- there and nowhere else, and looking only at the new name would find nothing while it is
+--- running -- or, worse, find a neighbour and record into a store this caller never reads.
+local function socket_dirs()
   -- The host's own answer first: a sandboxed file has no `os.getenv`, and this is a path it can be
   -- handed rather than a reason to grant it every environment variable.
   for _, name in ipairs(HOSTS) do
     local h = _G[name]
     if h and h.fs and h.fs.dir then
       local d = h.fs.dir()
-      if d and d ~= "" then return d end
+      if d and d ~= "" then return { d } end
     end
   end
   local runtime = os.getenv("XDG_RUNTIME_DIR")
-  local base = (runtime and runtime ~= "")
-    and (runtime .. "/balthasar")
-    or ("/tmp/balthasar-" .. (os.getenv("UID") or "0"))
-  local instance = os.getenv("MAGI_BALTHASAR_INSTANCE")
-  return (instance and instance ~= "") and (base .. "/" .. instance) or base
+  local instance = os.getenv("MAGI_MEMORY_INSTANCE")
+  if not instance or instance == "" then instance = os.getenv("MAGI_BALTHASAR_INSTANCE") end
+  local dirs = {}
+  for _, named in ipairs({ "memory", "balthasar" }) do
+    local base = (runtime and runtime ~= "")
+      and (runtime .. "/" .. named)
+      or ("/tmp/" .. named .. "-" .. (os.getenv("UID") or "0"))
+    dirs[#dirs + 1] = (instance and instance ~= "") and (base .. "/" .. instance) or base
+  end
+  return dirs
 end
 
 --- Where a session's socket is, given what little the caller said.
@@ -488,13 +497,23 @@ local function find(where)
   local env = os.getenv("MAGI_API_SOCKET")
   if not named and env and env ~= "" then return { { path = env } } end
 
-  local dir = socket_dir()
-  if not named then return list_candidates(dir) end
+  local dirs = socket_dirs()
+  if not named then
+    local found = {}
+    for _, dir in ipairs(dirs) do
+      for _, candidate in ipairs(list_candidates(dir)) do found[#found + 1] = candidate end
+    end
+    return found
+  end
 
   -- A named instance is named by the file it bound, and nothing renames it afterwards. There
   -- is no "ask it what it calls itself now" to do, which is a question a session-oriented
   -- sibling has to answer and a memory layer does not.
-  return { { path = dir .. "/api@" .. named .. ".sock" } }
+  local named_paths = {}
+  for _, dir in ipairs(dirs) do
+    named_paths[#named_paths + 1] = { path = dir .. "/api@" .. named .. ".sock" }
+  end
+  return named_paths
 end
 
 --- Open a connection to a running balthasar.

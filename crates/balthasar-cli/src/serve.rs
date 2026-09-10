@@ -75,13 +75,27 @@ pub fn serve(
     if let Some(caller) = args.tied {
         tie_to_caller(caller)?;
     }
-    // Here rather than in `bind`: the sweep dials every socket in the runtime directory.
-    balthasar_ipc::swept(&balthasar_ipc::socket_dir());
+    // Here rather than in `bind`: the sweep dials every socket in the runtime directory. Both
+    // directories, because a corpse under the old name is a name the next instance has to disprove.
+    for dir in balthasar_ipc::socket_dirs() {
+        balthasar_ipc::swept(&dir);
+    }
     let listener = Listener::bind(&args.instance)?;
     // Written whether or not anybody connects: a caller that finds no socket spawns from this path.
     let descriptor = balthasar_ipc::tool_descriptor()?;
 
     eprintln!("{}", render::bold(&listener.path().display().to_string()));
+    // Said out loud rather than assumed: an unrebuilt caller reaches this only through the second name.
+    for also in listener.paths().into_iter().skip(1) {
+        eprintln!("{}", render::dim(&format!("also {}", also.display())));
+    }
+    if listener.paths().len() < 2 {
+        balthasar_model::noted!(
+            "serve: {} could not be bound as well; a caller that has not been rebuilt will not \
+             find this one",
+            balthasar_ipc::legacy_socket_path(&args.instance).display()
+        );
+    }
     eprintln!("{}", render::dim(&format!("scope {scope}")));
     eprintln!(
         "{}",
@@ -229,7 +243,23 @@ struct Opened {
 }
 
 /// What a harness names its agent in, in the environment of the process that connects.
-const AGENT: &str = "BALTHASAR_AGENT";
+///
+/// The role's name, because the harness on the other end talks to a `memory` rather than to this
+/// program — see `ROLES.md`.
+const AGENT: &str = "MAGI_MEMORY_AGENT";
+
+/// What that variable used to be called. Still read, for one release.
+const AGENT_WAS: &str = "BALTHASAR_AGENT";
+
+/// Say once that a caller is still naming its agent the old way.
+fn the_old_name_was_used() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        balthasar_model::noted!(
+            "serve: a caller named its agent in ${AGENT_WAS}; ${AGENT} is what replaces it"
+        );
+    });
+}
 
 /// Which agent inside a run a connection belongs to.
 ///
@@ -244,23 +274,44 @@ fn agent_of(peer: &Peer) -> balthasar_model::AgentId {
         .unwrap_or_else(agent_here)
 }
 
-/// What `BALTHASAR_AGENT` says in one `/proc/<pid>/environ` block, if it says anything.
+/// What names the agent in one `/proc/<pid>/environ` block, if anything does.
+///
+/// The role's variable first, then the program's. A harness that sets both means the new one.
 fn named_in(body: &[u8]) -> Option<balthasar_model::AgentId> {
-    let prefix = format!("{AGENT}=");
-    body.split(|byte| *byte == 0)
-        .filter_map(|entry| std::str::from_utf8(entry).ok())
-        .find_map(|entry| entry.strip_prefix(&prefix))
-        .map(str::trim)
-        .filter(|named| !named.is_empty())
-        .map(balthasar_model::AgentId::new)
+    let said = |variable: &str| {
+        let prefix = format!("{variable}=");
+        body.split(|byte| *byte == 0)
+            .filter_map(|entry| std::str::from_utf8(entry).ok())
+            .find_map(|entry| entry.strip_prefix(&prefix))
+            .map(str::trim)
+            .filter(|named| !named.is_empty())
+            .map(balthasar_model::AgentId::new)
+    };
+    said(AGENT).or_else(|| {
+        let older = said(AGENT_WAS);
+        if older.is_some() {
+            the_old_name_was_used();
+        }
+        older
+    })
 }
 
 /// Which agent this process itself is, and the fallback for a peer that named none.
 fn agent_here() -> balthasar_model::AgentId {
-    std::env::var(AGENT)
-        .ok()
-        .map(|named| named.trim().to_owned())
-        .filter(|named| !named.is_empty())
+    let said = |variable: &str| {
+        std::env::var(variable)
+            .ok()
+            .map(|named| named.trim().to_owned())
+            .filter(|named| !named.is_empty())
+    };
+    said(AGENT)
+        .or_else(|| {
+            let older = said(AGENT_WAS);
+            if older.is_some() {
+                the_old_name_was_used();
+            }
+            older
+        })
         .map_or_else(
             balthasar_model::AgentId::main,
             balthasar_model::AgentId::new,
@@ -304,7 +355,7 @@ mod agents {
 
     #[test]
     fn a_peer_that_names_itself_is_read_from_its_own_block() {
-        let body = environ(&["PATH=/usr/bin", "BALTHASAR_AGENT=zeta-pi", "HOME=/home/x"]);
+        let body = environ(&["PATH=/usr/bin", "MAGI_MEMORY_AGENT=zeta-pi", "HOME=/home/x"]);
         assert_eq!(
             named_in(&body).map(|id| id.to_string()),
             Some("zeta-pi".to_owned())
@@ -312,11 +363,33 @@ mod agents {
     }
 
     #[test]
+    fn a_peer_still_naming_its_agent_the_old_way_is_read_all_the_same() {
+        // A harness that has not been rebuilt sets only this, and its turns must not land under
+        // `main` while it thinks they are landing under an agent.
+        let body = environ(&["PATH=/usr/bin", "BALTHASAR_AGENT=zeta-pi"]);
+        assert_eq!(
+            named_in(&body).map(|id| id.to_string()),
+            Some("zeta-pi".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_peer_that_sets_both_means_the_one_that_replaced_the_other() {
+        let body = environ(&["MAGI_MEMORY_AGENT=new", "BALTHASAR_AGENT=old"]);
+        assert_eq!(
+            named_in(&body).map(|id| id.to_string()),
+            Some("new".to_owned())
+        );
+    }
+
+    #[test]
     fn a_peer_that_names_nothing_is_none_rather_than_main() {
         for body in [
             environ(&["PATH=/usr/bin"]),
+            environ(&["MAGI_MEMORY_AGENT="]),
+            environ(&["MAGI_MEMORY_AGENT=   "]),
             environ(&["BALTHASAR_AGENT="]),
-            environ(&["BALTHASAR_AGENT=   "]),
+            environ(&["MAGI_MEMORY_AGENT=", "BALTHASAR_AGENT="]),
             Vec::new(),
         ] {
             assert_eq!(
@@ -330,8 +403,17 @@ mod agents {
 
     #[test]
     fn a_name_is_not_matched_on_a_variable_that_merely_ends_in_it() {
-        let body = environ(&["MY_BALTHASAR_AGENT=wrong"]);
-        assert_eq!(named_in(&body), None);
+        for body in [
+            environ(&["MY_MAGI_MEMORY_AGENT=wrong"]),
+            environ(&["MY_BALTHASAR_AGENT=wrong"]),
+        ] {
+            assert_eq!(
+                named_in(&body),
+                None,
+                "{:?}",
+                String::from_utf8_lossy(&body)
+            );
+        }
     }
 }
 
