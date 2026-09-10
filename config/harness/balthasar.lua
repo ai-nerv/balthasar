@@ -20,6 +20,7 @@ local M = { _NAME = "balthasar.harness", _VERSION = 1 }
 -- once to recall -- which is not how a socket that gets polled occasionally is used.
 local held = nil
 local tried = false
+local opened = nil
 
 --- Load the stub, given whatever transport this host lends.
 local function stub(source, transport)
@@ -28,13 +29,31 @@ local function stub(source, transport)
   return chunk(transport)
 end
 
+--- The held connection, dialled again if a call gave up on one.
+---
+--- The client closes its handle on any read it could not finish, because the reply it abandoned
+--- is still on the wire and would answer the next call. Holding the dead one instead would cost
+--- the whole session's memory over a single slow first call -- and the first `observe` of a new
+--- session waits for balthasar to open its store.
+---
+--- Once. A balthasar that is not there is not there, which is what `tried` already says.
+local function reach()
+  if not held or held.handle then return held end
+  held = nil
+  if not opened then return nil end
+  local client = stub(opened.source, opened.transport)
+  held = client and client.connect(opened.where) or nil
+  return held
+end
+
 --- Connect once, and remember that we failed so every turn does not pay for a retry.
 ---
 --- `opts.source` is the stub. `opts.transport` is the socket primitive. `opts.retry` asks for
 --- one more attempt, for a harness that knows balthasar has just been started.
 function M.open(opts)
   opts = opts or {}
-  if held then return held end
+  local live = reach()
+  if live then return live end
   if tried and not opts.retry then return nil, "balthasar was not reachable earlier this session" end
   tried = true
 
@@ -44,13 +63,13 @@ function M.open(opts)
 
   local mem, refused = client.connect(opts.where)
   if not mem then return nil, refused end
-  held = mem
+  opened, held = opts, mem
   return held
 end
 
 --- Whether balthasar is answering.
 function M.live()
-  return held ~= nil
+  return reach() ~= nil
 end
 
 --- Stream one turn as it settles.
@@ -59,8 +78,9 @@ end
 --- make a turn wait. What is lost when balthasar is down is one turn's observation, and the harness
 --- still has its own transcript to backfill from later.
 function M.observe(session, turn)
-  if not held then return false end
-  local ok = pcall(function() return held.observe(session, turn) end)
+  local mem = reach()
+  if not mem then return false end
+  local ok = pcall(function() return mem.observe(session, turn) end)
   return ok
 end
 
@@ -70,16 +90,18 @@ end
 --- before balthasar existed. That is the whole degradation story: not an error to handle, an absence
 --- to carry on through.
 function M.plan(session, window)
-  if not held then return nil end
-  local ok, answer = pcall(function() return held.plan(session, window) end)
+  local mem = reach()
+  if not mem then return nil end
+  local ok, answer = pcall(function() return mem.plan(session, window) end)
   if not ok or not answer then return nil end
   return answer
 end
 
 --- Ask what is worth injecting for this turn.
 function M.recall(query, opts)
-  if not held then return nil end
-  local ok, answer = pcall(function() return held.recall(query, opts) end)
+  local mem = reach()
+  if not mem then return nil end
+  local ok, answer = pcall(function() return mem.recall(query, opts) end)
   if not ok then return nil end
   return answer
 end
@@ -89,8 +111,9 @@ end
 --- Capped at the far end by who the kernel says is calling: a harness proposes at a peer's
 --- weight, cannot pin, and cannot reach the global store. It contributes; it does not decide.
 function M.remember(text, opts)
-  if not held then return nil end
-  local ok, answer = pcall(function() return held.remember(text, opts) end)
+  local mem = reach()
+  if not mem then return nil end
+  local ok, answer = pcall(function() return mem.remember(text, opts) end)
   if not ok then return nil end
   return answer
 end
