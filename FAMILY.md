@@ -143,6 +143,32 @@ a reply goes back in whichever the call arrived in.
 
 ---
 
+## A caller that abandons a call abandons the connection
+
+**A reply says nothing about which call it answers.** There is no request id in the shape above,
+and adding one would move `family` for every program at once. What holds the two ends in step is
+position: one reply per call, in the order the calls were made.
+
+So a caller that gives up on a call — a timeout, a cancelled future, a `recv` that returned an
+error — has left a request on the wire whose reply is still coming. **It may not make another call
+on that connection.** The abandoned reply arrives first and is read as the next call's answer, and
+every answer after that belongs to the call before it. A write is told it landed by somebody else's
+reply; a verb is refused with an error it cannot produce.
+
+That is not hypothetical and it is not cheap to find. magi timed out a first call against a
+balthasar that was still opening its store, kept the connection, and then read the `plan` verb's
+refusal as the answer to `observe` — in 96 microseconds, from a call it had never made. The
+transcript it believed it had written was dropped, and `--resume` came back empty. It read as a
+flaky test for weeks.
+
+The rule is one line to obey: **on any failure to read a whole reply, close the connection.** Dial
+again for the next call; a connect is cheaper than a conversation that is quietly one behind. A
+client that holds its handle across calls — which is what the family's own clients do, and what
+`client` serves to every consumer — must do this at *every* point a read can fail, including the
+one that has already consumed a frame header and would otherwise desynchronise on a partial frame.
+
+---
+
 ## Extending one — the same directories everywhere
 
 All four are Lua at the edges, and all four discover what is installed the same way. It is
