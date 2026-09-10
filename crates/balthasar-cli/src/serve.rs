@@ -97,6 +97,12 @@ pub fn serve(
 
     let served = listener.serve(|peer: &Peer, request: Request| {
         let named = named_by_kernel(peer).unwrap_or_else(|| fallback.clone());
+        if !has_room(opened.len(), opened.contains_key(&named), named == fallback) {
+            return Reply::refused(format!(
+                "this balthasar already holds stores for {TOOLS} tools and will not open one for \
+                 '{named}' — start a balthasar of its own for it"
+            ));
+        }
         let held = match opened.entry(named.clone()) {
             std::collections::hash_map::Entry::Occupied(seat) => seat.into_mut(),
             std::collections::hash_map::Entry::Vacant(seat) => {
@@ -261,6 +267,19 @@ fn agent_here() -> balthasar_model::AgentId {
         )
 }
 
+/// How many tools one daemon opens a store for.
+///
+/// Nothing authenticates the kernel-given name that picks one, so without a ceiling any program
+/// reaching the socket mints directories and holds descriptors until one of the two runs out.
+const TOOLS: usize = 8;
+
+/// Whether a daemon already holding `open` tools will open one more.
+///
+/// `own` keeps a seat, so a crowd of peers cannot lock the owner out of its own memory.
+fn has_room(open: usize, held: bool, own: bool) -> bool {
+    held || open < if own { TOOLS } else { TOOLS - 1 }
+}
+
 /// Which tool a connection belongs to, as the kernel names it.
 ///
 /// A peer the kernel will not name falls back to whatever the daemon was started as.
@@ -313,5 +332,36 @@ mod agents {
     fn a_name_is_not_matched_on_a_variable_that_merely_ends_in_it() {
         let body = environ(&["MY_BALTHASAR_AGENT=wrong"]);
         assert_eq!(named_in(&body), None);
+    }
+}
+
+#[cfg(test)]
+mod tools {
+    use super::{TOOLS, has_room};
+
+    #[test]
+    fn several_real_tools_share_one_daemon() {
+        // The case the ceiling must not break: a family of programs and a harness or two.
+        for open in 0..TOOLS - 1 {
+            assert!(has_room(open, false, false), "{open} tools in");
+        }
+    }
+
+    #[test]
+    fn an_unknown_peer_stops_minting_stores_at_the_ceiling() {
+        // Every new name is a directory on disk and descriptors held for the daemon's lifetime.
+        assert!(!has_room(TOOLS - 1, false, false));
+        assert!(!has_room(TOOLS, false, false));
+    }
+
+    #[test]
+    fn a_tool_already_open_costs_nothing_to_answer_again() {
+        assert!(has_room(TOOLS, true, false), "its store is already open");
+    }
+
+    #[test]
+    fn a_crowd_of_peers_cannot_lock_the_owner_out_of_its_own_memory() {
+        assert!(has_room(TOOLS - 1, false, true));
+        assert!(!has_room(TOOLS - 1, false, false));
     }
 }
