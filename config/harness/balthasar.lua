@@ -5,10 +5,15 @@
 -- listening and nothing can be spawned, each returns nil and the harness carries on exactly as
 -- it did before. A memory layer that can brick the agent is worse than no memory layer.
 --
---   local memory = require("balthasar.harness")     -- or load this file
---   memory.observe(session, turn)              -- stream, fire and forget
---   local plan = memory.plan(session, window)  -- what to send
---   local text = memory.context(turn, budget)  -- what to inject
+--   local memory = require("balthasar.harness")      -- or load this file
+--   memory.observe(session, turn)               -- stream, fire and forget
+--   local plan = memory.plan(session, window)   -- what to send
+--   local found = memory.recall(query, opts)    -- what is worth injecting
+--
+-- `observe` and `plan` are named through the connection's own `call` rather than taken from the
+-- client library's surface table. That table is what a *peer* may ask of your memory, and
+-- streaming turns into a scrollback is not a peer's business; a harness installs this file
+-- deliberately and asks for the two verbs by name.
 --
 -- The client stub arrives as source. A harness gets it three ways, and a sandboxed one can
 -- only use the first two: from a sibling that already carries it, from `balthasar lua-api`, or from
@@ -80,8 +85,10 @@ end
 function M.observe(session, turn)
   local mem = reach()
   if not mem then return false end
-  local ok = pcall(function() return mem.observe(session, turn) end)
-  return ok
+  -- `observe` answers with no values at all, so a refusal and a success look identical in the
+  -- first one. The reason is the second, and its absence is what says the turn was recorded.
+  local ok, _, why = pcall(function() return mem:call("observe", session, turn) end)
+  return ok and why == nil
 end
 
 --- Ask what to send.
@@ -92,7 +99,7 @@ end
 function M.plan(session, window)
   local mem = reach()
   if not mem then return nil end
-  local ok, answer = pcall(function() return mem.plan(session, window) end)
+  local ok, answer = pcall(function() return mem:call("plan", session, window) end)
   if not ok or not answer then return nil end
   return answer
 end

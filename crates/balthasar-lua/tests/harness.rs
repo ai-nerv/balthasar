@@ -161,3 +161,122 @@ fn a_call_that_timed_out_costs_a_connect_and_not_the_session() {
     ));
     assert_eq!(answer, "nil/a thing", "{answer}");
 }
+
+/// A peer that answers every call by naming every call it has been asked.
+///
+/// A harness verb that never reaches the wire and one the far end refused both leave the harness
+/// with the same nothing, so proving the first requires asking the far end what it heard.
+fn echoing() -> Bound {
+    use std::io::{Read, Write};
+
+    let path = std::env::temp_dir().join(format!("bh-echo-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+
+    std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().expect("accept");
+        let mut heard: Vec<String> = Vec::new();
+        loop {
+            let mut head = [0_u8; 4];
+            if socket.read_exact(&mut head).is_err() {
+                return;
+            }
+            let mut body = vec![0_u8; u32::from_be_bytes(head) as usize];
+            if socket.read_exact(&mut body).is_err() {
+                return;
+            }
+            let body = String::from_utf8_lossy(&body).into_owned();
+            let called = body
+                .split_once("\"call\":\"")
+                .and_then(|(_, rest)| rest.split_once('"'))
+                .map(|(name, _)| name.to_owned())
+                .unwrap_or_default();
+            heard.push(called);
+            let row = format!(
+                r#"{{"ok":true,"result":[{{"heard":"{}"}}],"n":1}}"#,
+                heard.join(",")
+            );
+            let mut out = (row.len() as u32).to_be_bytes().to_vec();
+            out.extend_from_slice(row.as_bytes());
+            if socket.write_all(&out).is_err() {
+                return;
+            }
+        }
+    });
+    Bound(path)
+}
+
+#[test]
+fn observing_and_planning_reach_balthasar_rather_than_dying_in_the_client() {
+    // The two verbs a harness exists to call. Bound to the client's own surface table, neither
+    // was there, and every `observe` a harness made was swallowed by the `pcall` around it.
+    let bound = echoing();
+    let answer = through(&format!(
+        "(function() \
+               harness.open({{ source = {CLIENT:?}, transport = balthasar.stream, \
+                 where = {{ path = {path:?}, timeout_ms = 200 }} }}) \
+               local kept = harness.observe('s', {{ text = 'a turn' }}) \
+               local plan = harness.plan('s', {{}}) \
+               return tostring(kept) .. '/' .. tostring(plan and plan.heard) \
+             end)()",
+        path = bound.0.to_string_lossy()
+    ));
+    // The connect handshake asks `verbs` first, so what matters is the tail.
+    assert!(
+        answer.starts_with("true/"),
+        "the turn was not recorded: {answer}"
+    );
+    assert!(answer.ends_with("observe,plan"), "{answer}");
+}
+
+/// A peer that answers the handshake and refuses everything after it.
+fn refusing() -> Bound {
+    use std::io::{Read, Write};
+
+    let path = std::env::temp_dir().join(format!("bh-no-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+
+    std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().expect("accept");
+        let mut first = true;
+        loop {
+            let mut head = [0_u8; 4];
+            if socket.read_exact(&mut head).is_err() {
+                return;
+            }
+            let mut body = vec![0_u8; u32::from_be_bytes(head) as usize];
+            if socket.read_exact(&mut body).is_err() {
+                return;
+            }
+            let row = if std::mem::take(&mut first) {
+                r#"{"ok":true,"result":["verbs"],"n":1}"#.to_owned()
+            } else {
+                r#"{"ok":false,"error":"this balthasar keeps no scrollback","fault":"failed"}"#
+                    .to_owned()
+            };
+            let mut out = (row.len() as u32).to_be_bytes().to_vec();
+            out.extend_from_slice(row.as_bytes());
+            if socket.write_all(&out).is_err() {
+                return;
+            }
+        }
+    });
+    Bound(path)
+}
+
+#[test]
+fn a_refused_observation_says_the_turn_was_not_recorded() {
+    // `observe` answers with no values, so a refusal arrives looking exactly like a success. A
+    // harness told `true` here would carry on and write the next turn over a hole.
+    let bound = refusing();
+    let answer = through(&format!(
+        "(function() \
+               harness.open({{ source = {CLIENT:?}, transport = balthasar.stream, \
+                 where = {{ path = {path:?}, timeout_ms = 200 }} }}) \
+               return harness.observe('s', {{ text = 'a turn' }}) \
+             end)()",
+        path = bound.0.to_string_lossy()
+    ));
+    assert_eq!(answer, "false", "{answer}");
+}
