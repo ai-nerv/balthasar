@@ -75,16 +75,17 @@ if ! TMPDIR="$root/tmp" \
 fi
 
 # What a *product* is entitled to leave, as paths relative to the root. The six directories are
-# the ones made above; `run/balthasar` is where a listener binds and `balthasar.tool` is the
-# descriptor a caller with no socket spawns from, both of which balthasar writes on purpose and
-# neither of which is a test's mess. `tmp/balthasar-<uid>` is the same runtime directory under its
-# fallback name, for a test that unsets `$XDG_RUNTIME_DIR` to see what happens.
+# the ones made above; `run/memory` and `run/balthasar` are where a listener binds -- an instance
+# answers under the role's name and under the program's, for one release -- and `balthasar.tool` is
+# the descriptor a caller with no socket spawns from. All of them balthasar writes on purpose and
+# none of them a test's mess. `tmp/<name>-<uid>` is the same pair under their fallback names, for a
+# test that unsets `$XDG_RUNTIME_DIR` to see what happens.
 #
 # Anything else — a socket, a store, a scratch directory, a stray file — is a test that did not
 # clean up after itself, and on the failing run it never will.
 left=$(
   cd "$root" && find . -mindepth 1 | sed 's|^\./||' | grep -vxE \
-    'tmp|run|data|config|state|cache|run/balthasar|run/balthasar/balthasar\.tool|tmp/balthasar-[0-9]+' \
+    'tmp|run|data|config|state|cache|run/(memory|balthasar)|run/(memory|balthasar)/balthasar\.tool|tmp/(memory|balthasar)-[0-9]+' \
     || true
 )
 

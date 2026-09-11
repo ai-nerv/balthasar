@@ -14,6 +14,7 @@ use std::os::unix::net::UnixStream;
 /// Serve a store on a socket for as long as the returned handle lives.
 struct Serving {
     path: std::path::PathBuf,
+    also: Vec<std::path::PathBuf>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -23,6 +24,14 @@ impl Serving {
         let instance = format!("{name}-{}", std::process::id());
         let listener = Listener::bind(&instance).expect("bind");
         let path = listener.path().to_owned();
+        // Every other name it bound. One instance answers under the role's name and under the
+        // program's, and a file left behind under either is one the next instance must disprove.
+        let also: Vec<std::path::PathBuf> = listener
+            .paths()
+            .into_iter()
+            .skip(1)
+            .map(std::path::Path::to_owned)
+            .collect();
 
         let mut store = Store::ephemeral().expect("store");
         for text in seed {
@@ -68,6 +77,7 @@ impl Serving {
 
         Self {
             path,
+            also,
             stop,
             thread: Some(thread),
         }
@@ -82,6 +92,9 @@ impl Drop for Serving {
         // wait on an accept that never returns.
         let _ = self.thread.take();
         let _ = std::fs::remove_file(&self.path);
+        for path in &self.also {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 

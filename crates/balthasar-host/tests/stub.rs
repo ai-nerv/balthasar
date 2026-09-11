@@ -19,19 +19,23 @@ const NOW: balthasar_model::Timestamp = 1_756_000_000;
 /// test and its `Drop` never runs. Every test here used to unlink on its last line instead, which
 /// an `assert!` unwinds straight past — so a *failing* run left `api@stub-*.sock` in the runtime
 /// directory permanently, and that directory is shared with every balthasar on the machine.
-struct Serving(std::path::PathBuf);
+struct Serving(Vec<std::path::PathBuf>);
 
 impl std::ops::Deref for Serving {
     type Target = std::path::Path;
 
     fn deref(&self) -> &std::path::Path {
-        &self.0
+        &self.0[0]
     }
 }
 
 impl Drop for Serving {
+    /// Every name it bound, not only the one a caller dials: one instance answers under the role's
+    /// name and under the program's, and the second is as much a leak as the first.
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        for path in &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -39,7 +43,11 @@ impl Drop for Serving {
 fn serving(name: &str, seed: &[&str]) -> Serving {
     let instance = format!("stub-{name}-{}", std::process::id());
     let listener = Listener::bind(&instance).expect("bind");
-    let path = listener.path().to_owned();
+    let paths: Vec<std::path::PathBuf> = listener
+        .paths()
+        .into_iter()
+        .map(std::path::Path::to_owned)
+        .collect();
 
     let mut store = Store::ephemeral().expect("store");
     for text in seed {
@@ -80,7 +88,7 @@ fn serving(name: &str, seed: &[&str]) -> Serving {
             balthasar_host::answer(&mut at, &Door::Socket(peer.clone()), &request)
         });
     });
-    Serving(path)
+    Serving(paths)
 }
 
 /// Run a script with the stub loaded and connected, and take what it left in `balthasar.answer`.
@@ -246,7 +254,7 @@ fn stalling(name: &str, early: usize) -> Serving {
             let _ = socket.write_all(&framed(r#"{"ok":true,"result":["SECOND"],"n":1}"#));
         }
     });
-    Serving(path)
+    Serving(vec![path])
 }
 
 /// Make two calls over one held handle, having given up on the first, and say what came back.
