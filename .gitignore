@@ -29,3 +29,6 @@ compile_commands.json
 /.store
 /magi/
 /balthasar/
+# The same, named `<label>-<hash>` at the root (e.g. `tools_live-d29b16529e9723ca`): a test
+# scope's store, where the 16-hex hash makes each run a new directory.
+/*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/
