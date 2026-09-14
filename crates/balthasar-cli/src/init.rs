@@ -9,8 +9,9 @@ use std::path::PathBuf;
 /// Make this directory the root of its own memory.
 #[derive(Debug, Parser)]
 pub struct Args {
-    /// Where, if not here.
-    #[arg(value_name = "DIR")]
+    /// Where, if not here. Its own id: `at` is the global `--at` seconds, and two arguments of one
+    /// name and different types made `init DIR` fail before it did anything.
+    #[arg(id = "dir", value_name = "DIR")]
     at: Option<PathBuf>,
 
     #[command(flatten)]

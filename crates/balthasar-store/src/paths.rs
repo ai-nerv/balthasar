@@ -1,8 +1,8 @@
 //! Where a store lives, and which store a directory belongs to.
 //!
 //! ```text
-//! <project>/balthasar/<tool>/project.db                   the checkout's memory, for that tool
-//! <project>/balthasar/<tool>/<session>/<agent>/memory.db  that agent's scratch, in that run
+//! <project>/.balthasar/<tool>/project.db                   the checkout's memory, for that tool
+//! <project>/.balthasar/<tool>/<session>/<agent>/memory.db  that agent's scratch, in that run
 //! ~/.local/share/balthasar/<tool>/global.db               yours, everywhere
 //! ```
 //!
@@ -13,11 +13,24 @@
 use balthasar_model::{AgentId, ScopeId, SessionId};
 use std::path::{Path, PathBuf};
 
-/// The directory a project keeps its memory in.
-pub const HOME: &str = "balthasar";
+/// The directory a project keeps its memory in: hidden, like the rest of a checkout's tool state.
+pub const HOME: &str = ".balthasar";
 
-/// Kept out of a checkout by default. The project's own memory is offered commented out.
+/// Where it was kept before, in plain sight. A store found there is moved to [`HOME`].
+const LEGACY_HOME: &str = "balthasar";
+
+/// Kept out of a checkout entirely, so it never shows in `git status`. Keeping the project's own
+/// memory is offered commented out.
 const IGNORE_BODY: &str = "\
+# balthasar's memory for this checkout. None of it is committed unless you mean it to be: to keep
+# the project's own memory, replace `*` with the two lines under it.
+*
+# */*/
+# !*/project.db
+";
+
+/// What an older balthasar wrote there. Found as it was left, it is replaced; edited, it is not.
+const OLD_IGNORE_BODY: &str = "\
 # Session stores: churn, and personal to whoever ran them.
 */*/
 
@@ -123,8 +136,20 @@ pub fn project_home(scope: &ScopeId) -> Option<PathBuf> {
         return None;
     }
     let at = Path::new(scope.as_str());
-    let has = at.is_absolute() && (is_home(&at.join(HOME)) || at.join(".git").exists());
-    has.then(|| at.join(HOME))
+    if !at.is_absolute() {
+        return None;
+    }
+    let home = at.join(HOME);
+    // A store under the old, visible name is moved rather than started again beside it; one that
+    // cannot be moved is used where it is, so no memory is lost to the rename.
+    let legacy = at.join(LEGACY_HOME);
+    if !home.exists() && is_home(&legacy) {
+        if std::fs::rename(&legacy, &home).is_err() {
+            return Some(legacy);
+        }
+        let _ = keep_out(&home);
+    }
+    (is_home(&home) || at.join(".git").exists()).then_some(home)
 }
 
 /// Whether `dir` is a store home rather than a directory that shares its name.
@@ -132,16 +157,24 @@ fn is_home(dir: &Path) -> bool {
     crate::layout::is_home(dir)
 }
 
-/// Create a store home, marking it and keeping it out of the checkout. Overwrites neither an
-/// existing `.gitignore` nor an existing marker; layout moves are [`crate::layout`]'s to record.
+/// Create a store home, marking it and keeping it out of the checkout. Overwrites neither a
+/// `.gitignore` somebody wrote nor an existing marker; layout moves are [`crate::layout`]'s to record.
 pub fn make_home(home: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(home)?;
     let marker = home.join(crate::layout::MARKER);
     if !marker.exists() {
         std::fs::write(&marker, crate::layout::marker_body())?;
     }
+    keep_out(home)
+}
+
+/// Write the `.gitignore` a store home keeps: where there is none, or where the one there is what
+/// an older balthasar wrote and nobody has touched since.
+fn keep_out(home: &Path) -> std::io::Result<()> {
     let ignore = home.join(".gitignore");
-    if !ignore.exists() {
+    let ours = !ignore.exists()
+        || std::fs::read_to_string(&ignore).is_ok_and(|said| said == OLD_IGNORE_BODY);
+    if ours {
         std::fs::write(&ignore, IGNORE_BODY)?;
     }
     Ok(())
@@ -279,7 +312,8 @@ fn home_below(from: &Path, ceiling: impl Fn(&Path) -> bool) -> Option<PathBuf> {
         if ceiling(at) {
             return None;
         }
-        if is_home(&at.join(HOME)) {
+        // Under the old name too: that is a project whose store has not been moved yet.
+        if is_home(&at.join(HOME)) || is_home(&at.join(LEGACY_HOME)) {
             return Some(at.to_owned());
         }
         at = at.parent()?;
@@ -480,7 +514,7 @@ mod tests {
         let path = scope_path(&scope, &Tool::default());
 
         assert!(path.starts_with(&root), "{}", path.display());
-        assert_eq!(path, root.join("balthasar/balthasar/project.db"));
+        assert_eq!(path, root.join(HOME).join("balthasar/project.db"));
     }
 
     #[test]
@@ -624,7 +658,10 @@ mod tests {
         let home = root.join(HOME);
         make_home(&home).expect("make");
         let body = std::fs::read_to_string(home.join(".gitignore")).expect("read");
-        assert!(body.contains("*/*/"), "sessions are ignored");
+        assert!(
+            body.lines().any(|line| line == "*"),
+            "none of it shows in git"
+        );
         assert!(
             body.contains("# !*/project.db"),
             "committing is offered, not chosen"
@@ -635,6 +672,32 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(home.join(".gitignore")).expect("read"),
             "mine\n"
+        );
+    }
+
+    #[test]
+    fn a_store_under_the_old_name_is_moved_and_kept() {
+        // It used to be a visible `balthasar/` in every checkout, showing in `git status`.
+        let root = scratch("legacy");
+        std::fs::create_dir_all(root.join(".git")).expect("git");
+        let old = root.join(LEGACY_HOME);
+        make_home(&old).expect("make");
+        std::fs::write(old.join(".gitignore"), OLD_IGNORE_BODY).expect("the old ignore");
+        std::fs::create_dir_all(old.join("magi")).expect("tool");
+        std::fs::write(old.join("magi/project.db"), "memory").expect("db");
+
+        let scope = ScopeId::new(root.to_string_lossy().into_owned());
+        let home = project_home(&scope).expect("a home");
+        assert_eq!(home, root.join(HOME));
+        assert!(!old.exists(), "moved, not copied");
+        assert_eq!(
+            std::fs::read_to_string(home.join("magi/project.db")).expect("kept"),
+            "memory"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join(".gitignore")).expect("ignore"),
+            IGNORE_BODY,
+            "the old default is brought up to date"
         );
     }
 

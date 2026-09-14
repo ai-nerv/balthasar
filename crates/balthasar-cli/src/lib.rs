@@ -411,4 +411,11 @@ mod tests {
         let cli = Cli::try_parse_from(["balthasar"]).expect("parse");
         assert_eq!(cli.scope, "project");
     }
+
+    #[test]
+    fn init_takes_a_directory_beside_the_global_at() {
+        // Both were once `at`, a path and a number of seconds: `init DIR` failed before it ran.
+        let cli = Cli::try_parse_from(["balthasar", "init", "/x"]).expect("parse");
+        assert!(matches!(cli.what, Some(What::Init(_))));
+    }
 }
