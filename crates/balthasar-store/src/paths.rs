@@ -142,8 +142,9 @@ pub fn project_home(scope: &ScopeId) -> Option<PathBuf> {
     let home = at.join(HOME);
     // A store under the old, visible name is moved rather than started again beside it; one that
     // cannot be moved is used where it is, so no memory is lost to the rename.
+    // Never a checkout that shares the name: in a superproject `balthasar/` is the code itself.
     let legacy = at.join(LEGACY_HOME);
-    if !home.exists() && is_home(&legacy) {
+    if !home.exists() && is_home(&legacy) && !legacy.join(".git").exists() {
         if std::fs::rename(&legacy, &home).is_err() {
             return Some(legacy);
         }
@@ -699,6 +700,21 @@ mod tests {
             IGNORE_BODY,
             "the old default is brought up to date"
         );
+    }
+
+    #[test]
+    fn a_checkout_under_the_old_name_is_never_moved() {
+        // A superproject whose `balthasar/` is the code, with a store once written into it.
+        let root = scratch("legacy-checkout");
+        std::fs::create_dir_all(root.join(".git")).expect("git");
+        let code = root.join(LEGACY_HOME);
+        make_home(&code).expect("make");
+        std::fs::write(code.join(".git"), "gitdir: ../.git/modules/balthasar").expect("gitfile");
+        std::fs::write(code.join("Cargo.toml"), "[workspace]").expect("code");
+
+        let scope = ScopeId::new(root.to_string_lossy().into_owned());
+        assert_eq!(project_home(&scope), Some(root.join(HOME)));
+        assert!(code.join("Cargo.toml").exists(), "the checkout is where it was");
     }
 
     #[test]
