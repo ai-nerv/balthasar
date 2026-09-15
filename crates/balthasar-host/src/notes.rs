@@ -421,6 +421,17 @@ pub(crate) fn settle(
             };
             let before = pinned(scrollback)?;
             let made = propose(scrollback, session, &job.id, &ops, keeping, at.now)?;
+            // A rule was laid down and nothing came back: asked once more, since a small model sometimes
+            // answers an obvious rule with an empty list, and nothing later says it again.
+            if job.kind == "extract"
+                && ops.is_empty()
+                && job.context["again"].is_null()
+                && laid_down(job.spec["input"].as_str().unwrap_or_default())
+            {
+                let mut context = job.context.clone();
+                context["again"] = json!(true);
+                scrollback.queue_job(session, "extract", &job.spec, &context, at.now)?;
+            }
             if job.kind == "extract" {
                 let since = scrollback.counter(&project(), "extracts")?.unwrap_or(0);
                 scrollback.set_counter(&project(), "extracts", since + 1)?;

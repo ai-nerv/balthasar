@@ -474,3 +474,27 @@ fn a_plain_request_never_unpins_a_rule() {
         "a plain request unpinned the rule: {notes}"
     );
 }
+
+#[test]
+fn an_empty_answer_to_a_stated_rule_is_asked_again() {
+    // A rule said once and answered with an empty list was never recorded: nothing after it says
+    // the rule again.
+    let mut harness = Harness::new();
+    harness.turn(0, "a firm rule: indent with tabs, never spaces");
+    let laid = harness.layout(0);
+    harness.answer(&laid["jobs"], "extract", json!({ "ops": [] }));
+    let again = harness.rows("jobs", json!({}));
+    let retry = again
+        .iter()
+        .find(|j| j["kind"] == "extract")
+        .expect("the extraction asked once more")
+        .clone();
+    harness.answer(&json!([retry]), "extract", json!({ "ops": [] }));
+    assert!(
+        harness
+            .rows("jobs", json!({}))
+            .iter()
+            .all(|j| j["kind"] != "extract"),
+        "asked a third time"
+    );
+}
