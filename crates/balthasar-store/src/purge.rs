@@ -107,10 +107,13 @@ pub fn purge_run(
         "DELETE FROM turn WHERE session = ?1",
         params![session.as_str()],
     )?;
-    scrollback.db().execute(
-        "DELETE FROM run WHERE session = ?1",
-        params![session.as_str()],
-    )?;
+    // Summaries, job inputs and proposed layouts quote the turns, so they go with them.
+    for table in ["layout", "summary", "prompt", "job", "counter", "run"] {
+        scrollback.db().execute(
+            &format!("DELETE FROM {table} WHERE session = ?1"),
+            params![session.as_str()],
+        )?;
+    }
     Ok(gone)
 }
 

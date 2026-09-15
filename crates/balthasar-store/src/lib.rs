@@ -14,6 +14,7 @@ mod jobs;
 mod laid;
 mod layout;
 mod mint;
+mod notes;
 mod paths;
 mod purge;
 mod read;
@@ -36,6 +37,7 @@ pub use export::Row as TrainingRow;
 pub use jobs::{Job, JobState};
 pub use laid::{Prompt, Proposal, Summary};
 pub use mint::mint;
+pub use notes::{Change, Note};
 pub use paths::{
     HOME, Tool, data_dir, home_of, make_home, project_home, run_dir_in, scope_of, scope_path,
     session_dir, session_dir_in, session_path, tools_in,
