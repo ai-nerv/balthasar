@@ -219,7 +219,14 @@ pub fn lay(rules: &Rules, ask: &Ask, rows: &[Row], held: &Held, factor: f64) -> 
                     && r.stub_tokens < r.tokens
             })
             .collect();
-        candidates.sort_by(|a, b| b.tokens.cmp(&a.tokens).then(a.cursor.cmp(&b.cursor)));
+        // The prompt in progress reads last: what it just read is what it is working from.
+        let asked = shown.iter().rev().find(|r| r.user).map_or(0, |r| r.cursor);
+        candidates.sort_by(|a, b| {
+            (a.cursor >= asked)
+                .cmp(&(b.cursor >= asked))
+                .then(b.tokens.cmp(&a.tokens))
+                .then(a.cursor.cmp(&b.cursor))
+        });
         let before = conversation;
         let mut fresh = Vec::new();
         for row in candidates {

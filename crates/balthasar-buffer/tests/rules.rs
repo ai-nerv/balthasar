@@ -109,6 +109,30 @@ fn over_prune_at_the_largest_old_result_is_stubbed_first() {
 }
 
 #[test]
+fn the_prompt_in_progress_keeps_its_reads_while_older_ones_are_left() {
+    // Its largest reads went first, and the model lost track of what it had just read.
+    let mut rows = vec![user(0, 50)];
+    for cursor in [1, 3] {
+        rows.push(said(cursor, 100));
+        rows.push(result(cursor + 1, cursor, 30_000));
+    }
+    rows.push(user(5, 50));
+    rows.push(said(6, 100));
+    rows.push(result(7, 6, 50_000));
+    for cursor in [8, 10, 12] {
+        rows.push(said(cursor, 100));
+        rows.push(result(cursor + 1, cursor, 2_000));
+    }
+    let laid = lay(&Rules::default(), &ask(), &rows, &Held::default(), 1.0);
+    let stubbed = stubs(&laid.slots);
+    assert!(
+        stubbed.contains(&2) && !stubbed.contains(&7),
+        "{stubbed:?}: {}",
+        laid.why
+    );
+}
+
+#[test]
 fn a_stub_that_frees_too_little_waits_for_a_batch() {
     let mut rows = vec![user(0, 50), said(1, 103_000), result(2, 1, 2_000)];
     rows.extend(session(&[])[1..].iter().cloned().map(|mut r| {
