@@ -393,3 +393,23 @@ fn a_second_pinned_rule_has_the_notes_tidied_at_once() {
         "a second pinned rule should have the notes tidied"
     );
 }
+
+#[test]
+fn a_request_for_one_piece_of_work_pins_nothing() {
+    // "About 900 words, then stop" was pinned from the fifth chapter request as if it were a rule.
+    let mut harness = Harness::new();
+    harness.turn(0, "Write only chapter 5 now, about 900 words, then stop.");
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "add", "title": "Target about 900 words",
+                          "text": "Each chapter should be about 900 words.", "pinned": true }] }),
+    );
+    let notes = harness.one("notes", json!({}));
+    assert!(
+        notes["pinned"].as_array().is_none_or(Vec::is_empty),
+        "pinned from a plain request: {notes}"
+    );
+    assert_eq!(notes["deferred"][0]["title"], "Target about 900 words");
+}

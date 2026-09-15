@@ -9,6 +9,9 @@ use balthasar_model::{SessionId, Timestamp};
 use balthasar_store::{Change, Job, Note, Prompt, StoreError, Transcript, Turn, Want};
 use serde_json::{Value, json};
 
+mod ruling;
+use ruling::{laid_down, unpinned};
+
 /// `balthasar.memory`: how notes are kept.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Keeping {
@@ -410,6 +413,9 @@ pub(crate) fn settle(
                 said["ops"].as_array().cloned().unwrap_or_default(),
                 &at.scope.to_string(),
             );
+            let ruled =
+                job.kind != "extract" || laid_down(job.spec["input"].as_str().unwrap_or_default());
+            let ops = if ruled { ops } else { unpinned(ops) };
             let pinned = |s: &Transcript| -> Result<usize, StoreError> {
                 Ok(s.notes()?.iter().filter(|n| n.pinned).count())
             };
