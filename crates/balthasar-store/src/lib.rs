@@ -10,6 +10,7 @@ mod decay;
 mod entity;
 mod episode;
 mod export;
+mod jobs;
 mod laid;
 mod layout;
 mod mint;
@@ -32,6 +33,7 @@ pub use decay::{Faded, Weakened};
 pub use entity::{Entity, Kind as EntityKind, extract as entities_in, rarity};
 pub use episode::Episode;
 pub use export::Row as TrainingRow;
+pub use jobs::{Job, JobState};
 pub use laid::{Prompt, Proposal, Summary};
 pub use mint::mint;
 pub use paths::{

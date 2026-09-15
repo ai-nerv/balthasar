@@ -514,6 +514,7 @@ fn prepare(connection: &Connection) -> Result<(), StoreError> {
         }
     }
     connection.execute_batch(crate::laid::SCHEMA)?;
+    connection.execute_batch(crate::jobs::SCHEMA)?;
     Ok(())
 }
 
