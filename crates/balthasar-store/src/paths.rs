@@ -317,6 +317,11 @@ fn home_below(from: &Path, ceiling: impl Fn(&Path) -> bool) -> Option<PathBuf> {
         if is_home(&at.join(HOME)) || is_home(&at.join(LEGACY_HOME)) {
             return Some(at.to_owned());
         }
+        // A checkout with no store of its own is its own project: a store made above it, in a home
+        // directory say, does not reach down into somebody's repository.
+        if at.join(".git").exists() {
+            return None;
+        }
         at = at.parent()?;
     }
 }
@@ -490,6 +495,27 @@ mod tests {
         assert_eq!(home_below(&shared, stops), None);
 
         assert_eq!(home_below(&under, |_| false), Some(shared.clone()));
+    }
+
+    #[test]
+    fn a_store_above_a_repository_does_not_reach_into_it() {
+        let root = scratch("reach");
+        let top = root.join("top");
+        let project = top.join("down/project");
+        std::fs::create_dir_all(project.join(".git")).expect("mkdir");
+        std::fs::create_dir_all(project.join("src")).expect("mkdir");
+        make_home(&top.join(HOME)).expect("make");
+
+        assert_eq!(home_below(&project.join("src"), |_| false), None);
+        assert_eq!(
+            scope_of(&project.join("src")).as_str(),
+            project.to_string_lossy()
+        );
+        assert_eq!(
+            home_below(&top.join("down"), |_| false),
+            Some(top.clone()),
+            "outside any checkout the store still covers what is under it"
+        );
     }
 
     #[test]
