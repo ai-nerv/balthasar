@@ -504,7 +504,10 @@ fn a_request_for_one_piece_of_work_pins_nothing() {
         notes["pinned"].as_array().is_none_or(Vec::is_empty),
         "pinned from a plain request: {notes}"
     );
-    assert_eq!(notes["deferred"][0]["title"], "Target about 900 words");
+    assert!(
+        notes["deferred"].as_array().is_none_or(Vec::is_empty),
+        "a rule nobody laid down, kept unpinned: {notes}"
+    );
 }
 
 #[test]
