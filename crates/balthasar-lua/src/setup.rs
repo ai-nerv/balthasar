@@ -76,6 +76,8 @@ const SETTINGS: &[&str] = &[
     "witness",
     "tool",
     "scope",
+    "window",
+    "memory",
 ];
 
 /// What balthasar wants to be told. Everything has a default.
@@ -137,6 +139,21 @@ pub fn needs() -> Vec<Need> {
             about: "which memory to work in: global, project, or a path".to_owned(),
             required: false,
             default: Some(serde_json::json!("project")),
+        },
+        Need {
+            name: "window".to_owned(),
+            kind: Kind::Table,
+            about: "how each request is laid out: shares, thresholds, what stays word for word"
+                .to_owned(),
+            required: false,
+            default: None,
+        },
+        Need {
+            name: "memory".to_owned(),
+            kind: Kind::Table,
+            about: "how notes improve: review, extract_every, tidy_every, checklist".to_owned(),
+            required: false,
+            default: None,
         },
         Need {
             name: "source".to_owned(),
@@ -288,6 +305,19 @@ mod tests {
         let applied = configure_into(&path, "balthasar.promote_floor = 0.8").expect("runs");
         assert_eq!(applied.set, vec!["promote_floor".to_owned()], "{applied:?}");
         assert!(applied.whole());
+    }
+
+    #[test]
+    fn how_requests_are_laid_out_can_be_said_by_whoever_coordinates() {
+        let path = mine("window");
+        let applied = configure_into(
+            &path,
+            "balthasar.window = { prune_at = 0.5 }\nbalthasar.memory = { review = true }",
+        )
+        .expect("runs");
+        assert!(applied.whole(), "{applied:?}");
+        assert!(applied.set.contains(&"window".to_owned()), "{applied:?}");
+        assert!(applied.set.contains(&"memory".to_owned()), "{applied:?}");
     }
 
     #[test]
