@@ -20,6 +20,9 @@ const UNNAMED: &str = "default";
 /// What a reply is assumed to need when the harness does not say.
 const REPLY: u32 = 8_192;
 
+/// How far a provider's count may sit from the estimate and still teach the factor anything.
+const PLAUSIBLE: std::ops::RangeInclusive<f64> = 0.25..=3.0;
+
 /// `layout(session, request)`: what the next request should hold.
 pub fn layout(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
     let Some(session) = session_of(request) else {
@@ -162,7 +165,11 @@ fn lay_out(
     }
     // This prompt and what came before it, read in the background while it is answered: a rule
     // the person just stated reaches an agent started in this same prompt.
-    let asked_now = turns.iter().rev().find(|t| t.role == "user").map(|t| t.cursor);
+    let asked_now = turns
+        .iter()
+        .rev()
+        .find(|t| t.role == "user")
+        .map(|t| t.cursor);
     if ask.round == 0
         && let Some(upto) = asked_now
     {
@@ -550,13 +557,21 @@ fn confirm(
         && proposal.estimated > 0
     {
         let ratio = real as f64 / proposal.estimated as f64;
-        let next = match scrollback.measured(&proposal.model).map_err(e)? {
-            Some((old, _)) => old * 0.7 + ratio * 0.3,
-            None => ratio,
-        };
-        scrollback
-            .set_factor(&proposal.model, next.clamp(0.5, 4.0))
-            .map_err(e)?;
+        // This far off is an estimate that missed what was sent, not a model counting differently:
+        // a resumed run nobody had observed taught every later layout to count four times over.
+        if PLAUSIBLE.contains(&ratio) {
+            let next = match scrollback.measured(&proposal.model).map_err(e)? {
+                Some((old, _)) => old * 0.7 + ratio * 0.3,
+                None => ratio,
+            };
+            scrollback
+                .set_factor(&proposal.model, next.clamp(0.5, 4.0))
+                .map_err(e)?;
+        } else {
+            balthasar_model::noted!(
+                "layout: {id} came to {ratio:.1}x its estimate; not learned from"
+            );
+        }
     }
     // TIDE. What a summary now stands in for becomes a candidate, never a fact.
     distil(at, session, &summarised).map_err(e)?;

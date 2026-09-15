@@ -207,6 +207,23 @@ fn nothing_is_recorded_until_the_layout_is_applied() {
     );
     // Applying twice changes nothing more.
     harness.one("applied", json!({ "id": id }));
+
+    // Six times the estimate is an estimate that missed what was sent: nothing is learned from it.
+    let off = harness.one("layout", small_with(json!({ "round": 2 })));
+    let estimated = off["budget"]["estimated_input"]
+        .as_u64()
+        .expect("an estimate");
+    harness.one(
+        "applied",
+        json!({ "id": off["id"].clone(), "usage": { "input": estimated * 6,
+                                                        "cache_read": 0, "cache_write": 0 } }),
+    );
+    let after = harness.one("layout", small_with(json!({ "round": 3 })));
+    let kept = after["budget"]["factor"].as_f64().expect("a factor");
+    assert!(
+        (kept - 1.1).abs() < 0.01,
+        "an implausible count moved the factor: {kept}"
+    );
 }
 
 /// `small()` with some fields replaced.
