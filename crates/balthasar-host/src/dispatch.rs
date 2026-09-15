@@ -72,8 +72,53 @@ pub fn answer_with(
     answer_hooked(at, door, request, &mut crate::Describing(describe))
 }
 
-/// Answer one call, asking `hooks` whatever the configuration has a say in.
+/// Answer one call, asking `hooks` whatever the configuration has a say in. Every call is logged
+/// with what it came to and how long it took, when a log was asked for.
 pub fn answer_hooked(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
+) -> Reply {
+    let began = std::time::Instant::now();
+    let reply = answering(at, door, request, hooks);
+    if balthasar_model::noted::enabled() {
+        balthasar_model::noted!("verb: {}", described(request, &reply, began.elapsed()));
+    }
+    reply
+}
+
+/// One call as the log shows it: the verb, the run it was for, what came of it, and how long.
+fn described(request: &Request, reply: &Reply, took: std::time::Duration) -> String {
+    let arg = |key: &str| {
+        request
+            .args
+            .get(1)
+            .map(|a| a[key].clone())
+            .unwrap_or_default()
+    };
+    let first = reply.result.first().cloned().unwrap_or_default();
+    let what = match request.call.as_str() {
+        _ if !reply.ok => format!("refused: {}", reply.error.as_deref().unwrap_or("")),
+        "observe" | "amend" => format!("cursor {} {}", arg("cursor"), arg("kind")),
+        "layout" | "overflowed" => format!(
+            "{} with {} slots, {} jobs — {}",
+            first["id"],
+            first["slots"].as_array().map_or(0, Vec::len),
+            first["jobs"].as_array().map_or(0, Vec::len),
+            first["why"].as_str().unwrap_or("")
+        ),
+        "applied" => format!("{} took {}", arg("id"), arg("usage")),
+        "jobs" => format!("handed {} jobs", reply.n),
+        "job_done" if arg("failed").is_null() => format!("{} answered", arg("id")),
+        "job_done" => format!("{} failed: {}", arg("id"), arg("failed")),
+        _ => format!("{} rows", reply.n),
+    };
+    let run = request.args.first().and_then(|a| a.as_str()).unwrap_or("-");
+    format!("{} {run} {what} in {}ms", request.call, took.as_millis())
+}
+
+fn answering(
     at: &mut Answering<'_>,
     door: &Door,
     request: &Request,

@@ -1,11 +1,12 @@
 //! Jobs: helper-model work balthasar asks the harness to run, and what it does with the answers.
 //! balthasar never calls a model; a job is text in and text out, run by whoever holds one.
 
+use crate::queue::{json_in, stale};
 use crate::supply;
 use crate::{Answering, Hooks};
 use balthasar_buffer::Rules;
 use balthasar_ipc::{Reply, Request};
-use balthasar_model::{SessionId, Timestamp};
+use balthasar_model::SessionId;
 use balthasar_store::{Job, JobState, StoreError, Want};
 use serde_json::{Value, json};
 
@@ -33,24 +34,6 @@ const CURATE: &str = "You choose what an assistant should be reminded of before 
 prompt. From the memories given, pick the few that matter for this prompt -- none, if none do \
 -- and write each as one short note. Never invent a fact that is not in a memory. Answer with \
 JSON: {\"chosen\": [memory ids], \"notes\": [one short note each]}.";
-
-/// Whether a job of `kind` is still on its way.
-pub(crate) fn pending(jobs: &[Job], kind: &str, now: Timestamp) -> bool {
-    jobs.iter().any(|job| {
-        job.kind == kind
-            && (job.state == JobState::Queued
-                || (job.state == JobState::Issued && !stale(job, now)))
-    })
-}
-
-/// Whether an issued job has waited longer than it could take.
-fn stale(job: &Job, now: Timestamp) -> bool {
-    let limit = job.spec["timeout_ms"].as_u64().unwrap_or(20_000) / 1_000 + 60;
-    job.state == JobState::Issued
-        && job
-            .issued
-            .is_some_and(|at| now.saturating_sub(at) > i64::try_from(limit).unwrap_or(i64::MAX))
-}
 
 /// Queue a summary of `from..=to`, folding in the stored one.
 pub(crate) fn summarise(
@@ -186,6 +169,13 @@ pub(crate) fn hand_out(
             continue;
         }
         scrollback.issue_job(&job.id, at.now)?;
+        balthasar_model::noted!(
+            "job: handed {} {} for {}, attempt {}",
+            job.id,
+            job.kind,
+            job.spec["role"].as_str().unwrap_or("?"),
+            job.attempts + 1
+        );
         out.push(job.handed());
     }
     Ok(out)
@@ -358,27 +348,4 @@ fn curated(
     kept["curated"] = json!(true);
     prompt.memory = Some(kept);
     scrollback.keep_prompt(session, &prompt)
-}
-
-/// The JSON object in what a model wrote, fences and chatter around it or not.
-pub(crate) fn json_in(text: &str) -> Option<Value> {
-    let (start, end) = (text.find('{')?, text.rfind('}')?);
-    serde_json::from_str(text.get(start..=end)?).ok()
-}
-
-/// Whether the harness said it can run jobs for `role`.
-pub(crate) fn can_run(helpers: &[String], role: &str) -> bool {
-    helpers.iter().any(|h| h == role)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_models_json_is_found_inside_its_chatter() {
-        let said = "Sure!\n```json\n{\"chosen\": [\"m-1\"], \"notes\": []}\n```";
-        assert_eq!(json_in(said).expect("json")["chosen"][0], "m-1");
-        assert!(json_in("no json here").is_none());
-    }
 }

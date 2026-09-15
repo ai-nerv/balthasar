@@ -85,6 +85,11 @@ pub fn serve(
     let descriptor = balthasar_ipc::tool_descriptor()?;
 
     eprintln!("{}", render::bold(&listener.path().display().to_string()));
+    balthasar_model::noted!(
+        "serve: {} listening on {}, scope {scope}",
+        args.instance,
+        listener.path().display()
+    );
     // Said out loud rather than assumed: an unrebuilt caller reaches this only through the second name.
     for also in listener.paths().into_iter().skip(1) {
         eprintln!("{}", render::dim(&format!("also {}", also.display())));
@@ -136,6 +141,7 @@ pub fn serve(
                 });
                 match made {
                     Ok(ready) => {
+                        balthasar_model::noted!("store: opened for {named}");
                         eprintln!("{}", render::dim(&format!("tool {named}")));
                         seat.insert(ready)
                     }

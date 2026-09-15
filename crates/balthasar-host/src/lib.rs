@@ -7,6 +7,7 @@ mod jobs;
 mod layout;
 mod notes;
 mod outcome;
+mod queue;
 mod supply;
 mod verbs;
 mod window;

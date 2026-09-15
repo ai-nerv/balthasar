@@ -131,7 +131,7 @@ fn lay_out(
             memory.tokens
         },
         note: rules.estimate(&rules.warning),
-        compacting: if crate::jobs::pending(&known, "summarise", at.now) {
+        compacting: if crate::queue::pending(&known, "summarise", at.now) {
             Compacting::Pending
         } else if prompt.compactions >= rules.max_compactions_per_prompt {
             Compacting::Spent
@@ -178,7 +178,7 @@ fn lay_out(
     if ask.round == 0
         && !curating
         && !query.trim().is_empty()
-        && crate::jobs::can_run(&prompt.helpers, "memory")
+        && crate::queue::can_run(&prompt.helpers, "memory")
     {
         let room = (f64::from(caps.memory) / factor) as u32;
         crate::jobs::curate(at, session, &query, &prompt.mark, room, hooks).map_err(e)?;

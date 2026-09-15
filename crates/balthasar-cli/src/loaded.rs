@@ -35,7 +35,17 @@ pub struct Loaded {
 
 impl balthasar_host::Hooks for Loaded {
     fn stub(&mut self, turn: &balthasar_store::Turn) -> Option<String> {
-        self.mask(turn)
+        let said = self.mask(turn);
+        balthasar_model::noted!(
+            "hook: stub for cursor {} {}",
+            turn.cursor,
+            if said.is_some() {
+                "answered"
+            } else {
+                "had nothing"
+            }
+        );
+        said
     }
 
     fn policy(
@@ -43,11 +53,24 @@ impl balthasar_host::Hooks for Loaded {
         budget: &serde_json::Value,
         items: &serde_json::Value,
     ) -> Option<serde_json::Value> {
-        self.engine.policy(budget, items)
+        let said = self.engine.policy(budget, items);
+        balthasar_model::noted!(
+            "hook: policy {}",
+            if said.is_some() {
+                "changed the layout"
+            } else {
+                "left it"
+            }
+        );
+        said
     }
 
     fn redact(&mut self, text: &str, memory: &balthasar_model::Memory) -> Option<String> {
-        Loaded::redact(self, text, memory, true, &mut Vec::new())
+        let said = Loaded::redact(self, text, memory, true, &mut Vec::new());
+        if said.is_some() {
+            balthasar_model::noted!("hook: redact rewrote a memory");
+        }
+        said
     }
 
     fn window(&self) -> balthasar_host::Rules {

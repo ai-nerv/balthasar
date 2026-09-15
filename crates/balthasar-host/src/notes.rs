@@ -3,7 +3,7 @@
 //! what it replaced, and a setting has the main model review changes before they apply.
 
 use crate::Answering;
-use crate::jobs::{can_run, json_in, pending};
+use crate::queue::{can_run, json_in, pending};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{SessionId, Timestamp};
 use balthasar_store::{Change, Job, Note, Prompt, StoreError, Transcript, Turn, Want};
@@ -494,6 +494,12 @@ fn apply(scrollback: &Transcript, id: &str, now: Timestamp) -> Result<(), StoreE
         return Ok(());
     };
     let note = scrollback.put_note(change.note.as_deref(), change.after.as_ref(), now)?;
+    balthasar_model::noted!(
+        "note: change {id} {} {} applied, by {}",
+        change.op,
+        note.as_deref().unwrap_or("-"),
+        change.by
+    );
     scrollback.set_change(id, "applied", note.as_deref())
 }
 
@@ -512,6 +518,7 @@ fn decide(
         if approve {
             apply(scrollback, id, now)?;
         } else {
+            balthasar_model::noted!("note: change {id} rejected");
             scrollback.set_change(id, "rejected", None)?;
         }
         done.push(id.clone());
