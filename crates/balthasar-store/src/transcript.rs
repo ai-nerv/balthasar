@@ -394,6 +394,11 @@ impl Transcript {
         context: u32,
     ) -> Result<(), StoreError> {
         self.connection.execute(
+            "INSERT INTO run_model (session, model, context) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(session) DO UPDATE SET model = ?2, context = ?3",
+            params![session.as_str(), model, context],
+        )?;
+        self.connection.execute(
             "UPDATE run SET model = ?2, context = ?3 WHERE session = ?1",
             params![session.as_str(), model, context],
         )?;
@@ -402,6 +407,17 @@ impl Transcript {
 
     /// What model a run talks to, and how much it holds.
     pub fn model_of(&self, session: &SessionId) -> Result<Option<(String, u32)>, StoreError> {
+        let told = self
+            .connection
+            .query_row(
+                "SELECT model, context FROM run_model WHERE session = ?1",
+                params![session.as_str()],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        if let Some((model, context)) = told {
+            return Ok(Some((model, u32::try_from(context).unwrap_or(u32::MAX))));
+        }
         let found = self
             .connection
             .query_row(
@@ -535,6 +551,13 @@ CREATE TABLE IF NOT EXISTS run (
   -- holds a million throws away context nobody needed to lose.
   model    TEXT,
   context  INTEGER
+) STRICT;
+
+-- A model named before its run was opened: a harness says it at startup, before any turn exists.
+CREATE TABLE IF NOT EXISTS run_model (
+  session  TEXT PRIMARY KEY,
+  model    TEXT NOT NULL,
+  context  INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS turn (
@@ -736,6 +759,19 @@ mod tests {
         }
         assert_eq!(t.runs(10).expect("runs")[0].turns, 4);
         assert_eq!(t.census().expect("census"), (1, 4));
+    }
+
+    #[test]
+    fn a_model_told_before_its_run_opens_is_kept() {
+        let mut t = held();
+        let s = SessionId::new("s1");
+        t.note_model(&s, "deepseek/v3.2", 163_840).expect("told");
+        t.open_run(&s, "/w/thing", "/w/thing", "harness", 100)
+            .expect("open");
+        assert_eq!(
+            t.model_of(&s).expect("read"),
+            Some(("deepseek/v3.2".to_owned(), 163_840))
+        );
     }
 
     #[test]
