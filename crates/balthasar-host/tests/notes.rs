@@ -137,7 +137,7 @@ fn a_finished_turn_is_read_for_notes_by_the_checklist() {
         job["input"]
             .as_str()
             .expect("text")
-            .contains("[0] user: use uv, not pip")
+            .contains("[0] person: use uv, not pip")
     );
 
     let again = harness.layout(1);
