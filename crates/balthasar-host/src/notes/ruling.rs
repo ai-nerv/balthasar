@@ -8,8 +8,7 @@ const RULE_WORDS: &[&str] = &[
     "rule", "rules", "always", "never", "must", "prefer", "not", "avoid", "remember", "dont",
 ];
 
-/// Whether the person said anything rule-shaped in what an extraction read fresh. Only then may it
-/// pin: a model asked to keep rules found one in every chapter request.
+/// Whether the person said anything rule-shaped in what an extraction read fresh: only then may it pin.
 pub(super) fn laid_down(input: &str) -> bool {
     let fresh = input
         .split_once("New since then")
@@ -27,16 +26,11 @@ pub(super) fn laid_down(input: &str) -> bool {
         })
 }
 
-/// The same ops for an extraction whose span laid no rule down: an add is kept unpinned, and an
-/// update leaves the pinning as it was, since forcing it off unpinned a rule said long before.
+/// The same ops with no say over pinning: a new note is unpinned, one on a kept note left as it was.
 pub(super) fn unpinned(ops: Vec<Value>) -> Vec<Value> {
     ops.into_iter()
         .map(|mut op| {
-            if op["op"] == "add" {
-                if op["pinned"] == Value::Bool(true) {
-                    op["pinned"] = Value::Bool(false);
-                }
-            } else if let Some(fields) = op.as_object_mut() {
+            if let Some(fields) = op.as_object_mut() {
                 fields.remove("pinned");
             }
             op

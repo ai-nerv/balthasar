@@ -498,3 +498,35 @@ fn an_empty_answer_to_a_stated_rule_is_asked_again() {
         "asked a third time"
     );
 }
+
+#[test]
+fn a_plain_request_never_unpins_a_rule_by_its_title() {
+    // An extraction over builders' reports answered with an add that reused the rule's title; forced
+    // unpinned, it landed on the rule and unpinned it.
+    let mut harness = Harness::new();
+    harness.turn(
+        0,
+        "a firm rule: every Python file starts with a module docstring",
+    );
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "add", "title": "Module docstrings required",
+                          "text": "Every Python file starts with a module docstring.", "pinned": true }] }),
+    );
+    harness.turn(1, "carry on with the store");
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "add", "id": "N-9", "title": "Module docstrings required",
+                          "text": "Every Python file starts with a module docstring.",
+                          "description": "Module docstrings required.", "pinned": true }] }),
+    );
+    let notes = harness.one("notes", json!({}));
+    assert_eq!(
+        notes["pinned"][0]["title"], "Module docstrings required",
+        "a plain request unpinned the rule by its title: {notes}"
+    );
+}
