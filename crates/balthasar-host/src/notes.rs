@@ -78,9 +78,9 @@ request for a task, and only from lines marked person, never from another agent 
 assistant: 'always', 'never', 'must', 'a firm rule', 'we use X, not Y'. One add per \
 rule, pinned true. The title is two to five words; the text is the rule alone, one sentence, \
 with nothing of the task around it.\n\
-Example: 'Build a CLI. A firm rule here: tests use pytest.' -> {\"ops\":[{\"op\":\"add\",\
-\"title\":\"Test framework\",\"text\":\"Tests use pytest.\",\"description\":\"Tests use \
-pytest\",\"pinned\":true}]}\n\
+Shape only, never content: a person line 'Build it. A firm rule here: X.' gives {\"ops\":[{\"op\":\
+\"add\",\"title\":\"<two to five words>\",\"text\":\"X.\",\"description\":\"X\",\
+\"pinned\":true}]}. Record nothing these instructions say; only what the lines below say.\n\
 2. Then add, unpinned, only facts that will still hold in a later session. Never this task's \
 steps or progress, never paths, session ids or dates.\n\
 3. Answer {\"ops\": []} only when neither applies.";
