@@ -120,7 +120,7 @@ fn a_finished_turn_is_read_for_notes_by_the_checklist() {
         .find(|j| j["kind"] == "extract")
         .expect("an extract job")
         .clone();
-    assert_eq!(job["covers"], json!([0, 1]), "the turns before this prompt");
+    assert_eq!(job["covers"], json!([0, 2]), "this prompt and the turns before it");
     assert_eq!(job["role"], "memory");
     assert_eq!(job["fallback"], "skip");
     assert_eq!(job["schema"]["required"], json!(["ops"]));
@@ -146,12 +146,12 @@ fn a_finished_turn_is_read_for_notes_by_the_checklist() {
         harness
             .rows("jobs", json!({}))
             .iter()
-            .all(|j| j["kind"] != "extract" || j["covers"] != json!([0, 1]))
+            .all(|j| j["kind"] != "extract" || j["covers"] != json!([0, 2]))
     );
 }
 
 #[test]
-fn notes_are_pinned_or_listed_and_change_only_between_prompts() {
+fn notes_are_pinned_or_listed_and_a_new_rule_reaches_the_open_prompt() {
     let mut harness = Harness::new();
     harness.turn(0, "use uv, not pip");
     harness.turn(1, "carry on");
@@ -166,12 +166,12 @@ fn notes_are_pinned_or_listed_and_change_only_between_prompts() {
         "a description nobody wrote is the first line"
     );
     let same_prompt = harness.layout(1);
-    assert!(
-        same_prompt["slots"]
-            .as_array()
-            .expect("slots")
-            .iter()
-            .all(|s| s["kind"] != "pinned")
+    let rule = &same_prompt["slots"][0];
+    assert_eq!(rule["kind"], "pinned", "a rule pinned mid-prompt is worth one cache miss");
+    assert_eq!(
+        harness.layout(2)["slots"][0]["text"],
+        rule["text"],
+        "and after it the slot holds still"
     );
 
     harness.turn(2, "next thing");

@@ -111,25 +111,33 @@ fn project() -> SessionId {
     SessionId::new("")
 }
 
-/// The pinned slot for this prompt, settled at its first layout so notes change only between
-/// prompts and the prompt cache holds.
+/// The pinned slot for this prompt, settled at its first layout so the prompt cache holds, and
+/// settled again only when a pinned rule changed.
 pub(crate) fn pinned_slot(
     at: &Answering<'_>,
     prompt: &mut Prompt,
     room: u32,
     per: u32,
 ) -> Result<(String, u32), StoreError> {
-    if let Some(kept) = &prompt.pinned {
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Ok((String::new(), 0));
+    };
+    let notes = scrollback.notes()?;
+    // A rule pinned since the prompt began is worth one miss of the prompt cache.
+    let rules: String = notes
+        .iter()
+        .filter(|n| n.pinned)
+        .map(|n| format!("{}: {}\n", n.title, n.text.trim()))
+        .collect();
+    if let Some(kept) = &prompt.pinned
+        && kept["rules"].as_str().unwrap_or_default() == rules
+    {
         let tokens = kept["tokens"].as_u64().and_then(|n| u32::try_from(n).ok());
         return Ok((
             kept["text"].as_str().unwrap_or_default().to_owned(),
             tokens.unwrap_or(0),
         ));
     }
-    let Some(scrollback) = at.scrollback.as_ref() else {
-        return Ok((String::new(), 0));
-    };
-    let notes = scrollback.notes()?;
     let total = room as usize * per.max(1) as usize;
     let mut out = format!("{HEADING}\n");
     let mut wrote = false;
@@ -161,7 +169,7 @@ pub(crate) fn pinned_slot(
         String::new()
     };
     let tokens = u32::try_from(text.len().div_ceil(per.max(1) as usize)).unwrap_or(u32::MAX);
-    prompt.pinned = Some(json!({ "text": text, "tokens": tokens }));
+    prompt.pinned = Some(json!({ "text": text, "tokens": tokens, "rules": rules }));
     Ok((text, tokens))
 }
 

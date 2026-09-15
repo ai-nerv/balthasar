@@ -160,14 +160,11 @@ fn lay_out(
         let keeping = hooks.memory();
         crate::notes::before_cut(at, session, span.to, &prompt.helpers, &keeping).map_err(e)?;
     }
-    // What the turns before this prompt taught, read in the background.
-    let before = turns
-        .iter()
-        .rev()
-        .find(|t| t.role == "user")
-        .and_then(|t| t.cursor.checked_sub(1));
+    // This prompt and what came before it, read in the background while it is answered: a rule
+    // the person just stated reaches an agent started in this same prompt.
+    let asked_now = turns.iter().rev().find(|t| t.role == "user").map(|t| t.cursor);
     if ask.round == 0
-        && let Some(upto) = before
+        && let Some(upto) = asked_now
     {
         let keeping = hooks.memory();
         crate::notes::background(at, session, &prompt.helpers, Some(upto), &keeping).map_err(e)?;
