@@ -684,15 +684,15 @@ mod tests {
         let old = root.join(LEGACY_HOME);
         make_home(&old).expect("make");
         std::fs::write(old.join(".gitignore"), OLD_IGNORE_BODY).expect("the old ignore");
-        std::fs::create_dir_all(old.join("magi")).expect("tool");
-        std::fs::write(old.join("magi/project.db"), "memory").expect("db");
+        std::fs::create_dir_all(old.join("tool-a")).expect("tool");
+        std::fs::write(old.join("tool-a/project.db"), "memory").expect("db");
 
         let scope = ScopeId::new(root.to_string_lossy().into_owned());
         let home = project_home(&scope).expect("a home");
         assert_eq!(home, root.join(HOME));
         assert!(!old.exists(), "moved, not copied");
         assert_eq!(
-            std::fs::read_to_string(home.join("magi/project.db")).expect("kept"),
+            std::fs::read_to_string(home.join("tool-a/project.db")).expect("kept"),
             "memory"
         );
         assert_eq!(
@@ -714,7 +714,10 @@ mod tests {
 
         let scope = ScopeId::new(root.to_string_lossy().into_owned());
         assert_eq!(project_home(&scope), Some(root.join(HOME)));
-        assert!(code.join("Cargo.toml").exists(), "the checkout is where it was");
+        assert!(
+            code.join("Cargo.toml").exists(),
+            "the checkout is where it was"
+        );
     }
 
     #[test]

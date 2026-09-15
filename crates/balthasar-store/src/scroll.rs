@@ -49,9 +49,7 @@ pub enum Want {
         /// The turn being cited.
         cursor: u64,
     },
-    /// Turns mentioning all of these words, within this run. A scan rather than an index: a
-    /// full-text index over the transcript would roughly double the largest thing balthasar
-    /// stores.
+    /// Turns mentioning all of these words, within this run.
     Matching {
         /// The words, lowercased on the way in.
         terms: Vec<String>,
@@ -92,29 +90,9 @@ impl Read {
     }
 }
 
-/// One turn, from a row of the fifteen columns every read of this table selects.
-fn turn_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Turn> {
-    Ok(Turn {
-        cursor: r.get::<_, i64>(0)? as u64,
-        at: r.get(1)?,
-        role: r.get(2)?,
-        kind: r.get(3)?,
-        text: r.get(4)?,
-        tool: r.get(5)?,
-        raw: r.get(6)?,
-        entry: r.get(7)?,
-        tokens: r.get::<_, Option<i64>>(8)?.map(|n| n.max(0) as u32),
-        state: r.get::<_, String>(9)?.parse().unwrap_or_default(),
-        pinned: r.get::<_, i64>(10)? != 0,
-        ok: r.get(11)?,
-        ms: r.get::<_, Option<i64>>(12)?.map(|n| n.max(0) as u64),
-        args: r.get(13)?,
-        revisions: r.get::<_, i64>(14)? as u32,
-    })
-}
+use crate::transcript::read as turn_of;
 
-/// What a turn costs. The harness's own count when it has one; four characters to a token is
-/// right about the order and wrong about the number, and a budget spent against it drifts.
+/// What a turn costs: the harness's own count when it has one, and an estimate otherwise.
 #[must_use]
 pub fn tokens_of(turn: &Turn) -> usize {
     match turn.tokens {
@@ -171,9 +149,6 @@ impl Transcript {
     }
 
     /// Turns ending at `until`, read newest-first and stopped at the budget.
-    ///
-    /// What a harness calls to build every window it sends, so it costs what it returns rather
-    /// than what the run holds.
     fn backwards(
         &self,
         session: &SessionId,
@@ -301,11 +276,10 @@ impl Transcript {
         until: u64,
         budget: &Budget,
     ) -> Result<Vec<Turn>, StoreError> {
-        let mut statement = self.db().prepare(
-            "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, \
-                    ok, ms, args, revisions FROM turn \
-             WHERE session = ?1 AND cursor <= ?2 ORDER BY cursor DESC",
-        )?;
+        let mut statement = self.db().prepare(&format!(
+            "SELECT {} FROM turn WHERE session = ?1 AND cursor <= ?2 ORDER BY cursor DESC",
+            crate::transcript::COLUMNS
+        ))?;
         let ceiling = i64::try_from(until).unwrap_or(i64::MAX);
         let rows = statement.query_map(params![session.as_str(), ceiling], turn_of)?;
 
@@ -335,9 +309,7 @@ impl Transcript {
         Ok(held.max(0) as usize)
     }
 
-    /// Drop a leading part-message: one assistant message is several blocks written as separate
-    /// turns, and a read that cut into the middle would hand a model an assistant turn without the
-    /// tool call it made. Only the front is trimmed; the other edge is the end of the run.
+    /// Drop a leading part-message, so a read never starts in the middle of one.
     fn drop_a_leading_part_message(
         &self,
         session: &SessionId,
@@ -367,11 +339,11 @@ impl Transcript {
 
     /// Every turn in a cursor range, in order.
     fn range(&self, session: &SessionId, from: u64, to: u64) -> Result<Vec<Turn>, StoreError> {
-        let mut statement = self.db().prepare(
-            "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, \
-                    ok, ms, args, revisions FROM turn \
-             WHERE session = ?1 AND cursor >= ?2 AND cursor <= ?3 ORDER BY cursor",
-        )?;
+        let mut statement = self.db().prepare(&format!(
+            "SELECT {} FROM turn WHERE session = ?1 AND cursor >= ?2 AND cursor <= ?3 \
+             ORDER BY cursor",
+            crate::transcript::COLUMNS
+        ))?;
         // Clamped, because SQLite has no unsigned integer and `u64::MAX as i64` is -1, which
         // makes `cursor <= ?3` match nothing.
         let ceiling = i64::try_from(to).unwrap_or(i64::MAX);
