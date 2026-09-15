@@ -16,8 +16,9 @@ const RETRIES: u32 = 1;
 /// How many search hits a curate job chooses from.
 const CURATE_FROM: usize = 50;
 
-/// What one row may bring into a summary's input, in characters: a whole reply of prose fits.
-const PER_ROW: usize = 16_000;
+/// What one row may bring into a summary's input, in characters: even a long reply fits, and the
+/// whole input is still held to [`INPUT`].
+const PER_ROW: usize = 64_000;
 
 /// What a large tool output brings instead: its head, since its size is the point.
 const TOOL_HEAD: usize = 2_000;
