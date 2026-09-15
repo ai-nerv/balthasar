@@ -395,6 +395,33 @@ fn a_second_pinned_rule_has_the_notes_tidied_at_once() {
 }
 
 #[test]
+fn a_tidy_leaves_a_pinned_rule_in_its_own_words() {
+    // Every request after a reworded pinned rule misses the cache, and nothing was gained by it.
+    let mut harness = Harness::new();
+    harness.turn(0, "use uv, not pip");
+    let laid = harness.layout(0);
+    harness.answer(&laid["jobs"], "extract", learned());
+    harness.turn(1, "a firm rule: we never push to main");
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "add", "title": "No pushing to main",
+                          "text": "Never push to main.", "pinned": true }] }),
+    );
+    let jobs = Value::Array(harness.rows("jobs", json!({})));
+    harness.answer(
+        &jobs,
+        "tidy",
+        json!({ "ops": [{ "op": "update", "id": "N-1", "title": "Python packages",
+                          "text": "Always install Python packages with uv rather than pip." }] }),
+    );
+    let notes = harness.one("notes", json!({}));
+    assert_eq!(notes["pinned"][0]["title"], "Package manager", "{notes}");
+    assert_eq!(notes["pinned"][0]["text"], "Use uv, not pip.");
+}
+
+#[test]
 fn a_request_for_one_piece_of_work_pins_nothing() {
     // "About 900 words, then stop" was pinned from the fifth chapter request as if it were a rule.
     let mut harness = Harness::new();

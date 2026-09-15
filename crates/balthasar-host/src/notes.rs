@@ -10,7 +10,7 @@ use balthasar_store::{Change, Job, Note, Prompt, StoreError, Transcript, Turn, W
 use serde_json::{Value, json};
 
 mod ruling;
-use ruling::{echoes, laid_down, unpinned};
+use ruling::{echoes, kept_wording, laid_down, unpinned};
 
 /// `balthasar.memory`: how notes are kept.
 #[derive(Debug, Clone, PartialEq)]
@@ -91,7 +91,8 @@ steps or progress, never paths, session ids or dates.\n\
 3. Answer {\"ops\": []} only when neither applies.";
 
 const TIDY: &str = "You tidy a coding project's notes. Merge duplicates (update one, retire the \
-others), shorten what is long, retire what is stale, and keep pinned notes few. Answer with JSON \
+others), shorten what is long, retire what is stale, and keep pinned notes few. Leave a pinned \
+note's words as they are unless you merge another into it. Answer with JSON \
 {\"ops\": [...]}: add, update (id and the fields that change) or retire (id).";
 
 const REVIEW: &str = "A helper proposed these changes to the project's notes. Approve the ones \
@@ -416,6 +417,11 @@ pub(crate) fn settle(
             let ruled =
                 job.kind != "extract" || laid_down(job.spec["input"].as_str().unwrap_or_default());
             let ops = if ruled { ops } else { unpinned(ops) };
+            let ops = if job.kind == "tidy" {
+                kept_wording(ops, &scrollback.notes()?)
+            } else {
+                ops
+            };
             let pinned = |s: &Transcript| -> Result<usize, StoreError> {
                 Ok(s.notes()?.iter().filter(|n| n.pinned).count())
             };
