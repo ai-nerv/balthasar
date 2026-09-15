@@ -27,12 +27,17 @@ pub(super) fn laid_down(input: &str) -> bool {
         })
 }
 
-/// The same ops with nothing pinned, for an extraction whose span laid no rule down.
+/// The same ops for an extraction whose span laid no rule down: an add is kept unpinned, and an
+/// update leaves the pinning as it was, since forcing it off unpinned a rule said long before.
 pub(super) fn unpinned(ops: Vec<Value>) -> Vec<Value> {
     ops.into_iter()
         .map(|mut op| {
-            if op["pinned"] == Value::Bool(true) {
-                op["pinned"] = Value::Bool(false);
+            if op["op"] == "add" {
+                if op["pinned"] == Value::Bool(true) {
+                    op["pinned"] = Value::Bool(false);
+                }
+            } else if let Some(fields) = op.as_object_mut() {
+                fields.remove("pinned");
             }
             op
         })

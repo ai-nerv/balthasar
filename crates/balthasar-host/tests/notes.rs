@@ -443,3 +443,34 @@ fn a_rule_said_again_in_other_words_is_not_kept_twice() {
     assert_eq!(kept, 1, "the same rule kept twice: {notes}");
     assert_eq!(notes["pinned"][0]["title"], "Chapters end with Selah");
 }
+
+#[test]
+fn a_plain_request_never_unpins_a_rule() {
+    // An update from a chapter request carried `pinned: true`; turning every pin off there
+    // unpinned the rule the person had laid down in the first prompt.
+    let mut harness = Harness::new();
+    harness.turn(
+        0,
+        "a firm rule: every chapter ends with the single word Selah",
+    );
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "add", "title": "Chapters end with Selah",
+                          "text": "Every chapter ends with the single word Selah.", "pinned": true }] }),
+    );
+    harness.turn(1, "write chapter two");
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "update", "id": "N-1",
+                          "description": "Selah closes every chapter.", "pinned": true }] }),
+    );
+    let notes = harness.one("notes", json!({}));
+    assert_eq!(
+        notes["pinned"][0]["title"], "Chapters end with Selah",
+        "a plain request unpinned the rule: {notes}"
+    );
+}
