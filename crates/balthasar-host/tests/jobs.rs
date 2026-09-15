@@ -180,6 +180,24 @@ fn a_failed_job_is_tried_once_more_and_then_left() {
     assert_eq!(retried[0]["id"], id, "the same job, handed out again");
     harness.one("job_done", json!({ "id": id, "failed": "still nothing" }));
     assert!(harness.rows("jobs").is_empty(), "twice is enough");
+
+    // A blocking job shaped one request, which has gone without it: never handed out again.
+    let _ = harness.ask("remember", vec![json!("the deploy target is fly.io"), json!({})]);
+    harness.talk(8, "how do we deploy?");
+    let curating = harness.one("layout", small(0, json!(["memory"])));
+    let blocking = curating["jobs"]
+        .as_array()
+        .expect("jobs")
+        .iter()
+        .find(|j| j["blocking"] == true)
+        .map(|j| j["id"].clone());
+    if let Some(blocking) = blocking {
+        harness.one("job_done", json!({ "id": blocking, "failed": "too slow" }));
+        assert!(
+            harness.rows("jobs").iter().all(|j| j["id"] != blocking),
+            "a blocking job came round again"
+        );
+    }
     // A late answer to a failed job changes nothing.
     harness.one("job_done", json!({ "id": id, "text": "too late" }));
     assert!(
@@ -258,7 +276,7 @@ fn memory_is_curated_once_per_prompt_by_a_helper_that_can() {
         .expect("a curate job")
         .clone();
     assert_eq!(job["blocking"], true);
-    assert_eq!(job["timeout_ms"], 2_000);
+    assert_eq!(job["timeout_ms"], 5_000);
     assert_eq!(job["fallback"], "skip");
     assert_eq!(job["schema"]["required"], json!(["chosen", "notes"]));
     let ids = slot(&first, "memory").expect("plain ranking meanwhile")["ids"].clone();

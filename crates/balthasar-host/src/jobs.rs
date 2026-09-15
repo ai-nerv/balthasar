@@ -137,7 +137,7 @@ pub(crate) fn curate(
             },
             "required": ["chosen", "notes"],
         },
-        "max_tokens": 1_000, "blocking": true, "timeout_ms": 2_000,
+        "max_tokens": 1_000, "blocking": true, "timeout_ms": 5_000,
     });
     let context = json!({ "mark": mark, "query": query, "room": room });
     scrollback.queue_job(session, "curate", &spec, &context, at.now)?;
@@ -181,12 +181,14 @@ pub(crate) fn hand_out(
     Ok(out)
 }
 
-/// A failed job goes back in the queue once; after that it stays failed.
+/// A failed job goes back in the queue once; after that it stays failed. A blocking one is never
+/// retried: it was there to shape one request, and that request has gone without it.
 fn retry_or_fail(at: &Answering<'_>, job: &Job) -> Result<(), StoreError> {
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Ok(());
     };
-    let next = if job.attempts <= RETRIES {
+    let blocking = job.spec["blocking"].as_bool() == Some(true);
+    let next = if job.attempts <= RETRIES && !blocking {
         JobState::Queued
     } else {
         JobState::Failed
