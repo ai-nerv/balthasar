@@ -71,13 +71,18 @@ distil patterns, not events. Write absolute dates. Fix a contradiction in the no
 instead of adding another, and retire notes that went stale. When unsure, write nothing.";
 
 const EXTRACT: &str = "You keep the notes of a coding project: what an assistant working in it \
-should know in a later session. Answer with JSON {\"ops\": [...]}, each op one of add (title, \
-text, description, pinned), update (id, and the fields that change) or retire (id). The \
-description is one line shown in the list of notes. Set pinned true for every rule or standing \
-preference the person stated -- 'always', 'never', 'must', 'a firm rule' -- and for nothing else. \
-Record only what will still hold next time: never this task's progress, never instructions given \
-for one job, never absolute or temporary paths, session ids or dates of this run. An empty list \
-is a fine answer.";
+should know in a later session. Answer with JSON {\"ops\": [...]}: each op is add (title, text, \
+description, pinned), update (id and the fields that change) or retire (id).\n\
+1. Always record every rule or standing preference the person states, even one given inside a \
+request for a task: 'always', 'never', 'must', 'a firm rule', 'we use X, not Y'. One add per \
+rule, pinned true. The title is two to five words; the text is the rule alone, one sentence, \
+with nothing of the task around it.\n\
+Example: 'Build a CLI. A firm rule here: tests use pytest.' -> {\"ops\":[{\"op\":\"add\",\
+\"title\":\"Test framework\",\"text\":\"Tests use pytest.\",\"description\":\"Tests use \
+pytest\",\"pinned\":true}]}\n\
+2. Then add, unpinned, only facts that will still hold in a later session. Never this task's \
+steps or progress, never paths, session ids or dates.\n\
+3. Answer {\"ops\": []} only when neither applies.";
 
 const TIDY: &str = "You tidy a coding project's notes. Merge duplicates (update one, retire the \
 others), shorten what is long, retire what is stale, and keep pinned notes few. Answer with JSON \
