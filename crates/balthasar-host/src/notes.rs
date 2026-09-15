@@ -71,10 +71,13 @@ distil patterns, not events. Write absolute dates. Fix a contradiction in the no
 instead of adding another, and retire notes that went stale. When unsure, write nothing.";
 
 const EXTRACT: &str = "You keep the notes of a coding project: what an assistant working in it \
-should know next time. Answer with JSON {\"ops\": [...]}, each op one of add (title, text, \
-description), update (id, and the fields that change) or retire (id). The description is one line \
-shown in the list of notes. Set pinned only for what must be in front of the assistant every time \
--- rules, standing preferences -- and keep those few. An empty list is a fine answer.";
+should know in a later session. Answer with JSON {\"ops\": [...]}, each op one of add (title, \
+text, description, pinned), update (id, and the fields that change) or retire (id). The \
+description is one line shown in the list of notes. Set pinned true for every rule or standing \
+preference the person stated -- 'always', 'never', 'must', 'a firm rule' -- and for nothing else. \
+Record only what will still hold next time: never this task's progress, never instructions given \
+for one job, never absolute or temporary paths, session ids or dates of this run. An empty list \
+is a fine answer.";
 
 const TIDY: &str = "You tidy a coding project's notes. Merge duplicates (update one, retire the \
 others), shorten what is long, retire what is stale, and keep pinned notes few. Answer with JSON \
@@ -385,7 +388,10 @@ pub(crate) fn settle(
     };
     match job.kind.as_str() {
         "extract" | "tidy" => {
-            let ops = said["ops"].as_array().cloned().unwrap_or_default();
+            let ops = scrubbed(
+                said["ops"].as_array().cloned().unwrap_or_default(),
+                &at.scope.to_string(),
+            );
             let made = propose(scrollback, session, &job.id, &ops, keeping, at.now)?;
             if job.kind == "extract" {
                 let since = scrollback.counter(&project(), "extracts")?.unwrap_or(0);
@@ -709,6 +715,48 @@ mod tests {
         assert_eq!(
             keeping.tidy_every, 10,
             "zero would tidy after every extraction"
+        );
+    }
+}
+
+/// Ops with the project's own path taken out: a note is read in later sessions from wherever the
+/// project then is, so an absolute path into it is the ephemeral the checklist says to drop.
+fn scrubbed(ops: Vec<Value>, root: &str) -> Vec<Value> {
+    if root.len() < 2 {
+        return ops;
+    }
+    let within = format!("{root}/");
+    ops.into_iter()
+        .map(|mut op| {
+            if let Some(fields) = op.as_object_mut() {
+                for name in ["title", "text", "description"] {
+                    if let Some(Value::String(said)) = fields.get_mut(name) {
+                        *said = said.replace(&within, "").replace(root, ".");
+                    }
+                }
+            }
+            op
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod scrubbing {
+    use super::*;
+
+    #[test]
+    fn a_note_never_keeps_the_projects_absolute_path() {
+        let ops = vec![
+            json!({ "op": "add", "title": "layout",
+            "text": "Tests live in /work/app/tests; run from /work/app.", "pinned": false }),
+            json!(7),
+        ];
+        let clean = scrubbed(ops, "/work/app");
+        assert_eq!(clean[0]["text"], "Tests live in tests; run from ..");
+        assert_eq!(
+            clean[1],
+            json!(7),
+            "anything that is not an op is left alone"
         );
     }
 }
