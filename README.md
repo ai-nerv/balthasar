@@ -40,8 +40,8 @@ balthasar decay                   # what today's forgetting would take, before i
               │                               │
        ┌──────┴───────┐                       │  the ladder — eight kinds of
        ▼              ▼                       │  evidence, two floors
-   turn_fts      plan · scroll                ▼
-   searchable    mask · summarise      project.db      global.db
+   turn_fts     layout · scroll               ▼
+   searchable   stub · summarise       project.db      global.db
        │              │                facts, habits   true everywhere
        │              │                       │
        │ spans        │ the window            │ memories
@@ -232,6 +232,33 @@ caller to work out from a number and a threshold it would have to be told. Above
 memory is current truth; below it, it is still there, still searchable, still explained by `why`,
 and no longer stated as fact — which is what lets a harness say "you told me this in March, it
 may be stale" instead of repeating it flatly.
+
+### The context, laid out
+
+balthasar decides what each request holds; the harness only renders it. The harness `observe`s
+every item as it is committed (with `tokens`, `group`, and a tool's `stub`, `handle`, `keep`,
+`error`), then asks `layout` before every request:
+
+```
+->  {"call":"layout","args":["<session>",{"round":0,"window":200000,"reply":32000,
+       "fixed":{"system":4100,"tools":6900},"live":[0,1,2,3],"query":"…","idle_s":12,
+       "helpers":["memory"]}]}
+<-  {"id":"L-1","budget":{…,"room":157000,"factor":1.0},
+     "slots":[{"kind":"item","cursor":0},…,{"kind":"memory","text":"…","ids":["…"]},
+              {"kind":"item","cursor":3}],"jobs":[],"fits":true,"why":"…"}
+```
+
+Slots come in the order the prompt cache wants — pinned notes, the conversation (word for word,
+stubbed, or a stored summary where its span was), then the warning note and memory just before
+the latest prompt. Nothing is recorded by answering: `applied {id, usage}` marks what was sent
+and corrects the model's token estimate from the provider's count, and `overflowed {id, said}`
+answers a tighter layout. The rules are `balthasar.window` in `init.lua`.
+
+balthasar never calls a model. When a summary is due, or memory could be curated, or notes
+extracted from a finished turn, the layout (or `jobs` between turns) hands the harness a job —
+an instruction, an input, a schema — and `job_done` brings the answer back. Notes are pinned or
+deferred, every change is in `changes` and can be `undo`ne, and with `balthasar.memory.review`
+on they wait for `approve`.
 
 The `client` verb hands over the Lua library that speaks all this, as source. A consumer keeping
 its own copy is a consumer whose copy goes stale — and one did, silently, for a whole machine.

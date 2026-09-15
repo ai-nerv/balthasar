@@ -161,6 +161,24 @@ balthasar.section("id", { weight = …, order = …, tiers = …, where = …, r
 A source answering `nil` means "not one of ours", which is what keeps a glob that catches a
 neighbouring program's file harmless.
 
+How a request is laid out, and what a stubbed tool result says:
+
+```lua
+balthasar.window = { prune_at = 0.6, shares = { memory = 0.1 } }   -- any key; the rest stay
+balthasar.window.policy = function(budget, items)                  -- replaces the rules
+  return { slots = { … }, why = "…" }                              -- or nil: the rules decide
+end
+balthasar.mask["shell"] = function(item)       -- item = { cursor, tool, tokens, stub, … }
+  if item.stub then return nil end              -- nil: the tool's own stub, then a generic one
+  return ("`shell` output elided (~%d tokens)"):format(item.tokens)
+end
+balthasar.memory = { review = true, extract_every = 2 }
+```
+
+A policy's answer is used only if it keeps what the harness relies on — cursors ascending and
+from what it sent, groups whole, stubs only on tool rows; otherwise the rules decide and `why`
+says so.
+
 ---
 
 ## 4. What a project file may not do
