@@ -229,10 +229,28 @@ fn held(config: &Config) -> serde_json::Map<String, serde_json::Value> {
     config.settings.clone()
 }
 
+/// Names the directory a coordinator keeps one session's configuration in.
+pub const GIVEN: &str = "NERV_GIVEN";
+
 /// Where configuration sent by a coordinator is kept: the runtime directory, not `config/`.
 #[must_use]
 pub fn given() -> std::path::PathBuf {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
+    given_from(
+        std::env::var_os(GIVEN),
+        std::env::var_os("XDG_RUNTIME_DIR"),
+    )
+}
+
+/// The same, from what the environment said. One file per session when the coordinator names a
+/// directory: one per machine let a session's thresholds outlive it and govern the next.
+fn given_from(
+    session: Option<std::ffi::OsString>,
+    runtime: Option<std::ffi::OsString>,
+) -> std::path::PathBuf {
+    if let Some(dir) = session.filter(|dir| !dir.is_empty()) {
+        return std::path::PathBuf::from(dir).join("balthasar.lua");
+    }
+    let base = runtime
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     base.join("balthasar").join("given.lua")
@@ -278,6 +296,18 @@ pub fn forget_from(path: &std::path::Path) -> Result<(), LuaError> {
 mod tests {
     use super::*;
     use balthasar_model::scratch::{Scratch, ScratchFile};
+
+    #[test]
+    fn a_session_that_names_a_directory_keeps_its_own_configuration() {
+        let own = given_from(Some("/run/coordinator/given/42".into()), Some("/run".into()));
+        assert_eq!(own, std::path::PathBuf::from("/run/coordinator/given/42/balthasar.lua"));
+        for unnamed in [None, Some(std::ffi::OsString::new())] {
+            assert_eq!(
+                given_from(unnamed, Some("/run".into())),
+                std::path::PathBuf::from("/run/balthasar/given.lua")
+            );
+        }
+    }
 
     /// A place of this test's own, so tests running together do not delete each other's.
     fn mine(name: &str) -> ScratchFile {
