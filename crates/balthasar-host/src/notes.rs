@@ -75,7 +75,8 @@ should know in a later session. Answer with JSON {\"ops\": [...]}: each op is ad
 description, pinned), update (id and the fields that change) or retire (id).\n\
 1. Always record every rule or standing preference the person states, even one given inside a \
 request for a task, and only from lines marked person, never from another agent or the \
-assistant: 'always', 'never', 'must', 'a firm rule', 'we use X, not Y'. One add per \
+assistant: 'a firm rule', 'always', 'from now on', 'we use X, not Y'. What the task itself asks for \
+-- its length, count, format or steps -- is not a rule even when it says never or every. One add per \
 rule, pinned true. The title is two to five words; the text is the rule alone, one sentence, \
 with nothing of the task around it.\n\
 Shape only, never content: a person line 'Build it. A firm rule here: X.' gives {\"ops\":[{\"op\":\
@@ -409,14 +410,20 @@ pub(crate) fn settle(
                 said["ops"].as_array().cloned().unwrap_or_default(),
                 &at.scope.to_string(),
             );
+            let pinned = |s: &Transcript| -> Result<usize, StoreError> {
+                Ok(s.notes()?.iter().filter(|n| n.pinned).count())
+            };
+            let before = pinned(scrollback)?;
             let made = propose(scrollback, session, &job.id, &ops, keeping, at.now)?;
             if job.kind == "extract" {
                 let since = scrollback.counter(&project(), "extracts")?.unwrap_or(0);
                 scrollback.set_counter(&project(), "extracts", since + 1)?;
-                // A second pinned rule may say what one already does in other words: tidied now, not ten
+                // A new pinned rule may say what one already does in other words: tidied now, not ten
                 // extractions later, since every pinned note rides along with every request.
-                let pinned = scrollback.notes()?.iter().filter(|n| n.pinned).count();
-                if made > 0 && pinned > 1 && !pending(&scrollback.jobs_of(session)?, "tidy", at.now)
+                let after = pinned(scrollback)?;
+                if after > before
+                    && after > 1
+                    && !pending(&scrollback.jobs_of(session)?, "tidy", at.now)
                 {
                     tidy(at, session)?;
                     scrollback.set_counter(&project(), "extracts", 0)?;
