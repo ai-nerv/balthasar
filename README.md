@@ -34,8 +34,8 @@ balthasar decay                   # what today's forgetting would take, before i
                      └────────┬───────────┘
               ┌───────────────┴───────────────┐
               ▼                               ▼
-    <run>/transcript.db                <run>/memory.db
-    that run's turns, verbatim         this run's scratch
+    <run>/transcript.db                <run>/<agent>/memory.db
+    that run's turns, verbatim         this agent's scratch
     the only copy of what was said     dies with the run
               │                               │
        ┌──────┴───────┐                       │  the ladder — eight kinds of

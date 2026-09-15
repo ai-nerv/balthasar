@@ -7,11 +7,8 @@ use crate::{Embed, Hashed};
 pub enum Kind {
     /// The local, dependency-free one. Coarse, deterministic, always available.
     Hashed,
-    /// A sentence transformer, from weights on disk.
-    ///
-    /// Present only in a build made with `--features dense`. Named here either way, so a
-    /// configuration asking for it in a build without it is told plainly rather than having its
-    /// setting silently ignored.
+    /// A sentence transformer, from weights on disk. Present only in a `--features dense` build,
+    /// but named either way so a configuration asking for it is told rather than ignored.
     Onnx,
     /// Nothing. Lexical search alone.
     None,
@@ -24,10 +21,7 @@ pub struct Spec {
     pub kind: Kind,
     /// Which model, for the backends that have a choice.
     pub model: String,
-    /// Where its weights are, for the backends that have any.
-    ///
-    /// `None` leaves the caller to decide, because this crate is a leaf and does not know where
-    /// a project keeps things.
+    /// Where its weights are, for the backends that have any; `None` leaves the caller to decide.
     pub path: Option<String>,
 }
 
@@ -44,9 +38,7 @@ impl Default for Spec {
 impl Spec {
     /// Read what a configuration declared.
     ///
-    /// An unrecognised `kind` is not an error and not silence either: it falls back to the
-    /// local embedder and says which one it actually got, because a setting that is quietly
-    /// ignored is worse than one that is refused.
+    /// An unrecognised `kind` falls back to the local embedder and says which one it got.
     #[must_use]
     pub fn read(said: Option<&serde_json_lite::Value>) -> Self {
         let Some(said) = said else {
@@ -69,9 +61,6 @@ impl Spec {
 }
 
 /// The bits of a declaration this crate reads, without depending on a JSON library.
-///
-/// A tiny struct rather than `serde_json::Value`, so `balthasar-embed` stays a leaf: it has one
-/// dependency and no reason for a second.
 pub mod serde_json_lite {
     /// An embedder declaration.
     #[derive(Debug, Clone, Default, PartialEq)]
@@ -87,19 +76,14 @@ pub mod serde_json_lite {
 
 /// Open the embedder a spec asks for, or the nearest one that works.
 ///
-/// `None` means nothing is embedding and recall is lexical, which is a supported state rather
-/// than a failure. Anything else answers with a working embedder whose [`Embed::model`] names
-/// what was *actually* opened — which is how a caller reports a fallback instead of hiding it.
+/// `None` means nothing is embedding and recall is lexical, which is a supported state. Anything
+/// else answers with an embedder whose [`Embed::model`] names what was actually opened.
 #[must_use]
 pub fn open(spec: &Spec) -> Option<Box<dyn Embed>> {
     open_explaining(spec).0
 }
 
-/// The same, and why, when the answer is not what was asked for.
-///
-/// Split out because "you asked for a transformer and got the hashing trick" is something a
-/// person needs to be able to read. `balthasar status` prints it; the plain [`open`] is for callers
-/// that only need a vector.
+/// The same, and why, when the answer is not what was asked for. `balthasar status` prints it.
 #[must_use]
 pub fn open_explaining(spec: &Spec) -> (Option<Box<dyn Embed>>, Option<String>) {
     match spec.kind {
@@ -123,9 +107,7 @@ fn dense(spec: &Spec) -> (Option<Box<dyn Embed>>, Option<String>) {
     };
     match crate::Dense::open(std::path::Path::new(path), &spec.model) {
         Ok(model) => (Some(Box::new(model)), None),
-        // Still a working store, still a worse one, and it says so. Falling all the way to no
-        // vectors would be a bigger change than the caller asked for; falling silently would be
-        // worse than either.
+        // Still a working store, still a worse one, and it says so.
         Err(why) => (Some(Box::new(Hashed)), Some(why.to_string())),
     }
 }
@@ -173,8 +155,6 @@ mod tests {
 
     #[test]
     fn what_is_opened_names_itself() {
-        // The model name goes on every row it produces, so a later change can be noticed
-        // rather than silently compared against.
         let opened = open(&Spec::default()).expect("something");
         assert_eq!(opened.model(), "hashed-3gram-256");
         assert!(opened.dimensions() > 0);
@@ -182,9 +162,6 @@ mod tests {
 
     #[test]
     fn asking_for_a_transformer_is_answered_rather_than_ignored() {
-        // The bug this replaces: `kind = "onnx"` used to get the hashing trick with nobody
-        // told. A person who configured a transformer and got surface similarity had no way to
-        // find out, and every explanation of their search results was wrong.
         let spec = Spec::read(Some(&serde_json_lite::Value {
             kind: Some("onnx".into()),
             ..serde_json_lite::Value::default()
@@ -202,8 +179,7 @@ mod tests {
 
     #[test]
     fn a_transformer_that_loads_is_the_one_that_is_used() {
-        // Only meaningful in a build that carries one, and only when somebody has installed
-        // weights — `MAGI_BALTHASAR_MODEL_DIR` is how the suite is pointed at them.
+        // Only in a build that carries one, and only when `MAGI_BALTHASAR_MODEL_DIR` is set.
         #[cfg(feature = "dense")]
         {
             let Ok(dir) = std::env::var("MAGI_BALTHASAR_MODEL_DIR") else {

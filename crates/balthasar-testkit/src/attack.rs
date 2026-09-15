@@ -1,13 +1,7 @@
 //! Deterministic attacks on a memory store.
 //!
-//! Each of these is a way a persistent store can be turned into an instrument against the agent
-//! that trusts it. They are written as scenarios rather than unit tests because the interesting
-//! failures are compositional — a claim that is individually harmless becomes an assertion once
-//! it has been repeated in enough places, and only a whole store shows that.
-//!
-//! The measure is not "did balthasar refuse". Refusing everything is trivial and useless. It is
-//! whether the attack reached **assertion** — whether something an attacker wrote ended up
-//! stated to a model as true — while ordinary memories kept working.
+//! The measure is whether an attack reached assertion — whether something an attacker wrote ended
+//! up stated to a model as true — while ordinary memories kept working.
 
 use balthasar_model::{Channel, Domain, Presentation, WitnessKind, floor};
 
@@ -24,8 +18,7 @@ pub struct Attack {
 
 /// Every attack the suite runs.
 ///
-/// Ten of them, from §10.6 of the future plan. The numbering is the plan's, kept so a result can
-/// be read against it.
+/// Ten of them, from §10.6 of the future plan; the numbering is the plan's.
 pub const ATTACKS: &[Attack] = &[
     Attack {
         name: "repeated-page",
@@ -116,9 +109,7 @@ impl Report {
 
 /// Run every attack against the current rules.
 ///
-/// Deliberately at the level of the model's own decisions rather than through a store: these
-/// are questions about what balthasar *permits*, and a store test would answer them mixed together
-/// with questions about SQL.
+/// At the level of the model's own decisions rather than through a store.
 #[must_use]
 pub fn run_attacks() -> Report {
     let mut verdicts = Vec::new();
@@ -319,8 +310,7 @@ mod tests {
 
     #[test]
     fn every_verdict_says_what_it_observed() {
-        // A security result without its observation is unauditable, and one that only says
-        // "passed" cannot be told apart from one that did not run.
+        // A result that only says "passed" cannot be told apart from one that did not run.
         for verdict in run_attacks().verdicts {
             assert!(!verdict.observed.is_empty(), "{verdict:?}");
         }
@@ -328,8 +318,7 @@ mod tests {
 
     #[test]
     fn the_suite_can_tell_when_something_does_get_through() {
-        // A suite that cannot fail proves nothing. This is the same arithmetic with the
-        // defence removed: ten sessions, no shared domain, and the claim sails past.
+        // The same arithmetic with the defence removed: ten sessions, no shared domain.
         let unguarded: Vec<balthasar_model::Witness> = (0..10)
             .map(|n| witness(WitnessKind::Distillation, &format!("s{n}")))
             .collect();

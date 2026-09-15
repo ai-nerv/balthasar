@@ -1,14 +1,6 @@
 //! Fitting what is worth saying into the room there is.
-//!
-//! Sections get a share of the budget in proportion to their weight, and whatever a section
-//! does not spend passes to the next one. Without that a thin `identity` section wastes the
-//! room it was allotted while `relevant` is truncated three lines from the end.
 
 /// Roughly how many characters a token is.
-///
-/// An estimate rather than a tokeniser: every provider counts differently, a tokeniser is a
-/// per-vendor dependency, and being wrong here costs a few lines of budget rather than a
-/// failed request. The caller's own estimate wins when it has one.
 pub const CHARS_PER_TOKEN: usize = 4;
 
 /// Tokens, roughly, for a piece of text.
@@ -18,10 +10,6 @@ pub fn tokens(text: &str) -> usize {
 }
 
 /// How many characters each weight is worth, given a total.
-///
-/// Answers a *per-weight* share rather than a per-section one so the caller can hand back what
-/// a section did not use. Zero total weight means zero each, which is the honest answer for a
-/// configuration that declared nothing.
 #[must_use]
 pub fn share(total_chars: usize, weights: &[f64]) -> f64 {
     let sum: f64 = weights.iter().filter(|w| **w > 0.0).sum();
@@ -33,14 +21,7 @@ pub fn share(total_chars: usize, weights: &[f64]) -> f64 {
 
 /// Whether two rendered lines are near enough to be the same line.
 ///
-/// Word overlap rather than an edit distance: what this catches is one claim restated, and a
-/// restatement shares its nouns while an edit distance sees two different strings.
-///
-/// Overlap alone is not enough. Two facts that differ in exactly one token — a path, a number,
-/// an identifier — score as high as a restatement does, so `central_file src/a.rs` and
-/// `central_file src/b.rs` collapsed into one and the second file was never mentioned. A token
-/// that carries identity is therefore checked for separately: if the lines disagree about one,
-/// they are different claims however much prose they share.
+/// Overlap alone is not enough: lines that disagree about an identity token are different claims.
 #[must_use]
 pub fn near_duplicate(a: &str, b: &str, threshold: f64) -> bool {
     let left = words(a);
@@ -65,9 +46,6 @@ pub fn near_duplicate(a: &str, b: &str, threshold: f64) -> bool {
 }
 
 /// Whether a word is the kind that tells two otherwise-identical claims apart.
-///
-/// Digits and path punctuation, because in a coding agent's memory that is what identity looks
-/// like: a version, a port, a duration, a filename, a module path.
 fn distinguishing(word: &str) -> bool {
     word.chars()
         .any(|c| c.is_ascii_digit() || c == '/' || c == '.' || c == '_')
@@ -91,16 +69,12 @@ fn words(text: &str) -> Vec<String> {
 }
 
 /// Cut a line to fit, on a word boundary where there is one.
-///
-/// Mid-word truncation reads as corruption, and a model shown a corrupted memory has no way to
-/// tell that from a memory that is simply wrong.
 #[must_use]
 pub fn fit(text: &str, chars: usize) -> Option<String> {
     if text.len() <= chars {
         return Some(text.to_owned());
     }
-    // Below this there is no room for anything a reader could use, so nothing is better than
-    // an ellipsis with three words in front of it.
+    // Below this there is no room for anything a reader could use.
     if chars < 24 {
         return None;
     }
@@ -138,8 +112,6 @@ mod tests {
 
     #[test]
     fn two_claims_that_differ_only_in_a_number_are_not() {
-        // The defect this rule was written wrong for: these share every word but one, and
-        // collapsing them silently drops the second fact.
         assert!(!near_duplicate(
             "situation number 0: do thing 0",
             "situation number 1: do thing 1",
@@ -163,8 +135,6 @@ mod tests {
 
     #[test]
     fn a_restatement_with_a_shared_number_is_still_a_restatement() {
-        // Only tokens the lines DISAGREE about count. A version both of them mention is not
-        // what tells them apart.
         assert!(near_duplicate(
             "we pin rust 1.94 for the build",
             "the build pins rust 1.94",
@@ -174,8 +144,6 @@ mod tests {
 
     #[test]
     fn two_different_claims_are_not() {
-        // The failure that matters: "we use make" and "we use cargo" share most of their
-        // words and are opposite facts.
         assert!(!near_duplicate("we use make", "we use cargo", 0.8));
         assert!(!near_duplicate(
             "the build takes 40 seconds",

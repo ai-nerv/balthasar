@@ -1,31 +1,21 @@
 //! The scrollback, kept verbatim.
 //!
-//! A separate file from the memory store, and separate for reasons that are not tidiness. A
-//! transcript is roughly three orders of magnitude larger than the memories distilled from it;
-//! it is append-mostly where the memory store is rewritten constantly; and it is pruned by age
-//! where memories are pruned by decay. Sharing a file would make every recall walk past it and
-//! give a retention policy nowhere to bite.
+//! A separate file from the memory store: a transcript is roughly three orders of magnitude
+//! larger than the memories distilled from it, is append-mostly, and is pruned by age rather
+//! than by decay.
 //!
-//! **This is the system of record.** A harness that keeps no journal of its own has nowhere
-//! else to recover from, so this store is opened with `synchronous = FULL` — every commit is on
-//! the platter before it is acknowledged. That is stronger than a flushed append to a file, and
-//! it is the price of being the only copy.
-//!
-//! **What a turn holds is opaque.** balthasar keeps the harness's own record as a string it never
-//! parses, alongside a small projection it does understand — enough to quote a turn and to
-//! search one. A harness gets back exactly what it wrote; balthasar never needs to know what an
-//! `Entry` is, and commitment 1 survives contact with being the only place the data lives.
+//! This is the system of record, so the store is opened with `synchronous = FULL` — every commit
+//! is on the platter before it is acknowledged. What a turn holds is opaque: balthasar keeps the
+//! harness's own record as a string it never parses, alongside a small projection it does
+//! understand.
 
 use crate::StoreError;
 use balthasar_model::{SessionId, Timestamp};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 
-/// What has become of one turn in the window.
-///
-/// A turn is never removed to make room. The text stays and the state says what is sent, which
-/// is what makes compaction reversible: a masked turn can be unmasked, and a summarised span
-/// can be read back in full long after the summary replaced it.
+/// What has become of one turn in the window. A turn is never removed to make room: the text
+/// stays and the state says what is sent, which is what makes compaction reversible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
@@ -98,39 +88,23 @@ pub struct Turn {
     pub tool: Option<String>,
     /// Which message this block belongs to, as the harness names it.
     ///
-    /// One assistant message carries several blocks — some prose, a thought, three tool calls —
-    /// and each is written as its own turn so a span can address one of them. They share this,
-    /// which is what stops a read from handing back half a message: an assistant turn shown
-    /// without the tool call it made is worse than not showing it.
-    ///
-    /// `None` means the turn is its own message, which is what a plain user turn is.
+    /// One assistant message carries several blocks, each written as its own turn; they share
+    /// this so a read never hands back half a message. `None` means the turn is its own message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
     /// What this cost, when the harness knows.
-    ///
-    /// It billed the request and balthasar estimated one; four characters to a token is right about
-    /// the order and wrong about the number, and being wrong compounds across a long window.
-    /// Kept here rather than derived so a budget is spent against what was actually charged.
     ///
     /// `None` is the ordinary case for a turn nobody counted, and callers fall back to the
     /// estimate — a missing count must never read as a free turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<u32>,
-    /// Whether a tool call succeeded.
-    ///
-    /// The cost signal rides in on this. A call that failed and then succeeded is a repair, and
-    /// a repair is the single most valuable thing a coding session produces — but only if
-    /// somebody wrote down which of the two it was.
+    /// Whether a tool call succeeded; a call that failed and then succeeded is a repair.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ok: Option<bool>,
     /// How long a tool took, in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ms: Option<u64>,
-    /// What the tool was asked for, as the harness's own JSON.
-    ///
-    /// Held as text and never interpreted here. What reads it is an extractor asking a narrow
-    /// question — which file, which command — and a harness that supplies nothing simply gets
-    /// no answer to those.
+    /// What the tool was asked for, as the harness's own JSON, held as text and never parsed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,
     /// What is sent for this turn right now.
@@ -139,27 +113,18 @@ pub struct Turn {
     /// Whether a plan may not touch it.
     #[serde(default)]
     pub pinned: bool,
-    /// The harness's own record, verbatim.
-    ///
-    /// Opaque. balthasar stores it, hands it back, and never looks inside — which is what lets a
-    /// harness treat this as its journal without balthasar knowing what its records mean.
+    /// The harness's own record, verbatim. balthasar stores it, hands it back, never looks inside.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
-    /// How many times this turn has been revised.
-    ///
-    /// Not zero more often than you would think. A tool entry is written when the call is made
-    /// and revised when the result arrives, so the same cursor is written twice and the second
-    /// write is the one that matters.
+    /// How many times this turn has been revised: a tool entry is written when the call is made
+    /// and revised when the result arrives.
     #[serde(default)]
     pub revisions: u32,
 }
 
 impl Turn {
-    /// What this turn actually costs to send, given its state.
-    ///
-    /// A masked turn costs what its replacement costs rather than nothing: the stub still
-    /// occupies room, and a planner that counted it as free would keep masking things that
-    /// were already masked.
+    /// What this turn actually costs to send, given its state. A masked turn costs what its
+    /// replacement costs rather than nothing: the stub still occupies room.
     #[must_use]
     pub fn cost(&self, masked_cost: u32) -> u32 {
         match self.state {
@@ -169,11 +134,8 @@ impl Turn {
         }
     }
 
-    /// What sending this turn in full would cost, whatever state it is in.
-    ///
-    /// The harness's own count when it has one, and an estimate otherwise. What a planner needs
-    /// to know before deciding whether masking a turn is worth it — a masked turn's saving is
-    /// measured against what it would cost live, not against what it costs now.
+    /// What sending this turn in full would cost, whatever state it is in: the harness's own
+    /// count when it has one, and an estimate otherwise.
     #[must_use]
     pub fn weight(&self) -> u32 {
         u32::try_from(crate::tokens_of(self)).unwrap_or(u32::MAX)
@@ -205,10 +167,7 @@ pub struct Transcript {
     path: PathBuf,
 }
 
-/// Where a project's scrollback lives.
-///
-/// Beside the memory store and named after it, so the two are obviously a pair and just as
-/// obviously separate files.
+/// Where a project's scrollback lives, beside the memory store and named after it.
 #[must_use]
 pub fn transcript_path(scope: &balthasar_model::ScopeId, tool: &crate::Tool) -> PathBuf {
     let memory = crate::scope_path(scope, tool);
@@ -219,11 +178,8 @@ pub fn transcript_path(scope: &balthasar_model::ScopeId, tool: &crate::Tool) -> 
 }
 
 impl Transcript {
-    /// Open the scrollback at `path`, creating it if need be.
-    ///
-    /// `synchronous = FULL` rather than the WAL default of `NORMAL`. NORMAL can lose the last
-    /// transactions to a power cut while keeping the database consistent — which is the right
-    /// trade for a cache and the wrong one for the only copy of what was said.
+    /// Open the scrollback at `path`, creating it if need be. `synchronous = FULL` rather than
+    /// the WAL default of `NORMAL`, which can lose the last transactions to a power cut.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(parent.to_owned(), e))?;
@@ -291,13 +247,8 @@ impl Transcript {
 
     /// Write one turn, or revise the one already at that cursor.
     ///
-    /// Revising is ordinary rather than exceptional: a tool call is written when it is made and
-    /// written again when its result arrives. The revision count is kept because a harness
-    /// replaying a session wants the final form, and anybody debugging one wants to know the
-    /// cursor was touched twice.
-    ///
-    /// Durable on return. A caller that has no other copy must be able to treat this answering
-    /// as the turn being safe.
+    /// Revising is ordinary: a tool call is written when it is made and written again when its
+    /// result arrives. Durable on return.
     pub fn write(&mut self, session: &SessionId, turn: &Turn) -> Result<(), StoreError> {
         self.connection.execute(
             "INSERT INTO turn \
@@ -338,10 +289,8 @@ impl Transcript {
         Ok(())
     }
 
-    /// Everything a run said, in order.
-    ///
-    /// What a harness restores from. Answers the turns as they finally stood, not as they were
-    /// first written — a tool call comes back with its result.
+    /// Everything a run said, in order. Answers the turns as they finally stood, not as they
+    /// were first written — a tool call comes back with its result.
     pub fn replay(&self, session: &SessionId) -> Result<Vec<Turn>, StoreError> {
         let mut statement = self.connection.prepare(
             "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, \
@@ -355,8 +304,6 @@ impl Transcript {
     }
 
     /// One turn, for quoting.
-    ///
-    /// The reason `balthasar why` can show what a witness saw rather than naming a number at it.
     pub fn at(&self, session: &SessionId, cursor: u64) -> Result<Option<Turn>, StoreError> {
         let found = self
             .connection
@@ -371,10 +318,8 @@ impl Transcript {
         found.transpose()
     }
 
-    /// The cursor a resuming harness should allocate next.
-    ///
-    /// One past the highest written. A harness with no journal of its own has no other way to
-    /// know where it was, and guessing wrong overwrites a turn.
+    /// The cursor a resuming harness should allocate next: one past the highest written.
+    /// Guessing wrong overwrites a turn.
     pub fn next_cursor(&self, session: &SessionId) -> Result<u64, StoreError> {
         let highest: Option<i64> = self.connection.query_row(
             "SELECT max(cursor) FROM turn WHERE session = ?1",
@@ -407,11 +352,8 @@ impl Transcript {
         Ok(found)
     }
 
-    /// Say what model a run talks to, and how much it holds.
-    ///
-    /// Told once per run rather than repeated on every plan. A harness that never says this
-    /// gets the shipped default, which is a guess — and a guess about the one number that
-    /// decides whether a prompt is accepted or refused.
+    /// Say what model a run talks to, and how much it holds. Told once per run; a harness that
+    /// never says this gets the shipped default.
     pub fn note_model(
         &self,
         session: &SessionId,
@@ -445,19 +387,10 @@ impl Transcript {
 
     /// The turns a plan still has anything to say about, without their text.
     ///
-    /// Not the whole run. A scrollback has no upper bound — it is the only copy of the
-    /// conversation and nothing prunes it — so a plan that read every turn would cost more the
-    /// longer a session ran, which is exactly backwards. Two bounds, and both are needed:
-    ///
-    /// A dropped or summarised turn costs nothing to send and cannot be masked again. Because a
-    /// summary is always taken from the front, those are always a prefix, and skipping them is
-    /// the sliding window — the floor rises and never falls.
-    ///
-    /// A masked turn keeps its words, which is the whole point of masking being reversible, and
-    /// the planner needs none of them: it has a stub already, and what the turn would have cost
-    /// is a number. So the text stays in the file and the count comes back instead. Without
-    /// this a window holding twenty thousand masked turns reads every byte any of them ever
-    /// said, on every request.
+    /// A dropped or summarised turn costs nothing to send and cannot be masked again; summaries
+    /// are always taken from the front, so those are a prefix and skipping them is the sliding
+    /// window. A masked turn keeps its words and the planner needs none of them, so the count
+    /// comes back instead of the text — otherwise every request reads every masked turn in full.
     pub fn in_window(&self, session: &SessionId) -> Result<Vec<Turn>, StoreError> {
         let mut statement = self.connection.prepare(
             "SELECT cursor, at, role, kind, \
@@ -473,10 +406,8 @@ impl Transcript {
         found.into_iter().collect()
     }
 
-    /// Record what a plan did to a turn.
-    ///
-    /// The text is untouched. Compaction decides what is sent, never what was said, so every
-    /// masked or summarised turn can still be read back in full.
+    /// Record what a plan did to a turn. The text is untouched: compaction decides what is sent,
+    /// never what was said.
     pub fn mark(&self, session: &SessionId, cursor: u64, state: State) -> Result<(), StoreError> {
         self.connection.execute(
             "UPDATE turn SET state = ?3 WHERE session = ?1 AND cursor = ?2",
@@ -518,10 +449,8 @@ fn read(row: &rusqlite::Row<'_>) -> Result<Turn, StoreError> {
     })
 }
 
-/// The scrollback, as first written.
-///
-/// No migration machinery. While a harness is the only writer this can be rewritten freely, and
-/// the day it cannot is the day it earns a `user_version` like the memory store has.
+/// The scrollback, as first written. No migration machinery: while a harness is the only writer
+/// this can be rewritten freely.
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS run (
   session  TEXT PRIMARY KEY,
@@ -591,8 +520,7 @@ mod tests {
 
     #[test]
     fn a_turn_occupies_one_place_in_one_run() {
-        // Keyed on (session, cursor): a harness that re-sends a turn is correcting what it
-        // said about it, not adding a second copy of it to the window.
+        // Keyed on (session, cursor): a re-sent turn corrects what was said rather than adding one.
         let mut held = Transcript::ephemeral().expect("a transcript");
         let session = SessionId::new("s");
         held.write(&session, &turn(7, "first")).expect("first");
@@ -637,8 +565,7 @@ mod tests {
 
     #[test]
     fn the_same_thing_said_twice_is_two_turns() {
-        // The memory store deduplicates within a session, which is right for memory and fatal
-        // for a transcript. Two identical turns are two turns.
+        // The memory store deduplicates within a session; two identical turns here are two turns.
         let mut t = held();
         let s = SessionId::new("s1");
         t.write(&s, &turn(0, "carry on")).expect("write");
@@ -648,8 +575,6 @@ mod tests {
 
     #[test]
     fn a_turn_can_be_revised_where_it_stands() {
-        // Ordinary rather than exceptional: a tool call is written when it is made and again
-        // when its result arrives.
         let mut t = held();
         let s = SessionId::new("s1");
         t.write(&s, &turn(0, "running")).expect("write");
@@ -663,8 +588,6 @@ mod tests {
 
     #[test]
     fn what_a_harness_wrote_comes_back_untouched() {
-        // balthasar stores the record and never parses it. That is what lets a harness treat this
-        // as its journal without balthasar knowing what its records mean.
         let mut t = held();
         let s = SessionId::new("s1");
         let raw = r#"{"type":"tool","id":"t1","name":"shell","result":{"output":"ok"}}"#;
@@ -681,8 +604,6 @@ mod tests {
 
     #[test]
     fn a_resuming_harness_is_told_where_it_was() {
-        // With no journal of its own it has no other way to know, and guessing wrong
-        // overwrites a turn.
         let mut t = held();
         let s = SessionId::new("s1");
         assert_eq!(t.next_cursor(&s).expect("next"), 0, "nothing yet");
@@ -742,8 +663,6 @@ mod tests {
 
     #[test]
     fn the_scrollback_lives_beside_the_memory_but_not_in_it() {
-        // Sharing a file would make every recall walk past a transcript three orders of
-        // magnitude larger than the memories distilled from it.
         let scope = balthasar_model::ScopeId::new("/w/thing");
         let memory = crate::scope_path(&scope, &crate::Tool::default());
         let scrollback = transcript_path(&scope, &crate::Tool::default());

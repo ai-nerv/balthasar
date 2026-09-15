@@ -6,8 +6,7 @@
 //! * **SAID** — an imperative in a user turn. Crosses alone.
 //! * **FIX** — a turn that corrects what just happened. Crosses alone.
 //! * **SCAR** — something that cost work to learn: a call that failed and then succeeded, or a
-//!   file read again and again. This is the signal a coding agent gets for free and that no
-//!   general memory framework looks for.
+//!   file read again and again.
 
 use crate::{Candidate, Observation, Role, instruction};
 use balthasar_model::{Body, Importance, NoteKind, Tier, WitnessKind};
@@ -40,8 +39,7 @@ pub fn extract(turns: &[Observation], imperatives: &[String]) -> Extracted {
     for (index, turn) in turns.iter().enumerate() {
         match turn.role {
             // A sibling session's words reach the transcript as ordinary turns, so the kind is
-            // checked as well as the role: `from` is somebody else asking, and the imperative
-            // rung is reserved for the person whose session this is.
+            // checked as well as the role.
             Role::User if turn.kind.can_instruct() => {
                 if let Some(said) = instruction::read(&turn.text, imperatives) {
                     out.candidates
@@ -78,14 +76,11 @@ pub fn extract(turns: &[Observation], imperatives: &[String]) -> Extracted {
 
 /// What an instruction asks for.
 ///
-/// Two shapes, and the second is the one people actually type. **"remember: we use make"**
-/// carries its claim, and one candidate comes out of it. **"REMEMBER THIS, I have told you
-/// four times"** carries none — what it means is whatever the session was just doing, so the
-/// preceding turns become the candidates.
+/// Two shapes. **"remember: we use make"** carries its claim, and one candidate comes out of it.
+/// **"REMEMBER THIS, I have told you four times"** carries none — what it means is whatever the
+/// session was just doing, so the preceding turns become the candidates.
 ///
-/// Insisting raises what comes out rather than lowering it. Somebody who has been asked the
-/// same question repeatedly is telling you the agent has already failed at this, which is a
-/// better reason to keep something than a calm first mention.
+/// Insisting raises what comes out rather than lowering it.
 fn asked_for(
     said: &instruction::Instruction,
     turn: &Observation,
@@ -115,9 +110,8 @@ fn asked_for(
         return vec![make(claim.clone(), turn.cursor)];
     }
 
-    // Referential. "Remember THIS" names nothing, so what it means has to be found — and it is
-    // right behind it. Taking the recent substantive turns is what a person means by "this",
-    // and it is the difference between storing the word "this" and storing the thing.
+    // Referential: "Remember THIS" names nothing, so the recent substantive turns are taken as
+    // what it meant.
     recent_substance(before)
         .into_iter()
         .map(|(text, cursor)| make(text, cursor))
@@ -126,15 +120,13 @@ fn asked_for(
 
 /// How far back "this" reaches.
 ///
-/// Enough to catch the exchange somebody is pointing at, short enough not to sweep in whatever
-/// they were doing before it.
+/// Enough to catch the exchange somebody is pointing at, and no more.
 const POINTS_BACK: usize = 4;
 
 /// The recent turns worth treating as what "this" meant.
 ///
-/// Assistant prose and successful tool calls: what the agent said, and what worked. Not the
-/// person's own turns — somebody pointing at the conversation means what the *agent* did, not
-/// a replay of what they themselves asked for.
+/// Assistant prose and successful tool calls, never the person's own turns: pointing at the
+/// conversation means what the *agent* did.
 fn recent_substance(before: &[Observation]) -> Vec<(String, Option<u64>)> {
     let mut out = Vec::new();
     for turn in before.iter().rev().take(POINTS_BACK * 2) {
@@ -166,9 +158,8 @@ fn recent_substance(before: &[Observation]) -> Vec<(String, Option<u64>)> {
 
 /// Words people put in front of a correction before getting to it.
 ///
-/// Stripped as a leading run, never searched for. A turn that *contains* "but" in the middle is
-/// a sentence about something; a turn that opens "ok but no, ..." is somebody clearing their
-/// throat. Scanning anywhere would take "I would not say no, that is fine" as a correction.
+/// Stripped as a leading run, never searched for: scanning anywhere would take "I would not say
+/// no, that is fine" as a correction.
 const THROAT: &[&str] = &[
     "ok", "okay", "so", "um", "uh", "hmm", "well", "oh", "hey", "but", "and", "also", "right",
     "yeah", "yep", "yes", "sorry", "please",
@@ -187,11 +178,8 @@ const OPENERS: &[&str] = &[
 
 /// A claim that replaces what just happened.
 ///
-/// The most information-dense turn in a coding session is the one that starts "no, ". It
-/// carries both a refutation and a replacement, and the replacement is what is worth keeping —
-/// so the marker is removed rather than stored. "no, we use make" and "we use make" are one
-/// claim, and keeping the "no," would hash them apart and hand a model a sentence arguing with
-/// something it cannot see.
+/// The replacement is what is kept, so the marker is removed rather than stored: "no, we use
+/// make" and "we use make" are one claim, and keeping the "no," would hash them apart.
 #[must_use]
 pub fn correction(text: &str) -> Option<String> {
     let trimmed = past_throat(text.trim_start());
@@ -199,8 +187,7 @@ pub fn correction(text: &str) -> Option<String> {
     let marker = OPENERS.iter().find(|o| lower.starts_with(*o))?;
 
     // "not " is part of what it says — "not the staging box" is a claim about the staging box —
-    // where "no, " and "actually, " are only the speech act. Keeping the first and dropping the
-    // rest is the difference between a claim and a claim with a stutter in front of it.
+    // where "no, " and "actually, " are only the speech act.
     let claim = if *marker == "not " {
         first_sentence(trimmed)
     } else {
@@ -231,9 +218,7 @@ fn past_throat(text: &str) -> &str {
 
 /// A call that failed and then succeeded is a habit worth keeping.
 ///
-/// The canonical case, and the one to demo: `cargo test` fails because this repository needs
-/// `make test`, and `make test` works. One habit, learned once, worth more than a hundred
-/// sentences of prose — and today every harness throws it away when the session ends.
+/// The canonical case: `cargo test` fails because this repository needs `make test`.
 fn repair(worked: &Observation, before: &[Observation]) -> Option<Candidate> {
     if !worked.worked() {
         return None;
@@ -295,8 +280,8 @@ fn re_read(turn: &Observation, seen: &mut HashMap<String, u32>) -> Option<Candid
     let path = turn.path()?;
     let count = seen.entry(path.to_owned()).or_default();
     *count += 1;
-    // Once, exactly, at the threshold. Proposing it again on every subsequent read would put
-    // one session's emphasis in as several witnesses, which is what diversity exists to stop.
+    // Once, exactly at the threshold: proposing it again on every subsequent read would put one
+    // session's emphasis in as several witnesses.
     if *count != RE_READS {
         return None;
     }
@@ -314,15 +299,13 @@ fn re_read(turn: &Observation, seen: &mut HashMap<String, u32>) -> Option<Candid
 /// The first sentence of a claim, so a paragraph does not become one fact.
 ///
 /// A full stop only ends a sentence when something follows it that is not more of the same
-/// token. `10.0.0.7`, `1.2` and `fly.io` are one word each, and splitting on every dot stored
-/// the staging box as being "at 10".
+/// token, so `10.0.0.7`, `1.2` and `fly.io` stay whole.
 fn first_sentence(text: &str) -> String {
     let bytes: Vec<char> = text.chars().collect();
     for (i, c) in bytes.iter().enumerate() {
         let ends = match c {
             '\n' | '!' | '?' => true,
-            // A dot ends a sentence only at the end of the text or before whitespace. Inside
-            // a run of non-space characters it is part of a number, a host or a filename.
+            // A dot ends a sentence only at the end of the text or before whitespace.
             '.' => bytes.get(i + 1).is_none_or(|next| next.is_whitespace()),
             _ => false,
         };
@@ -372,8 +355,8 @@ mod tests {
 
     #[test]
     fn somebody_insisting_gets_a_memory_that_will_not_fade() {
-        // A person who has been asked the same thing repeatedly is not asking for a memory
-        // that decays. Their annoyance is part of the evidence.
+        // A person who has been asked the same thing repeatedly is not asking for a memory that
+        // decays.
         let out = extract(&[user("DUUUDE REMEBER we use make test!!")], &markers());
         let kept = out.candidates.first().expect("an instruction");
         assert!(kept.pinned, "it was shouted");
@@ -383,8 +366,7 @@ mod tests {
 
     #[test]
     fn pointing_at_the_conversation_keeps_what_the_conversation_did() {
-        // The shape people actually type. "REMEMBER THIS" names nothing, so what it means is
-        // right behind it — and storing the word "this" would be worse than storing nothing.
+        // "REMEMBER THIS" names nothing, so what it means is right behind it.
         let turns = vec![
             user("how do I run the tests"),
             tool("shell", "cargo test", false),
@@ -405,8 +387,7 @@ mod tests {
 
     #[test]
     fn pointing_backwards_does_not_replay_the_persons_own_turns() {
-        // Somebody pointing at the conversation means what the *agent* did, not a repeat of
-        // what they themselves just asked for.
+        // Somebody pointing at the conversation means what the *agent* did.
         let turns = vec![user("what is the port"), user("REMEMBER THAT")];
         let out = extract(&turns, &markers());
         assert!(
@@ -446,8 +427,7 @@ mod tests {
 
     #[test]
     fn a_correction_still_counts_after_throat_clearing() {
-        // A person correcting an agent rarely leads with the correction. Anchoring at word zero
-        // missed every one of these, which is most of how corrections actually arrive.
+        // A person correcting an agent rarely leads with the correction.
         for text in [
             "ok but no, we deploy with fly.io",
             "yeah no, we deploy with fly.io",
@@ -464,16 +444,15 @@ mod tests {
 
     #[test]
     fn a_marker_in_the_middle_of_a_sentence_is_not_a_correction() {
-        // The cost of unanchoring, and the line it must not cross. Only a leading run of
-        // throat-clearing is skipped; a turn that merely contains one of these words is prose.
+        // Only a leading run of throat-clearing is skipped; a turn that merely contains one of
+        // these words is prose.
         assert_eq!(correction("i would not say no, that is fine"), None);
         assert_eq!(correction("the answer is no, apparently"), None);
     }
 
     #[test]
     fn a_correction_hashes_the_same_as_the_plain_claim() {
-        // The point of dropping the marker. Before this, a claim corrected in one run and
-        // stated plainly in another were two claims, so neither corroborated the other.
+        // A claim corrected in one run and stated plainly in another is one claim.
         let corrected = correction("no, we deploy with fly.io").expect("a correction");
         assert_eq!(
             balthasar_model::content_hash(&corrected),
@@ -547,8 +526,7 @@ mod tests {
 
     #[test]
     fn a_file_read_three_times_is_proposed_once() {
-        // One session's emphasis must arrive as one witness, not as several. That is what
-        // diversity exists to protect.
+        // One session's emphasis must arrive as one witness, not as several.
         let read = Observation {
             role: Role::Tool,
             tool: Some("read".into()),

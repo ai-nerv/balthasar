@@ -62,6 +62,7 @@ impl Harness {
             scrollback: None,
             scratch: None,
             scope: ScopeId::new("/w/thing"),
+            agent: balthasar_model::AgentId::main(),
             now: NOW,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
@@ -82,13 +83,7 @@ impl Harness {
     }
 
     fn field(reply: &Reply, name: &str) -> Option<String> {
-        reply
-            .result
-            .as_ref()?
-            .first()?
-            .get(name)?
-            .as_str()
-            .map(str::to_owned)
+        reply.result.first()?.get(name)?.as_str().map(str::to_owned)
     }
 }
 
@@ -117,15 +112,11 @@ fn nothing_is_recorded_when_capture_is_off() {
 
     assert!(reply.ok, "{reply:?}");
     assert!(Harness::field(&reply, "injection").is_none());
-    // And the shape a caller sees is the old one: a bare list.
-    assert!(
-        reply
-            .result
-            .as_ref()
-            .and_then(|v| v.first())
-            .is_some_and(serde_json::Value::is_array),
-        "the reply shape changed for callers that did not ask for a ledger"
-    );
+    // And what a caller sees is the listing: one memory per row, none of them a list.
+    assert!(!reply.result.is_empty(), "{reply:?}");
+    for row in &reply.result {
+        assert!(row.get("id").is_some(), "a row is a memory: {row}");
+    }
 }
 
 #[test]

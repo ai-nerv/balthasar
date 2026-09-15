@@ -318,14 +318,55 @@ fn reading_never_touches_the_scrollback() {
     assert_eq!(held.replay(&run()).expect("replay"), before);
 }
 
+/// The quickest of three runs of `work`, in microseconds, with a warm-up pass thrown away.
+fn quickest(mut work: impl FnMut()) -> f64 {
+    work();
+    (0..3)
+        .map(|_| {
+            let started = std::time::Instant::now();
+            work();
+            started.elapsed().as_secs_f64() * 1e6
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 #[test]
-fn a_bounded_read_of_a_huge_run_is_quick() {
-    // The point of all of this. `replay` on this would build ten thousand turns in memory; a
-    // bounded read must cost what it returns, not what exists.
+fn a_bounded_read_costs_what_it_returns_rather_than_what_the_run_holds() {
+    // The point of all of this. `replay` builds ten thousand turns in memory; a bounded read of
+    // forty must not, and it did — it read the whole run and threw away all but the tail.
+    //
+    // Measured against `replay` on the same run rather than against a wall clock, so a loaded
+    // machine inflates both and cancels. The clock version of this passed on any machine quick
+    // enough to get under 250ms and said nothing whatever about the code.
     let held = a_long_run(10_000);
-    let started = std::time::Instant::now();
-    let read = held
-        .read(
+    let budget = Budget {
+        tokens: 500,
+        turns: 40,
+    };
+
+    let bounded = quickest(|| {
+        let read = held.read(&run(), &Want::Tail, &budget).expect("read");
+        assert!(read.turns.len() <= 40, "a bounded read stayed bounded");
+    });
+    let whole = quickest(|| {
+        held.replay(&run()).expect("replay");
+    });
+
+    let share = bounded / whole;
+    assert!(
+        share < 0.2,
+        "reading forty turns cost {:.0}% of reading all ten thousand ({bounded:.0}us of \
+         {whole:.0}us); a bounded read is materialising turns it does not return",
+        share * 100.0
+    );
+}
+
+#[test]
+#[ignore = "wall-clock; grades the machine, not the code. Run it to read the number."]
+fn a_bounded_read_of_a_huge_run_stays_inside_its_declared_budget() {
+    let held = a_long_run(10_000);
+    let took = quickest(|| {
+        held.read(
             &run(),
             &Want::Tail,
             &Budget {
@@ -334,12 +375,10 @@ fn a_bounded_read_of_a_huge_run_is_quick() {
             },
         )
         .expect("read");
-    let took = started.elapsed();
-
-    assert!(read.turns.len() <= 40);
+    });
     assert!(
-        took.as_millis() < 250,
-        "took {took:?} on a ten-thousand-turn run"
+        took < 250_000.0,
+        "took {took:.0}us on a ten-thousand-turn run"
     );
 }
 

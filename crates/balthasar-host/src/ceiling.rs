@@ -1,8 +1,4 @@
 //! What a peer may write, and what only the owner may.
-//!
-//! A memory layer with an open write socket is a memory-poisoning surface, and the literature
-//! has both a name for that and papers about it. The answer here is attribution plus a ceiling
-//! rather than a refusal: a peer may propose, and the ladder still decides.
 
 use balthasar_ipc::Peer;
 use balthasar_model::{ScopeId, WitnessKind};
@@ -18,28 +14,18 @@ pub enum Door {
 
 impl Door {
     /// Whether this door may pin.
-    ///
-    /// Pinning makes a belief permanent. A process that could do it could install one in an
-    /// agent that nobody chose and nothing will decay.
     #[must_use]
     pub fn may_pin(&self) -> bool {
         matches!(self, Self::Owner)
     }
 
     /// Whether this door may claim an evaluation came from the person.
-    ///
-    /// A peer may report how its own action went. It may not sign that report as the user's
-    /// judgment, because the two carry different weight in every policy that reads them and a
-    /// peer that could forge the stronger one could manufacture its own authority.
     #[must_use]
     pub fn may_evaluate_as_user(&self) -> bool {
         matches!(self, Self::Owner)
     }
 
     /// Whether this door may write to the global store.
-    ///
-    /// A wrong project fact contaminates one project; a wrong global one contaminates every
-    /// project. A peer writes to the scope it is working in.
     #[must_use]
     pub fn may_reach_global(&self) -> bool {
         matches!(self, Self::Owner)
@@ -52,9 +38,6 @@ impl Door {
     }
 
     /// The strongest kind of evidence this door may claim.
-    ///
-    /// An imperative is "the person said so". A peer saying it would be a process forging the
-    /// one witness that crosses the gate alone and pins on the way through.
     #[must_use]
     pub fn strongest(&self) -> WitnessKind {
         match self {
@@ -68,8 +51,6 @@ impl Door {
     pub fn witness_for(&self, asked: WitnessKind) -> WitnessKind {
         match self {
             Self::Owner => asked,
-            // Not a refusal. A peer's proposal is worth something — it is simply not worth
-            // what a person at a keyboard is worth, and the ladder is what tells them apart.
             Self::Socket(_) => WitnessKind::Manual,
         }
     }
@@ -84,9 +65,6 @@ impl Door {
     }
 
     /// The scope a write may actually land in.
-    ///
-    /// A peer asking for global is given the project rather than refused: it wanted something
-    /// remembered, and remembering it narrowly is closer to that than not at all.
     #[must_use]
     pub fn scope_for(&self, asked: &ScopeId, working_in: &ScopeId) -> ScopeId {
         if asked.is_global() && !self.may_reach_global() {
@@ -117,15 +95,11 @@ mod tests {
 
     #[test]
     fn a_peer_may_not_pin() {
-        // A process that could pin could install a permanent belief nobody chose and nothing
-        // will decay.
         assert!(!peer().may_pin());
     }
 
     #[test]
     fn a_peer_may_not_reach_the_global_store() {
-        // A wrong project fact contaminates one project. A wrong global one contaminates all
-        // of them.
         assert!(!peer().may_reach_global());
         let landed = peer().scope_for(&ScopeId::global(), &ScopeId::new("/w/thing"));
         assert_eq!(landed.as_str(), "/w/thing", "narrowed, not refused");
@@ -133,7 +107,6 @@ mod tests {
 
     #[test]
     fn a_peer_may_not_forge_an_imperative() {
-        // The one witness that crosses the gate alone and pins on the way through.
         assert_eq!(
             peer().witness_for(WitnessKind::Imperative),
             WitnessKind::Manual
@@ -143,7 +116,6 @@ mod tests {
 
     #[test]
     fn a_peers_write_is_still_worth_something() {
-        // Attribution and a ceiling, not a refusal. It proposes; the ladder decides.
         assert!(WitnessKind::Manual.weight() > 0.0);
         assert!(!WitnessKind::Manual.crosses_alone(balthasar_model::floor::PROMOTE));
     }
@@ -155,7 +127,6 @@ mod tests {
 
     #[test]
     fn every_write_by_a_peer_names_the_process() {
-        // `balthasar why` has to be able to say which process believes something.
         let named = peer().who().expect("a name");
         assert!(
             named.contains("harness") && named.contains("4021"),

@@ -1,9 +1,6 @@
 //! `balthasar serve`, `balthasar api` and `balthasar lua-api` — the three ways in from outside.
-//!
-//! Both doors reach the same dispatcher, which reaches the same functions the CLI calls. That
-//! is the arrangement that keeps a socket answer and a terminal answer from describing a
-//! memory differently.
 
+use crate::render::How;
 use crate::{Which, now, open, render, runs_under};
 use balthasar_host::{Answering, Door};
 use balthasar_ipc::{Listener, Peer, Reply, Request};
@@ -19,14 +16,6 @@ pub struct ServeArgs {
     instance: String,
 
     /// End this when the process with this id ends, and let the kernel be what enforces it.
-    ///
-    /// The caller names itself rather than being inferred, because "who started me" is a
-    /// question with no reliable answer once the answer has changed: an orphan has already been
-    /// handed to whatever reaps on this machine, and that is init on some and the user's own
-    /// session manager on others. A pid to compare against is the same test on both.
-    ///
-    /// Absent by default: a balthasar started at a terminal or by a unit file is meant to
-    /// outlive the thing that typed the command, and would otherwise leave with the shell.
     #[arg(long, value_name = "PID")]
     tied: Option<u32>,
 }
@@ -38,33 +27,23 @@ pub struct ApiArgs {
     verb: String,
     /// Its arguments, each as JSON.
     args: Vec<String>,
-    /// Answer in CBOR rather than JSON.
-    ///
-    /// The same option `needs` and `configure` take, and the same one melchior's `ask` takes.
-    /// This door answered in JSON alone, so a caller that had asked every other door in the
-    /// family for CBOR had to keep a JSON parser for this one.
-    #[arg(long)]
-    cbor: bool,
+    #[command(flatten)]
+    how: How,
+}
+
+/// Hand over the client library.
+#[derive(Debug, Parser)]
+pub struct ClientArgs {
+    #[command(flatten)]
+    how: How,
 }
 
 /// Ask the kernel to end this process when whoever started it ends.
 ///
-/// `PR_SET_PDEATHSIG`, and it has to be the kernel because of the case that matters: nothing
-/// runs in a process that is killed outright, so a caller cannot be relied on to take its own
-/// children with it. A cleanup on the way out covers the exits that have a way out. This covers
-/// the rest — a panic, a `kill -9`, an OOM — which are exactly the ones that leave a memory
-/// layer running with nobody to answer.
-///
-/// The signal only watches from the moment it is set, so a caller that died in the window
-/// between the spawn and this call is a death nothing was ever sent for — and without the check
-/// below this would serve forever, watching a parent that had already gone. Asking whether the
-/// caller is still our parent settles that, and settles the other gap too: the signal arrives
-/// when the *thread* that spawned this exits rather than the whole process.
-///
-/// Against the pid the caller gave rather than against whatever `getppid` said a moment ago,
-/// which was the version that did not work: an orphan is reparented before it gets here, so the
-/// value read first and the value read second are the same reaper, and the comparison passed
-/// while the caller was already dead.
+/// `PR_SET_PDEATHSIG` only watches from the moment it is set, and arrives when the *thread* that
+/// spawned this exits rather than the whole process, so the parent is checked as well. Against
+/// the pid the caller gave rather than `getppid`, which reads the reaper an orphan has already
+/// been handed to and so compares equal while the caller is dead.
 fn tie_to_caller(caller: u32) -> anyhow::Result<()> {
     rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))?;
     let ours = rustix::process::getppid().is_some_and(|parent| {
@@ -85,37 +64,63 @@ pub fn serve(
     floors: balthasar_lua::Floors,
     loaded: &mut crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
+    // Before the tie, and so before any socket exists: `PR_SET_PDEATHSIG` is `SIGTERM`, and a
+    // parent dying before the block is in place would end this process where it stands.
+    if !balthasar_ipc::hold_stop_signals() {
+        eprintln!(
+            "{}",
+            render::dim("could not hold SIGTERM; a stop will not be tidy")
+        );
+    }
     if let Some(caller) = args.tied {
         tie_to_caller(caller)?;
     }
+    // Here rather than in `bind`: the sweep dials every socket in the runtime directory. Both
+    // directories, because a corpse under the old name is a name the next instance has to disprove.
+    for dir in balthasar_ipc::socket_dirs() {
+        balthasar_ipc::swept(&dir);
+    }
     let listener = Listener::bind(&args.instance)?;
-    // Written whether or not anybody connects: a caller that finds no socket falls back to
-    // spawning, and it can only do that if we left it an absolute path to spawn.
+    // Written whether or not anybody connects: a caller that finds no socket spawns from this path.
     let descriptor = balthasar_ipc::tool_descriptor()?;
 
     eprintln!("{}", render::bold(&listener.path().display().to_string()));
+    // Said out loud rather than assumed: an unrebuilt caller reaches this only through the second name.
+    for also in listener.paths().into_iter().skip(1) {
+        eprintln!("{}", render::dim(&format!("also {}", also.display())));
+    }
+    if listener.paths().len() < 2 {
+        balthasar_model::noted!(
+            "serve: {} could not be bound as well; a caller that has not been rebuilt will not \
+             find this one",
+            balthasar_ipc::legacy_socket_path(&args.instance).display()
+        );
+    }
     eprintln!("{}", render::dim(&format!("scope {scope}")));
     eprintln!(
         "{}",
         render::dim(&format!("descriptor {}", descriptor.display()))
     );
 
-    // One store per tool, opened when that tool first speaks. A harness and a shell reaching
-    // the same daemon are two memories, and neither is opened on the chance that it might be.
+    // One store per tool, opened when that tool first speaks.
     let mut opened: std::collections::HashMap<balthasar_store::Tool, Opened> =
         std::collections::HashMap::new();
     let fallback = tool.tool.clone();
-    // Read once at startup rather than per request: a configuration that changed mid-session
-    // would make half a run's ledger and half not, which is worse than either.
+    // Read once at startup rather than per request, so a mid-session change cannot halve a ledger.
     let capture = loaded.settings().ledger().capture;
 
-    listener.serve(|peer: &Peer, request: Request| {
+    let served = listener.serve(|peer: &Peer, request: Request| {
         let named = named_by_kernel(peer).unwrap_or_else(|| fallback.clone());
+        if !has_room(opened.len(), opened.contains_key(&named), named == fallback) {
+            return Reply::refused(format!(
+                "this balthasar already holds stores for {TOOLS} tools and will not open one for \
+                 '{named}' — start a balthasar of its own for it"
+            ));
+        }
         let held = match opened.entry(named.clone()) {
             std::collections::hash_map::Entry::Occupied(seat) => seat.into_mut(),
             std::collections::hash_map::Entry::Vacant(seat) => {
-                // The kernel named it, so this counts as named: a peer reads its own memory
-                // rather than every tool's, which is what a program asking for context wants.
+                // The kernel named it, so this counts as named.
                 let which = Which {
                     tool: named.clone(),
                     named: true,
@@ -143,6 +148,7 @@ pub fn serve(
             scrollback: Some(&mut held.scrollback),
             scratch: Some(&mut held.scratch),
             scope: scope.clone(),
+            agent: agent_of(peer),
             now: now(),
             inject_floor: floors.inject,
             live_floor: floors.live,
@@ -151,16 +157,18 @@ pub fn serve(
         balthasar_host::answer_with(&mut at, &Door::Socket(peer.clone()), &request, |entry| {
             loaded.mask(entry)
         })
-    })?;
+    });
+
+    // The socket goes before the stores: closing a store checkpoints its WAL and fsyncs.
+    drop(listener);
+    served?;
     Ok(())
 }
 
 /// Answer one question on standard output and exit successfully.
 ///
-/// Two rules, both learned the hard way by the siblings. The reply is the **wire** shape rather
-/// than what the human CLI prints, so a client needs one parser and not two. And a refused verb
-/// is `{"ok":false,…}` with exit status zero, because a real error arriving as "exited 1" is
-/// indistinguishable from the binary being missing.
+/// The reply is the wire shape, not what the human CLI prints. A refused verb is
+/// `{"ok":false,…}` with exit status zero: "exited 1" cannot be told from a missing binary.
 pub fn api(
     store_path: Option<&Path>,
     scope: &ScopeId,
@@ -173,8 +181,7 @@ pub fn api(
         .args
         .iter()
         .map(|raw| {
-            // A bare word is a string. Every caller that shells out has to quote its JSON, and
-            // making them quote `"recall"` twice is a papercut with no upside.
+            // A bare word is a string.
             serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.clone()))
         })
         .collect();
@@ -194,25 +201,37 @@ pub fn api(
                 scrollback: Some(&mut scrollback),
                 scratch: None,
                 scope: scope.clone(),
+                agent: agent_here(),
                 now: now(),
                 inject_floor: floors.inject,
                 live_floor: floors.live,
                 capture,
             };
-            // One-shot is the owner's own door: it is this process, started by whoever ran it,
-            // with no socket in between and nobody else to attribute it to.
+            // One-shot is the owner's own door: this process, with no socket in between.
             balthasar_host::answer_with(&mut at, &Door::Owner, &request, |entry| loaded.mask(entry))
         }
         Err(why) => Reply::refused(why.to_string()),
     };
 
     let mut out = std::io::stdout().lock();
-    crate::coordinated::emit(&mut out, args.cbor, &serde_json::to_value(&reply)?);
+    crate::coordinated::emit(&mut out, args.how, &reply);
     Ok(())
 }
 
-/// Print the client library, for a program that needs to embed it.
-pub fn lua_api() {
+/// Hand over the client library.
+///
+/// Bare, it is the source, because that is what a person redirecting it into a file wants. Asked
+/// in an encoding, it is framed with the source as the one value in `result`.
+pub fn lua_api(args: &ClientArgs) {
+    if args.how.framed() {
+        let mut out = std::io::stdout().lock();
+        crate::coordinated::emit(
+            &mut out,
+            args.how,
+            &Reply::one(serde_json::json!(balthasar_lua::CLIENT)),
+        );
+        return;
+    }
     print!("{}", balthasar_lua::CLIENT);
 }
 
@@ -223,11 +242,98 @@ struct Opened {
     scratch: balthasar_store::Scratchpad,
 }
 
+/// What a harness names its agent in, in the environment of the process that connects.
+///
+/// The role's name, because the harness on the other end talks to a `memory` rather than to this
+/// program — see `ROLES.md`.
+const AGENT: &str = "MAGI_MEMORY_AGENT";
+
+/// What that variable used to be called. Still read, for one release.
+const AGENT_WAS: &str = "BALTHASAR_AGENT";
+
+/// Say once that a caller is still naming its agent the old way.
+fn the_old_name_was_used() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        balthasar_model::noted!(
+            "serve: a caller named its agent in ${AGENT_WAS}; ${AGENT} is what replaces it"
+        );
+    });
+}
+
+/// Which agent inside a run a connection belongs to.
+///
+/// Read from the peer's own environment rather than taken from a call, which a caller could vary
+/// per call. A peer that names none falls back to this process's own, and only then to
+/// [`AgentId::main`]: `/proc/<pid>/environ` is the block the kernel wrote at `exec`, which
+/// `setenv` never touches, so a harness that learns its name later hands it down at the spawn.
+fn agent_of(peer: &Peer) -> balthasar_model::AgentId {
+    std::fs::read(format!("/proc/{}/environ", peer.pid))
+        .ok()
+        .and_then(|body| named_in(&body))
+        .unwrap_or_else(agent_here)
+}
+
+/// What names the agent in one `/proc/<pid>/environ` block, if anything does.
+///
+/// The role's variable first, then the program's. A harness that sets both means the new one.
+fn named_in(body: &[u8]) -> Option<balthasar_model::AgentId> {
+    let said = |variable: &str| {
+        let prefix = format!("{variable}=");
+        body.split(|byte| *byte == 0)
+            .filter_map(|entry| std::str::from_utf8(entry).ok())
+            .find_map(|entry| entry.strip_prefix(&prefix))
+            .map(str::trim)
+            .filter(|named| !named.is_empty())
+            .map(balthasar_model::AgentId::new)
+    };
+    said(AGENT).or_else(|| {
+        let older = said(AGENT_WAS);
+        if older.is_some() {
+            the_old_name_was_used();
+        }
+        older
+    })
+}
+
+/// Which agent this process itself is, and the fallback for a peer that named none.
+fn agent_here() -> balthasar_model::AgentId {
+    let said = |variable: &str| {
+        std::env::var(variable)
+            .ok()
+            .map(|named| named.trim().to_owned())
+            .filter(|named| !named.is_empty())
+    };
+    said(AGENT)
+        .or_else(|| {
+            let older = said(AGENT_WAS);
+            if older.is_some() {
+                the_old_name_was_used();
+            }
+            older
+        })
+        .map_or_else(
+            balthasar_model::AgentId::main,
+            balthasar_model::AgentId::new,
+        )
+}
+
+/// How many tools one daemon opens a store for.
+///
+/// Nothing authenticates the kernel-given name that picks one, so without a ceiling any program
+/// reaching the socket mints directories and holds descriptors until one of the two runs out.
+const TOOLS: usize = 8;
+
+/// Whether a daemon already holding `open` tools will open one more.
+///
+/// `own` keeps a seat, so a crowd of peers cannot lock the owner out of its own memory.
+fn has_room(open: usize, held: bool, own: bool) -> bool {
+    held || open < if own { TOOLS } else { TOOLS - 1 }
+}
+
 /// Which tool a connection belongs to, as the kernel names it.
 ///
-/// This is the whole reason a tool dimension is safe: the caller is not asked, so it cannot
-/// answer wrongly. A peer the kernel will not name, or whose name nothing survives, falls back
-/// to whatever the daemon was started as rather than being filed under a guess.
+/// A peer the kernel will not name falls back to whatever the daemon was started as.
 fn named_by_kernel(peer: &Peer) -> Option<balthasar_store::Tool> {
     peer.program
         .as_deref()
@@ -237,4 +343,107 @@ fn named_by_kernel(peer: &Peer) -> Option<balthasar_store::Tool> {
                 .map(|name| name.to_string_lossy().into_owned())
         })
         .and_then(|name| balthasar_store::Tool::from_program(&name))
+}
+
+#[cfg(test)]
+mod agents {
+    use super::*;
+
+    fn environ(entries: &[&str]) -> Vec<u8> {
+        entries.join("\0").into_bytes()
+    }
+
+    #[test]
+    fn a_peer_that_names_itself_is_read_from_its_own_block() {
+        let body = environ(&["PATH=/usr/bin", "MAGI_MEMORY_AGENT=zeta-pi", "HOME=/home/x"]);
+        assert_eq!(
+            named_in(&body).map(|id| id.to_string()),
+            Some("zeta-pi".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_peer_still_naming_its_agent_the_old_way_is_read_all_the_same() {
+        // A harness that has not been rebuilt sets only this, and its turns must not land under
+        // `main` while it thinks they are landing under an agent.
+        let body = environ(&["PATH=/usr/bin", "BALTHASAR_AGENT=zeta-pi"]);
+        assert_eq!(
+            named_in(&body).map(|id| id.to_string()),
+            Some("zeta-pi".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_peer_that_sets_both_means_the_one_that_replaced_the_other() {
+        let body = environ(&["MAGI_MEMORY_AGENT=new", "BALTHASAR_AGENT=old"]);
+        assert_eq!(
+            named_in(&body).map(|id| id.to_string()),
+            Some("new".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_peer_that_names_nothing_is_none_rather_than_main() {
+        for body in [
+            environ(&["PATH=/usr/bin"]),
+            environ(&["MAGI_MEMORY_AGENT="]),
+            environ(&["MAGI_MEMORY_AGENT=   "]),
+            environ(&["BALTHASAR_AGENT="]),
+            environ(&["MAGI_MEMORY_AGENT=", "BALTHASAR_AGENT="]),
+            Vec::new(),
+        ] {
+            assert_eq!(
+                named_in(&body),
+                None,
+                "{:?}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_is_not_matched_on_a_variable_that_merely_ends_in_it() {
+        for body in [
+            environ(&["MY_MAGI_MEMORY_AGENT=wrong"]),
+            environ(&["MY_BALTHASAR_AGENT=wrong"]),
+        ] {
+            assert_eq!(
+                named_in(&body),
+                None,
+                "{:?}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tools {
+    use super::{TOOLS, has_room};
+
+    #[test]
+    fn several_real_tools_share_one_daemon() {
+        // The case the ceiling must not break: a family of programs and a harness or two.
+        for open in 0..TOOLS - 1 {
+            assert!(has_room(open, false, false), "{open} tools in");
+        }
+    }
+
+    #[test]
+    fn an_unknown_peer_stops_minting_stores_at_the_ceiling() {
+        // Every new name is a directory on disk and descriptors held for the daemon's lifetime.
+        assert!(!has_room(TOOLS - 1, false, false));
+        assert!(!has_room(TOOLS, false, false));
+    }
+
+    #[test]
+    fn a_tool_already_open_costs_nothing_to_answer_again() {
+        assert!(has_room(TOOLS, true, false), "its store is already open");
+    }
+
+    #[test]
+    fn a_crowd_of_peers_cannot_lock_the_owner_out_of_its_own_memory() {
+        assert!(has_room(TOOLS - 1, false, true));
+        assert!(!has_room(TOOLS - 1, false, false));
+    }
 }

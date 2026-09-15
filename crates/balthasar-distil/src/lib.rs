@@ -1,13 +1,7 @@
 //! The ladder: what crosses from a session into memory, and why.
 //!
-//! Six paths, each with its own evidence and its own weight, and a candidate crosses when any
-//! one of them admits it. They are not stages — they are independent witnesses to the same
-//! claim, which is what lets a thing nobody said twice still be remembered because it was
-//! expensive to learn.
-//!
-//! What is built so far is the extractive half: rules that need no model, so the whole thing
-//! works with no key and no network. A distiller makes it better and its absence never makes
-//! it fail.
+//! Six paths, each with its own evidence and its own weight, and a candidate crosses when any one
+//! of them admits it. They are independent witnesses to the same claim, not stages.
 
 mod akin;
 mod candidate;
@@ -50,10 +44,8 @@ pub enum DistilError {
     /// A configuration file did not load.
     #[error(transparent)]
     Lua(#[from] balthasar_lua::LuaError),
-    /// The source is not one any configuration declared.
     #[error("no source called '{0}' — declare one with balthasar.source(\"{0}\", …)")]
     NoSource(String),
-    /// The source declared no way to find sessions.
     #[error("the source '{0}' declares no {1}()")]
     Incomplete(String, &'static str),
     /// A file could not be read.

@@ -1,8 +1,6 @@
 //! What a harness's transcript looks like once balthasar has it.
 //!
-//! balthasar defines this shape and a harness converts to it, in Lua. That is the whole of the
-//! independence commitment: the moment this crate knew one harness's own record type it would
-//! be a component of that harness wearing a socket.
+//! balthasar defines this shape and a harness converts to it, in Lua.
 
 use balthasar_model::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -11,18 +9,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
-    /// The person.
     #[default]
     User,
-    /// The model.
     Assistant,
-    /// A tool answering.
     Tool,
     /// Somebody else — a sibling session, or a role this build does not know.
     ///
-    /// Unknown roles land here rather than on [`Role::User`], because the rules that read a
-    /// person's turns mint the strongest witness there is. A harness that grows a role balthasar
-    /// has not heard of should lose an extraction, never gain an imperative.
+    /// Unknown roles land here rather than on [`Role::User`], whose turns mint the strongest
+    /// witness there is.
     Other,
 }
 
@@ -30,23 +24,16 @@ pub enum Role {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
-    /// Ordinary text.
     #[default]
     Prose,
-    /// The model's reasoning.
     Thinking,
-    /// A tool being asked for.
     ToolCall,
-    /// A tool's answer.
     ToolResult,
     /// A summary standing in for turns that left the window.
     Summary,
     /// The person's own turn, where a harness names it rather than leaving it prose.
     User,
     /// Another session speaking, carried into this one.
-    ///
-    /// Text somebody else's run produced. It is worth keeping and worth quoting, and it is not
-    /// the person of *this* session asking for anything.
     From,
     /// A branch point — a count of what it keeps, not something anybody said.
     Branch,
@@ -54,9 +41,6 @@ pub enum Kind {
 
 impl Kind {
     /// Whether a turn of this kind can carry an instruction from the person.
-    ///
-    /// [`Kind::From`] is another session's words and [`Kind::Branch`] is bookkeeping; neither is
-    /// this person telling this session to remember something.
     #[must_use]
     pub fn can_instruct(self) -> bool {
         !matches!(self, Self::From | Self::Branch)
@@ -65,51 +49,39 @@ impl Kind {
 
 /// One turn, as balthasar sees it.
 ///
-/// Every field but `text` is optional, because a harness that cannot supply one should be able
-/// to leave it out rather than invent it. An adapter that lies about a duration is worse than
-/// one that says nothing.
+/// Every field but `text` is optional, so a harness that cannot supply one leaves it out.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Observation {
     /// Where in the transcript, so evidence can point at it.
     #[serde(default)]
     pub cursor: Option<u64>,
-    /// Who said it.
     #[serde(default)]
     pub role: Role,
-    /// What kind.
     #[serde(default)]
     pub kind: Kind,
-    /// What was said, or what the tool answered.
     #[serde(default)]
     pub text: String,
-    /// Which tool, when this is a call or its result.
     #[serde(default)]
     pub tool: Option<String>,
-    /// What the tool was asked for.
     #[serde(default)]
     pub args: Option<serde_json::Value>,
     /// Whether the tool succeeded. The cost signal rides in on this.
     #[serde(default)]
     pub ok: Option<bool>,
-    /// How long it took, when the harness records that.
     #[serde(default)]
     pub ms: Option<u64>,
-    /// What the turn cost in tokens.
     #[serde(default)]
     pub tokens: Option<u64>,
-    /// When it happened, when the harness records that.
     #[serde(default)]
     pub at: Option<Timestamp>,
 }
 
 impl Observation {
-    /// Whether this is a tool that failed.
     #[must_use]
     pub fn failed(&self) -> bool {
         self.role == Role::Tool && self.ok == Some(false)
     }
 
-    /// Whether this is a tool that worked.
     #[must_use]
     pub fn worked(&self) -> bool {
         self.role == Role::Tool && self.ok == Some(true)
@@ -133,10 +105,8 @@ impl Observation {
 pub struct Meta {
     /// The harness's own identity for the session.
     pub id: String,
-    /// Where it was run.
     #[serde(default)]
     pub cwd: String,
-    /// When it started.
     #[serde(default)]
     pub opened: Timestamp,
 }
@@ -147,8 +117,6 @@ mod tests {
 
     #[test]
     fn a_turn_with_only_text_is_a_valid_turn() {
-        // Every field but `text` is optional on purpose: an adapter that invents a duration
-        // is worse than one that says nothing.
         let observation: Observation = serde_json::from_str(r#"{"text":"hello"}"#).expect("decode");
         assert_eq!(observation.text, "hello");
         assert_eq!(observation.role, Role::User);
@@ -167,7 +135,6 @@ mod tests {
 
     #[test]
     fn a_tool_that_did_not_say_is_neither() {
-        // `ok` absent means the harness does not record it, which is not the same as failure.
         let quiet = Observation {
             role: Role::Tool,
             ..Observation::default()

@@ -1,11 +1,7 @@
 //! How many answers a predicate may hold at once.
 //!
 //! `project deploy_target` holds one: a later answer replaces the earlier one, and the store
-//! refuses to say both. `you likes` holds many: sushi and pizza are both true, and treating the
-//! second as a correction of the first would quietly delete something nobody retracted.
-//!
-//! R-Mem's distinction, and it exposed a real defect here — the unique index was applied to
-//! every fact, so balthasar could not record that somebody liked two things.
+//! refuses to say both. `you likes` holds many: sushi and pizza are both true.
 
 /// Predicates that describe an accumulating set.
 ///
@@ -44,10 +40,6 @@ const MANY: &[&str] = &[
 ];
 
 /// Predicates that name one current answer, stated because guessing them wrong is expensive.
-///
-/// Anything not listed either way falls to [`is_single_valued`]'s default, which is *single* —
-/// the conservative choice, because a wrongly-single predicate raises a visible constraint
-/// error and a wrongly-many one silently accumulates contradictions nobody notices.
 const ONE: &[&str] = &[
     "name",
     "pronouns",
@@ -72,10 +64,8 @@ const ONE: &[&str] = &[
 
 /// Whether a predicate names one current answer.
 ///
-/// The default is *single*, and deliberately so. A predicate wrongly marked single raises a
-/// constraint error the moment a second answer arrives — loud, and fixed by adding a word to a
-/// list. A predicate wrongly marked many accumulates contradictions in silence, and nothing
-/// downstream ever notices.
+/// The default is *single*: wrongly-single raises a constraint error the moment a second answer
+/// arrives, and wrongly-many accumulates contradictions in silence.
 #[must_use]
 pub fn is_single_valued(predicate: &str) -> bool {
     let word = predicate.trim().to_lowercase();
@@ -85,8 +75,7 @@ pub fn is_single_valued(predicate: &str) -> bool {
     if ONE.iter().any(|o| *o == word) {
         return true;
     }
-    // A plural is usually an accumulating set: `tags`, `imports`, `follows`. Anything in ONE
-    // has already returned above, so reaching here with a plural settles it.
+    // A plural is usually an accumulating set: `tags`, `imports`, `follows`.
     if word.ends_with('s') && !word.ends_with("ss") && word.len() > 3 {
         return false;
     }
@@ -125,7 +114,6 @@ mod tests {
 
     #[test]
     fn a_listed_singular_beats_the_plural_rule() {
-        // `pronouns` is plural and names one answer.
         assert!(is_single_valued("pronouns"));
     }
 
@@ -136,15 +124,11 @@ mod tests {
 
     #[test]
     fn an_unknown_predicate_is_single_by_default() {
-        // The conservative direction: wrongly-single raises a visible constraint error;
-        // wrongly-many accumulates contradictions nobody notices.
         assert!(is_single_valued("some_predicate_nobody_listed"));
     }
 
     #[test]
     fn a_negation_is_not_read_as_its_opposite() {
-        // Substring matching would read `dislikes` as `likes`. Both are sets here, but the
-        // rule has to be word-wise for the cases where they differ.
         assert!(!is_single_valued("dislikes"));
     }
 }

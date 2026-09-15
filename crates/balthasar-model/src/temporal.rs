@@ -1,25 +1,16 @@
 //! The four clocks.
-//!
-//! Three is the usual bug. A store that records only when it was told, and treats that as when
-//! the thing happened and as when the claim started being true, cannot answer "what did I
-//! believe in March" and will date a backfill of six months of journals to today.
 
-/// Unix seconds. Signed, because a `happened_at` read out of somebody else's file can be wrong
-/// and an unsigned type turns that into a very large number rather than an obvious one.
+/// Unix seconds. Signed, so a wrong `happened_at` does not become a very large number.
 pub type Timestamp = i64;
 
 /// When a memory was learned, when it happened, and for how long it is claimed to be true.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Temporal {
-    /// When balthasar was told.
     pub observed_at: Timestamp,
     /// When the thing occurred, if that differs from being told about it.
     ///
-    /// `None` means "the same as `observed_at`" rather than "unknown": a fact stated in
-    /// conversation happened when it was stated, and forcing every caller to say so twice
-    /// would only produce two fields that disagree.
+    /// `None` means "the same as `observed_at`" rather than "unknown".
     pub happened_at: Option<Timestamp>,
-    /// When the claim started being true.
     pub valid_from: Timestamp,
     /// When it stopped. `None` is the whole point: it means *still true*, and it is what the
     /// partial unique index keys on so the database itself forbids two live answers to one slot.
@@ -40,8 +31,7 @@ impl Temporal {
 
     /// A claim learned at `now` about something that happened at `then`.
     ///
-    /// `valid_from` follows the happening, not the telling. Backfilling six months of journals
-    /// must not claim every one of them started being true this afternoon.
+    /// `valid_from` follows the happening, not the telling.
     #[must_use]
     pub fn recalled(now: Timestamp, then: Timestamp) -> Self {
         Self {
@@ -65,9 +55,6 @@ impl Temporal {
     }
 
     /// Whether the claim was true at `at`.
-    ///
-    /// This is what makes "what was the deploy target in March" answerable without a graph
-    /// database: the interval is on the row, and the question is a comparison.
     #[must_use]
     pub fn was_true_at(&self, at: Timestamp) -> bool {
         at >= self.valid_from && self.valid_to.is_none_or(|end| at < end)
@@ -75,9 +62,7 @@ impl Temporal {
 
     /// Close the interval at `at`, because something superseded it.
     ///
-    /// Idempotent, and it never moves an existing end: a fact contradicted twice was
-    /// contradicted once, and the second correction should not rewrite when it stopped being
-    /// true.
+    /// Idempotent, and it never moves an existing end.
     pub fn close(&mut self, at: Timestamp) {
         if self.valid_to.is_none() {
             self.valid_to = Some(at.max(self.valid_from));
@@ -108,7 +93,6 @@ mod tests {
 
     #[test]
     fn a_backfilled_claim_dates_from_the_happening() {
-        // Ingesting six months of journals must not claim all of it started today.
         let t = Temporal::recalled(AUGUST, MARCH);
         assert_eq!(t.valid_from, MARCH);
         assert_eq!(t.observed_at, AUGUST);
@@ -126,8 +110,6 @@ mod tests {
 
     #[test]
     fn closing_twice_does_not_move_the_end() {
-        // A fact contradicted twice was contradicted once. The second correction must not
-        // rewrite when the first one stopped being true.
         let mut t = Temporal::observed(MARCH);
         t.close(AUGUST);
         t.close(AUGUST + 999);

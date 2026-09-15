@@ -1,14 +1,8 @@
 //! Reading balthasar's own transcript.
 //!
-//! The other reader. [`ingest`](crate::ingest) walks a harness's journal files through a Lua
-//! adapter, because those are somebody else's format; this walks the scrollback balthasar already
-//! keeps, which is balthasar's own. Both end at the same extractors and the same gate, so a claim
-//! learned here is worth exactly what the same claim learned from a journal is worth.
-//!
-//! Without this the extractive half of the ladder only ever ran on backfill. A session streamed
-//! live through `observe` got TIDE when its turns left the window and CALLUS when another run
-//! agreed with it, and nothing at all was watching it for "remember that we deploy with fly.io"
-//! — which is the cheapest signal there is and the one a person would most expect to work.
+//! [`ingest`](crate::ingest) walks a harness's journal files through a Lua adapter, because those
+//! are somebody else's format; this walks the scrollback balthasar already keeps. Both end at the
+//! same extractors and the same gate.
 
 use crate::{DistilError, Ingest, Kind, Observation, Provenance, Report, Role, extract};
 use balthasar_lua::{Engine, Settings};
@@ -20,12 +14,10 @@ pub const SOURCE: &str = "transcript";
 
 /// Run the extractors over one run's turns.
 ///
-/// Idempotent by the same stamp machinery an ingest uses, so calling it after every session is
-/// cheap and calling it twice does nothing. Bumping [`EXTRACTOR_VERSION`](crate::EXTRACTOR_VERSION)
-/// makes a better rule read every run again without anybody having to remember to say so.
+/// Idempotent by the same stamp machinery an ingest uses; bumping
+/// [`EXTRACTOR_VERSION`](crate::EXTRACTOR_VERSION) makes a better rule read every run again.
 ///
-/// Takes the same [`Ingest`] ask a source-reading pass takes, because it is the same pass with a
-/// different file underneath. `ask.source` should be [`SOURCE`].
+/// `ask.source` should be [`SOURCE`].
 pub fn distil_run(
     store: &mut Store,
     engine: &mut Engine,
@@ -51,24 +43,19 @@ pub fn distil_run(
     report.sessions = 1;
     report.observations = turns.len();
 
-    // The whole run, in order. The rules need it: a repair is a failure followed by a success,
-    // and a file that matters is one read three times — neither is visible one turn at a time,
-    // which is why this is a pass over a finished run rather than a hook on `observe`.
+    // The whole run, in order: a repair is a failure followed by a success and a file that
+    // matters is one read three times, neither of them visible one turn at a time.
     let seen: Vec<Observation> = turns.iter().map(observation).collect();
     let mut found = extract(&seen, &settings.imperatives);
 
     // Then what disagrees with what this project already believes. It needs the store, so it
-    // cannot live in `extract` with the rules that read a turn on its own — and it catches the
-    // corrections none of them can, because a contradiction is a property of the pair rather
-    // than of the words.
+    // cannot live in `extract` with the rules that read a turn on its own.
     found
         .candidates
         .extend(crate::clashes(store, &ask.scope, &seen));
 
-    // Then, if a model is configured and reachable, what the rules could not read. Added to the
-    // same list rather than handled apart: an inferred claim goes through the same floors, the
-    // same configuration gate and the same store as everything else, and the only thing that
-    // makes it weaker is its weight.
+    // Then, if a model is configured and reachable, what the rules could not read. It goes into
+    // the same list, through the same floors and the same gate, weaker only by its weight.
     let (backends, _) = crate::backends(engine.config().get("distiller"));
     let (guessed, by) = crate::propose(&backends, &seen, crate::Budget::default());
     report.inferred = guessed.len();
@@ -82,8 +69,7 @@ pub fn distil_run(
         session: session.clone(),
         through: balthasar_model::Through::Ingest,
         who: ask.source.clone(),
-        // When the run happened. A month of sessions distilled this evening did not all become
-        // true this evening, and the first turn is the closest thing to a start time here.
+        // When the run happened; the first turn is the closest thing to a start time here.
         happened: turns.first().map_or(ask.now, |t| t.at.max(0)),
         now: ask.now,
         dry_run: ask.dry_run,
@@ -96,10 +82,8 @@ pub fn distil_run(
     Ok(report)
 }
 
-/// Every run the scrollback holds that has not been read by this extractor.
-///
-/// Newest first and capped, so a project with ten thousand runs makes progress on every pass
-/// rather than timing out on the first one.
+/// Every run the scrollback holds that has not been read by this extractor, newest first and
+/// capped.
 pub fn undistilled(
     store: &Store,
     held: &Transcript,
@@ -116,9 +100,7 @@ pub fn undistilled(
 
 /// One stored turn, in the shape the extractors read.
 ///
-/// A widening, not a translation: the transcript keeps what a harness sent and this names the
-/// parts the rules ask about. Anything the harness left out stays `None` — an extractor that
-/// gets no answer proposes nothing, which is the right outcome and not an error.
+/// A widening, not a translation: anything the harness left out stays `None`.
 fn observation(turn: &Turn) -> Observation {
     Observation {
         cursor: Some(turn.cursor),
@@ -195,8 +177,6 @@ mod tests {
 
     #[test]
     fn a_turn_the_harness_said_nothing_about_proposes_nothing() {
-        // The common case for a harness that streams prose and no tool detail. It must widen
-        // cleanly rather than inventing an `ok` that would read as a repair.
         let seen = observation(&turn(1, "user", "carry on"));
         assert_eq!(seen.ok, None);
         assert_eq!(seen.ms, None);
@@ -206,8 +186,7 @@ mod tests {
 
     #[test]
     fn unparseable_args_are_dropped_rather_than_failing_the_run() {
-        // `args` is the harness's own JSON, held as text and never validated on the way in. A
-        // reader that panicked on it would make one bad record cost the whole distillation.
+        // `args` is the harness's own JSON, held as text and never validated on the way in.
         let mut held = turn(2, "tool", "");
         held.args = Some("{not json".to_owned());
         assert_eq!(observation(&held).args, None);

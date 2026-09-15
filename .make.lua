@@ -283,6 +283,7 @@ make.alias("c", "compile")
 -- xtra/ ended up with a 2,000-line file and a store that deletes.
 
 local GATES = {
+  { "gate-comments",     "comments describe the code, they do not argue with it" },
   { "gate-cycles",       "no two modules depend on each other" },
   { "gate-file-size",    "no .rs over 800 lines" },
   { "gate-no-delete",    "nothing is deleted outside purge.rs" },
@@ -291,6 +292,7 @@ local GATES = {
   { "gate-untrusted",    "untrusted content cannot become durable instruction" },
   { "gate-no-exec",      "balthasar describes procedures and never runs them" },
   { "gate-wire",         "one way of saying a thing crosses a boundary" },
+  { "gate-sandbox",      "one Lua VM, and it is sandboxed" },
 }
 
 for _, gate in ipairs(GATES) do
@@ -308,6 +310,7 @@ make.recipe{
   name = "gates",
   desc = "every architectural gate",
   deps = {
+    "gate-comments",
     "gate-cycles",
     "gate-file-size",
     "gate-no-delete",
@@ -316,6 +319,7 @@ make.recipe{
     "gate-untrusted",
     "gate-no-exec",
     "gate-wire",
+    "gate-sandbox",
   },
 }
 
@@ -370,6 +374,38 @@ make.recipe{
 make.recipe{
   name = "verify",
   desc = "the whole local gate",
-  deps = { "fmt-check", "check", "test", "clippy", "rustdoc", "gates", "gate-hermetic", "machete", "gate-no-llm" },
+  deps = { "fmt-check", "check", "test", "clippy", "rustdoc", "gates", "gate-hermetic", "gate-family", "gate-role", "machete", "gate-no-llm" },
 }
 make.alias("v", "verify")
+
+-- The family contract: does this binary answer what FAMILY.md says every family program answers?
+--
+-- Its own recipe because it needs a *built binary* rather than a grep over the source, and
+-- because it is the one gate that would equally catch a fifth program written by somebody else.
+-- The two rules a reader cannot check are the ones it exists for: everything advertised is
+-- dispatched, and everything dispatched is advertised.
+make.recipe{
+  name = "gate-family",
+  desc = "the binary answers the family contract",
+  deps = { "build" },
+  run = function()
+    local where = "target/x86_64-unknown-linux-musl/release/balthasar"
+    if not oslo.fs.exists(where) then where = "target/release/balthasar" end
+    local ran = oslo.run{ "scripts/gate-family.sh", where  }
+    assert(ran.ok, "gate-family failed")
+  end,
+}
+
+-- The role, as against the family contract: what this program is *for*, not how it talks. See
+-- ROLES.md. Core verbs fail the gate; extensions are reported and do not.
+make.recipe{
+  name = "gate-role",
+  desc = "the binary fills the memory role",
+  deps = { "build" },
+  run = function()
+    local where = "target/x86_64-unknown-linux-musl/release/balthasar"
+    if not oslo.fs.exists(where) then where = "target/release/balthasar" end
+    local ran = oslo.run{ "scripts/gate-role.sh", "memory", where }
+    assert(ran.ok, "gate-role failed")
+  end,
+}

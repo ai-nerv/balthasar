@@ -1,21 +1,11 @@
 //! The use-and-outcome ledger.
 //!
 //! Four separate records — retrieved, injected, used, evaluated — rather than one counter,
-//! because they answer different questions and only the last is evidence about a memory's
-//! worth. Retrieving something ten times says a query matched it ten times, which is a fact
-//! about queries.
+//! because only the last is evidence about a memory's worth.
 //!
-//! Three rules hold in every function below.
-//!
-//! **No row here is a witness.** Nothing in this module can change a confidence, and there is a
-//! test that holds the whole store to it. Truth and utility are independent judgments: a fact
-//! can be perfectly true and harmful to inject.
-//!
-//! **Content stays out.** Queries and actions arrive already hashed. The ledger records that
-//! something happened and where in the transcript to look, never a copy of what was said.
-//!
-//! **Silence is not failure.** An action nobody evaluated is `unknown` for good. Nothing here
-//! turns an unreported outcome into a bad one after a timeout.
+//! No row here is a witness: nothing in this module can change a confidence. Content stays out —
+//! queries and actions arrive already hashed. Silence is not failure: an action nobody evaluated
+//! is `unknown` for good.
 
 use crate::{Store, StoreError};
 use balthasar_model::{
@@ -26,7 +16,6 @@ use rusqlite::params;
 /// One search, as the ledger knows it.
 #[derive(Debug, Clone)]
 pub struct RecallRun {
-    /// This search.
     pub id: String,
     /// Which project.
     pub scope: ScopeId,
@@ -34,7 +23,6 @@ pub struct RecallRun {
     pub session: Option<SessionId>,
     /// A digest of the query. Never the query.
     pub query_hash: String,
-    /// When.
     pub requested_at: Timestamp,
     /// The settings in force, so two searches under different weights are distinguishable.
     pub config_fingerprint: String,
@@ -72,9 +60,7 @@ pub struct Signals {
     pub entity: f64,
     /// How often and how recently it has been needed.
     pub frecency: f64,
-    /// How sure.
     pub confidence: f64,
-    /// How faded.
     pub strength: f64,
     /// Whether the project outranked the global store.
     pub scope: f64,
@@ -83,13 +69,11 @@ pub struct Signals {
 /// One assembled context.
 #[derive(Debug, Clone)]
 pub struct Injection {
-    /// This context.
     pub id: String,
     /// The search it came from, when it came from one.
     pub recall: Option<String>,
     /// Which run it was handed to.
     pub session: Option<SessionId>,
-    /// When.
     pub created_at: Timestamp,
     /// What it cost.
     pub token_count: usize,
@@ -102,7 +86,6 @@ pub struct Injection {
 /// One action a caller reported.
 #[derive(Debug, Clone)]
 pub struct Use {
-    /// This action.
     pub id: String,
     /// The context it followed, when there was one.
     pub injection: Option<String>,
@@ -123,7 +106,6 @@ pub struct Use {
 /// How an action turned out.
 #[derive(Debug, Clone)]
 pub struct Verdict {
-    /// This observation.
     pub id: String,
     /// Which action.
     pub action: String,
@@ -142,11 +124,8 @@ pub struct Verdict {
 }
 
 impl Store {
-    /// Record that a search happened, and what it considered.
-    ///
-    /// Written after the search rather than during it: the ledger must never be able to change
-    /// what a search returns, and the simplest guarantee of that is that it does not run until
-    /// the answer is already decided.
+    /// Record that a search happened, and what it considered. Written after the search rather
+    /// than during it, so the ledger cannot change what a search returns.
     pub fn note_recall(
         &mut self,
         run: &RecallRun,
@@ -231,9 +210,7 @@ impl Store {
     /// Record that a caller acted, and which memories it says it used.
     pub fn note_use(&mut self, used: &Use) -> Result<(), StoreError> {
         // Checked before the write, so an action against a context this balthasar never assembled
-        // comes back as a sentence rather than as a foreign-key failure. A caller reporting use
-        // of an injection nobody made is confused or hostile, and either way deserves to be
-        // told which.
+        // comes back as a sentence rather than as a foreign-key failure.
         if let Some(injection) = &used.injection {
             let known: i64 = self.db().query_row(
                 "SELECT count(*) FROM injection WHERE id = ?1",
@@ -274,9 +251,7 @@ impl Store {
     /// Record how an action turned out.
     ///
     /// Idempotent by id, so a caller that replays its event log does not double-count. Updating
-    /// an existing verdict is allowed — an outcome genuinely can be revised when more is
-    /// learned — but the id has to be the same one, so a second opinion cannot masquerade as
-    /// independent corroboration.
+    /// an existing verdict is allowed, but only under the same id.
     pub fn note_outcome(&mut self, said: &Verdict) -> Result<(), StoreError> {
         self.db().execute(
             "INSERT INTO outcome \
@@ -302,12 +277,8 @@ impl Store {
 
     /// What the ledger adds up to for one memory.
     ///
-    /// Derived on every call rather than kept as a column. The counts are cheap, and a stored
-    /// summary is a thing that can drift from the observations it claims to summarise.
-    ///
-    /// Only countable attributions move `verified_*`. Proximal evidence — the memory happened
-    /// to be in the context — is kept apart, because "was on screen" is not "was used", and a
-    /// memory that gained authority from the former would gain it from being popular.
+    /// Derived on every call rather than kept as a column. Only countable attributions move
+    /// `verified_*`; proximal evidence — the memory was in the context — is kept apart.
     pub fn utility_of(&self, memory: &MemoryId) -> Result<balthasar_model::Utility, StoreError> {
         let mut held = balthasar_model::Utility::default();
 
@@ -359,8 +330,7 @@ impl Store {
             }
         }
 
-        // Injected, never reported against. Distinct from used-and-unevaluated, and the larger
-        // number in practice: most callers never report at all.
+        // Injected, never reported against. Distinct from used-and-unevaluated.
         let shown: i64 = self.db().query_row(
             "SELECT count(*) FROM injection_memory i \
              WHERE i.memory_id = ?1 \
@@ -375,11 +345,8 @@ impl Store {
         Ok(held)
     }
 
-    /// How often a memory has merely been retrieved.
-    ///
-    /// Reported beside utility rather than as part of it, because the gap between the two is
-    /// the thing worth seeing: a memory retrieved forty times with no attributed outcome is
-    /// popular, and popularity is not evidence.
+    /// How often a memory has merely been retrieved. Reported beside utility rather than as part
+    /// of it: a memory retrieved forty times with no attributed outcome is popular, not evidence.
     pub fn times_retrieved(&self, memory: &MemoryId) -> Result<(usize, usize), StoreError> {
         let held: (i64, i64) = self.db().query_row(
             "SELECT count(*), coalesce(sum(selected), 0) FROM recall_candidate WHERE memory_id = ?1",
@@ -465,10 +432,8 @@ impl Store {
         }))
     }
 
-    /// Which memories one injection carried, in the order they were placed.
-    ///
-    /// What structural attribution starts from: an action can only have followed something it
-    /// was actually given.
+    /// Which memories one injection carried, in the order they were placed. What structural
+    /// attribution starts from: an action can only have followed something it was given.
     pub fn injected_in(&self, injection: &str) -> Result<Vec<MemoryId>, StoreError> {
         let mut statement = self.db().prepare(
             "SELECT memory_id FROM injection_memory WHERE injection_id = ?1 ORDER BY position",
@@ -572,13 +537,9 @@ impl Store {
     }
     /// Forget ledger rows older than `before`.
     ///
-    /// The one place in this crate outside `purge` that removes rows, and it is a different
-    /// kind of removal: the ledger is bounded telemetry with a retention policy, not memory. No
-    /// memory, witness, transcript turn or confidence is touched, and a store whose whole
-    /// ledger is dropped still knows everything it believes — it has only forgotten how the
-    /// believing went.
-    ///
-    /// Ordered so that no row is orphaned mid-way: outcomes before actions, actions before
+    /// The one place in this crate outside `purge` that removes rows: the ledger is bounded
+    /// telemetry with a retention policy. No memory, witness, transcript turn or confidence is
+    /// touched. Ordered so no row is orphaned mid-way: outcomes before actions, actions before
     /// injections, and both before the recalls they point at.
     pub fn forget_ledger_before(&mut self, before: Timestamp) -> Result<usize, StoreError> {
         let tx = self.db_mut().transaction()?;
@@ -629,7 +590,6 @@ pub struct Trace {
     pub scope: ScopeId,
     /// A digest of what was asked.
     pub query_hash: String,
-    /// When.
     pub requested_at: Timestamp,
     /// How many it was allowed to return.
     pub result_limit: usize,

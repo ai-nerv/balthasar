@@ -14,6 +14,7 @@ use std::os::unix::net::UnixStream;
 /// Serve a store on a socket for as long as the returned handle lives.
 struct Serving {
     path: std::path::PathBuf,
+    also: Vec<std::path::PathBuf>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -23,6 +24,14 @@ impl Serving {
         let instance = format!("{name}-{}", std::process::id());
         let listener = Listener::bind(&instance).expect("bind");
         let path = listener.path().to_owned();
+        // Every other name it bound. One instance answers under the role's name and under the
+        // program's, and a file left behind under either is one the next instance must disprove.
+        let also: Vec<std::path::PathBuf> = listener
+            .paths()
+            .into_iter()
+            .skip(1)
+            .map(std::path::Path::to_owned)
+            .collect();
 
         let mut store = Store::ephemeral().expect("store");
         for text in seed {
@@ -31,6 +40,7 @@ impl Serving {
                 scrollback: None,
                 scratch: None,
                 scope: ScopeId::new("/w/thing"),
+                agent: balthasar_model::AgentId::main(),
                 now: 1_756_000_000,
                 inject_floor: floor::INJECT,
                 live_floor: floor::LIVE,
@@ -55,6 +65,7 @@ impl Serving {
                     scrollback: None,
                     scratch: None,
                     scope: ScopeId::new("/w/thing"),
+                    agent: balthasar_model::AgentId::main(),
                     now: 1_756_000_000,
                     inject_floor: floor::INJECT,
                     live_floor: floor::LIVE,
@@ -66,6 +77,7 @@ impl Serving {
 
         Self {
             path,
+            also,
             stop,
             thread: Some(thread),
         }
@@ -80,6 +92,9 @@ impl Drop for Serving {
         // wait on an accept that never returns.
         let _ = self.thread.take();
         let _ = std::fs::remove_file(&self.path);
+        for path in &self.also {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -109,7 +124,7 @@ fn a_peer_speaking_the_wire_by_hand_is_answered() {
     );
     assert_eq!(reply.get("ok"), Some(&serde_json::json!(true)));
 
-    let found = &reply["result"][0];
+    let found = &reply["result"];
     assert_eq!(found[0]["text"], serde_json::json!("we deploy with fly"));
 }
 
@@ -203,9 +218,50 @@ fn every_answer_says_which_project_and_which_run() {
         &serving.path,
         &serde_json::json!({ "call": "recall", "args": ["deploy"] }),
     );
-    let found = &reply["result"][0][0];
+    let found = &reply["result"][0];
     assert_eq!(found["project"], serde_json::json!("/w/thing"));
     assert!(found.get("session").is_some());
     assert!(found.get("session_name").is_some());
     assert!(found.get("asserted").is_some());
+}
+
+#[test]
+fn a_listing_answers_with_its_rows_rather_than_with_one_row_that_is_the_listing() {
+    // The failure FAMILY.md names by name: `"result":[[…]]` with `"n":1`. It is invisible from
+    // the sending side — casper sent every listing it had that way — and a coordinator reading
+    // row by row finds an array where a record belongs.
+    let serving = Serving::start("rows", &["we deploy with fly", "the build is make release"]);
+
+    for verb in ["verbs", "recall", "sessions"] {
+        let reply = ask(
+            &serving.path,
+            &serde_json::json!({ "call": verb, "args": ["deploy"] }),
+        );
+        assert_eq!(reply["ok"], serde_json::json!(true), "{verb}: {reply}");
+        let rows = reply["result"].as_array().expect("result is a list");
+        assert_eq!(
+            reply["n"].as_u64().expect("a count"),
+            rows.len() as u64,
+            "{verb} says how many came back and then sends a different number: {reply}"
+        );
+        for row in rows {
+            assert!(
+                !row.is_array(),
+                "{verb} wrapped its whole listing in one row: {reply}"
+            );
+        }
+    }
+
+    // And the counts a re-wrapping would flatten to 1.
+    let listed = ask(&serving.path, &serde_json::json!({ "call": "verbs" }));
+    assert!(
+        listed["n"].as_u64().expect("a count") > 1,
+        "every verb is its own row: {listed}"
+    );
+    let found = ask(
+        &serving.path,
+        &serde_json::json!({ "call": "recall", "args": ["deploy"] }),
+    );
+    assert_eq!(found["n"], serde_json::json!(1), "one memory, one row");
+    assert_eq!(found["result"][0]["text"], "we deploy with fly");
 }

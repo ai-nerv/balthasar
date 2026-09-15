@@ -1,24 +1,13 @@
 //! How a result is ranked.
 //!
-//! Finding is [`super::read`]'s job; deciding what a hit is worth is this one's. They came
-//! apart when the file that did both reached 985 lines, which is the gate saying the state
-//! inside it wanted a second module.
-//!
-//! Seven signals. Three are about the question — is this an answer. Four are about the memory
-//! — is it worth giving. Keeping them apart is what lets a store say *this matches well and I
-//! should not be stating it as fact*, which is the whole of the two floors.
+//! Seven signals: three about the question, four about the memory.
 
 use balthasar_model::{Memory, Timestamp};
 
-/// One result, and why it scored what it did.
-///
-/// Every term is kept rather than only the sum, because `--explain` exists so a ranking can be
-/// argued with and a total nobody can decompose is not an argument.
+/// One result, and why it scored what it did; every term is kept for `--explain`.
 #[derive(Debug, Clone)]
 pub struct Scored {
-    /// The memory.
     pub memory: Memory,
-    /// What it scored overall.
     pub score: f64,
     /// Cosine similarity, when both sides were embedded.
     pub semantic: Option<f64>,
@@ -28,7 +17,6 @@ pub struct Scored {
     pub entity: f64,
     /// How often and how recently it has been needed.
     pub frecency: f64,
-    /// Confidence, as held.
     pub confidence: f64,
     /// Strength at the moment of the search.
     pub strength: f64,
@@ -36,11 +24,8 @@ pub struct Scored {
     pub near: bool,
 }
 
-/// How much of the question a result actually answered.
-///
-/// Only the query-relative signals. Confidence and strength say how much the memory is worth in
-/// general; they say nothing about whether it answers what was asked, and folding them in is
-/// how a certain, well-used, irrelevant fact outranks a hesitant, faded, correct one.
+/// Only the query-relative signals. Folding confidence and strength in is how a certain,
+/// well-used, irrelevant fact outranks a hesitant, faded, correct one.
 impl Scored {
     /// The query-relative share of the score, in `0..1`.
     #[must_use]
@@ -52,11 +37,7 @@ impl Scored {
     }
 }
 
-/// How much each signal counts.
-///
-/// Configuration overrides these; they are what balthasar does when nothing has been said. Written
-/// as a struct rather than as constants in the sum so the weighting can be read without
-/// reading the arithmetic, and so a caller can change one without restating the rest.
+/// How much each signal counts when nothing has been configured.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Weights {
     /// Cosine similarity, when an embedding exists on both sides.
@@ -65,16 +46,11 @@ pub struct Weights {
     pub lexical: f64,
     /// How often and how recently a memory has actually been needed.
     pub frecency: f64,
-    /// How sure.
     pub confidence: f64,
-    /// How faded.
     pub strength: f64,
     /// Whether the project store outranks the global one.
     pub scope: f64,
-    /// What the query and the memory are both *about*.
-    ///
-    /// Words and things come apart exactly where it matters: `deployment` shares no token with
-    /// `we deploy with fly`, and both are about *fly*.
+    /// What the query and the memory are both *about*, which words alone do not capture.
     pub entity: f64,
 }
 
@@ -93,11 +69,8 @@ impl Default for Weights {
 }
 
 impl Weights {
-    /// The same weighting with the semantic share given to the lexical one.
-    ///
-    /// What balthasar uses when nothing is embedded. Redistributing rather than dropping keeps the
-    /// remaining signals summing to one, so a score means the same thing either way — without
-    /// it, every result on a store with no vectors would score 30% lower for no reason.
+    /// The same weighting with the semantic share given to the lexical one, for a store with
+    /// nothing embedded. Redistributing keeps the remaining signals summing to one.
     #[must_use]
     pub fn without_vectors(self) -> Self {
         Self {
@@ -107,7 +80,6 @@ impl Weights {
         }
     }
 
-    /// Every weight summed, for the tests that keep the set honest.
     #[must_use]
     pub fn total(self) -> f64 {
         self.semantic + self.lexical + self.entity + self.frecency + self.confidence + self.strength
@@ -115,20 +87,13 @@ impl Weights {
 }
 
 /// Access count at which the frequency half of frecency is most of the way to full.
-///
-/// Saturating rather than linear: the difference between being needed once and ten times is
-/// large, and between a hundred and a thousand it is not.
 const FREQUENT: f64 = 8.0;
 
 /// How long an access stays fresh, in days.
 const RECENT_DAYS: f64 = 7.0;
 
-/// How often and how recently a memory has actually been needed, in `0..1`.
-///
-/// Frecency as editors and browsers rank with it: what somebody keeps returning to outranks
-/// what merely matches, independently of the words in it. A memory created and never recalled
-/// scores 0.5 — full access-recency, no frequency — so fresh candidates start level rather
-/// than at the bottom.
+/// How often and how recently a memory has actually been needed, in `0..1`. A memory created
+/// and never recalled scores 0.5 — full access-recency, no frequency.
 #[must_use]
 pub fn frecency(access_count: u32, last_accessed: Timestamp, now: Timestamp) -> f64 {
     let frequency = 1.0 - (-f64::from(access_count) / FREQUENT).exp();
@@ -137,11 +102,8 @@ pub fn frecency(access_count: u32, last_accessed: Timestamp, now: Timestamp) -> 
     (frequency + recency) / 2.0
 }
 
-/// Cosine similarity of two vectors, or `None` when they cannot be compared.
-///
-/// Different lengths mean different models, and comparing across them produces a number that
-/// means nothing. Answering `None` is what lets the caller fall back to lexical rather than
-/// rank on noise.
+/// Cosine similarity of two vectors, or `None` when they cannot be compared. Different lengths
+/// mean different models, and comparing across them produces a number that means nothing.
 #[must_use]
 pub fn cosine(a: &[f32], b: &[f32]) -> Option<f64> {
     if a.len() != b.len() || a.is_empty() {
@@ -156,16 +118,12 @@ pub fn cosine(a: &[f32], b: &[f32]) -> Option<f64> {
     if left == 0.0 || right == 0.0 {
         return None;
     }
-    // Mapped from `-1..1` into `0..1`, because every other signal lives there and a term that
-    // could go negative would let one axis veto all the others.
+    // Mapped from `-1..1` into `0..1`: a term that could go negative would veto every other axis.
     Some(((dot / (left.sqrt() * right.sqrt())) + 1.0) / 2.0)
 }
 
-/// Words that match everything and therefore mean nothing.
-///
-/// FTS5's `unicode61` tokenizer has no stopword list, so `the` is a term like any other — and
-/// a question containing it matched every memory containing it, which is most of them. That is
-/// how "what is the production database password" came back with the test command.
+/// Words that match everything and therefore mean nothing. FTS5's `unicode61` tokenizer has no
+/// stopword list, so `the` is a term like any other and matches most memories.
 const STOPWORDS: &[&str] = &[
     "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "can", "did", "do", "does",
     "for", "from", "had", "has", "have", "how", "i", "if", "in", "is", "it", "its", "me", "my",
@@ -174,14 +132,8 @@ const STOPWORDS: &[&str] = &[
     "which", "who", "why", "will", "with", "would", "you", "your",
 ];
 
-/// A person's words as something FTS5 will accept.
-///
-/// Every term quoted and joined with `OR`. Unquoted input is a syntax the user did not ask to
-/// be writing: a bare `-` or `*` is an operator to FTS5 and a typo to everyone else, and a
-/// search that errors on an apostrophe is a search nobody trusts.
-///
-/// Stopwords are dropped. A query made of nothing else asks nothing, and answers nothing —
-/// which is the correct behaviour and not an empty result to apologise for.
+/// A person's words as something FTS5 will accept: every term quoted and joined with `OR`, and
+/// stopwords dropped. Unquoted input is a syntax the user did not ask to be writing.
 pub fn fts_query(query: &str) -> String {
     let terms: Vec<String> = query
         .split_whitespace()
@@ -198,11 +150,8 @@ pub fn fts_query(query: &str) -> String {
         .map(|term| format!("\"{term}\""))
         .collect();
     if terms.is_empty() {
-        // A term nothing can match, rather than a syntax error or a match on everything.
-        //
-        // Not a NUL: FTS5 reads one inside a quoted string as the end of the string and reports
-        // "unterminated string", so the sentinel for "this query asks nothing" became an error
-        // rather than an empty result. A word no tokenizer will ever produce does the job.
+        // A term nothing can match, rather than a syntax error or a match on everything. Not a
+        // NUL: FTS5 reads one inside a quoted string as the end of it and reports "unterminated".
         return "\"zznomatchzz\"".to_owned();
     }
     terms.join(" OR ")
@@ -222,22 +171,15 @@ pub(crate) fn terms_of(query: &str) -> Vec<String> {
         .collect()
 }
 
-/// What share of the query's words the memory actually contains.
-///
-/// The absolute half of the lexical signal. Without it a memory matching one word out of two
-/// is indistinguishable from one matching both, which is exactly how a question about the
-/// production box was answered with the staging box's address.
-///
-/// A query with nothing to ask about is neutral rather than zero: it did not fail to match,
-/// there was nothing to match.
+/// What share of the query's words the memory actually contains, the absolute half of the
+/// lexical signal. A query with nothing to ask about is neutral rather than zero.
 #[must_use]
 pub fn coverage(wanted: &[String], text: &str) -> f64 {
     if wanted.is_empty() {
         return 1.0;
     }
-    // Stemmed on both sides, because the layer that found the row stems too. Raw containment
-    // scored a memory about `make test` at zero for a question about `tests` — the retrieval
-    // stage matched it and the scoring stage said it had matched nothing.
+    // Stemmed on both sides, because the layer that found the row stems too: raw containment
+    // scored a memory about `make test` at zero for a question about `tests`.
     let held: Vec<String> = text
         .split_whitespace()
         .map(|word| {
@@ -265,11 +207,7 @@ pub fn coverage(wanted: &[String], text: &str) -> f64 {
     hit as f64 / wanted.len() as f64
 }
 
-/// A crude stem, applied to both sides so they agree.
-///
-/// Not a linguistic claim — a way to make the scoring stage agree with the retrieval stage,
-/// which uses FTS5's porter tokenizer. Being consistently wrong about `running` costs nothing;
-/// being inconsistent about `tests` cost a whole category.
+/// A crude stem, applied to both sides so they agree with FTS5's porter tokenizer.
 fn stem(word: &str) -> String {
     for suffix in ["ing", "ed", "es", "s"] {
         if word.len() > suffix.len() + 2 && word.ends_with(suffix) && !word.ends_with("ss") {
@@ -279,11 +217,8 @@ fn stem(word: &str) -> String {
     word.to_owned()
 }
 
-/// One bm25 rank against the best in its result set, as a `0..1` where more is better.
-///
-/// Both numbers are negative and more-negative is better, so the ratio is already the right way
-/// round. A set in which nothing scored at all is neutral rather than zero: letting an absent
-/// signal push every candidate to the bottom of one axis lets the other axes decide by default.
+/// One bm25 rank against the best in its result set, as a `0..1` where more is better. Both
+/// numbers are negative and more-negative is better; a set in which nothing scored is neutral.
 pub(crate) fn relative(rank: f64, best: f64) -> f64 {
     if best >= 0.0 {
         return 0.5;
@@ -300,8 +235,6 @@ mod scoring {
 
     #[test]
     fn something_never_recalled_starts_level_rather_than_last() {
-        // A fresh memory has full access-recency and no frequency. Scoring it at zero would
-        // bury everything new under everything old.
         assert!((frecency(0, NOW, NOW) - 0.5).abs() < 0.01);
     }
 
@@ -338,16 +271,12 @@ mod scoring {
 
     #[test]
     fn similarity_never_goes_negative() {
-        // Every other signal lives in 0..1. A term that could go negative would let one axis
-        // veto all the others.
         let value = cosine(&[1.0, 2.0], &[-3.0, -1.0]).expect("comparable");
         assert!((0.0..=1.0).contains(&value), "{value}");
     }
 
     #[test]
     fn vectors_from_different_models_are_not_compared() {
-        // A number produced from mismatched dimensions means nothing, and nothing downstream
-        // would notice it was nonsense.
         assert_eq!(cosine(&[1.0, 0.0], &[1.0, 0.0, 0.0]), None);
         assert_eq!(cosine(&[], &[]), None);
         assert_eq!(cosine(&[0.0, 0.0], &[1.0, 1.0]), None);
@@ -355,8 +284,6 @@ mod scoring {
 
     #[test]
     fn dropping_vectors_keeps_the_weighting_summing_to_one() {
-        // Without redistributing, every result on an unembedded store would score 30% lower
-        // for no reason, and a threshold tuned on one store would be wrong on the other.
         let with = Weights::default();
         let without = with.without_vectors();
         assert!((with.total() - without.total()).abs() < 1e-9);

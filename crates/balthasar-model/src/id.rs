@@ -1,11 +1,7 @@
 //! Identities.
 //!
 //! [`MemoryId`] is a ULID: sortable by creation time, needing no coordination, and doubling as
-//! a timeline. A UUID would have cost an index on `observed_at` to answer "what did this
-//! session produce, in order".
-//!
-//! Written here rather than taken from a crate because it is forty lines and the alternative
-//! is a dependency in the crate every other crate depends on.
+//! a timeline.
 
 use std::fmt;
 
@@ -50,6 +46,7 @@ macro_rules! text_id {
 text_id!(MemoryId, "One memory, anywhere in the store.");
 text_id!(WitnessId, "One piece of evidence for one memory.");
 text_id!(SessionId, "One run of a harness, as that harness names it.");
+text_id!(AgentId, "One agent inside a run, as that harness names it.");
 text_id!(
     ScopeId,
     "Which store a memory lives in. `global`, or a stable name for a project."
@@ -69,12 +66,30 @@ impl ScopeId {
     }
 }
 
+impl AgentId {
+    /// The one every run has, and the one an older store's scratch was written by.
+    ///
+    /// Reserved: a harness naming its own agent `main` is naming this one.
+    pub const MAIN: &'static str = "main";
+
+    /// The agent a run belongs to when nothing says otherwise.
+    #[must_use]
+    pub fn main() -> Self {
+        Self::new(Self::MAIN)
+    }
+}
+
+impl Default for AgentId {
+    fn default() -> Self {
+        Self::main()
+    }
+}
+
 impl MemoryId {
     /// A fresh identity for something observed at `millis` since the epoch.
     ///
-    /// The timestamp occupies the leading ten characters, so ids sort by creation without a
-    /// clock being consulted twice. `entropy` is the caller's — this crate holds no RNG,
-    /// because a pure-data crate that reaches for the operating system stops being one.
+    /// The timestamp occupies the leading ten characters, so ids sort by creation. `entropy` is
+    /// the caller's — this crate holds no RNG.
     #[must_use]
     pub fn minted(millis: u64, entropy: u128) -> Self {
         let mut out = String::with_capacity(26);
@@ -101,8 +116,6 @@ mod tests {
 
     #[test]
     fn later_ids_sort_after_earlier_ones() {
-        // The whole reason for a ULID: "what did this session produce, in order" is a sort,
-        // not an index on another column.
         let early = MemoryId::minted(1_700_000_000_000, u128::MAX);
         let late = MemoryId::minted(1_700_000_000_001, 0);
         assert!(early < late, "{early} should sort before {late}");
@@ -113,6 +126,12 @@ mod tests {
         let a = MemoryId::minted(1_700_000_000_000, 1);
         let b = MemoryId::minted(1_700_000_000_000, 2);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_run_with_nothing_said_about_agents_belongs_to_main() {
+        assert_eq!(AgentId::default(), AgentId::main());
+        assert_eq!(AgentId::main().as_str(), "main");
     }
 
     #[test]

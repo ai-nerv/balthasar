@@ -1,9 +1,7 @@
 //! How sure, derived from what is known.
 //!
 //! Confidence is never assigned. It is computed from the witnesses, every time the witnesses
-//! change, which is what makes `balthasar why` an argument rather than a restatement. A number
-//! somebody typed cannot be explained, cannot be audited, and cannot be wrong in a way anyone
-//! notices.
+//! change.
 //!
 //! ```text
 //!   confidence = saturate( Σ per-source evidence )    how much evidence, per source
@@ -18,29 +16,21 @@ use std::collections::BTreeSet;
 /// Evidence at which the saturating curve reaches half.
 ///
 /// Tuned so one imperative (weight 1.0) lands near 0.67 before diversity, and a single
-/// distillation (0.3) lands near 0.38 — above the retrieval floor, below where anything is
-/// asserted with a straight face.
+/// distillation (0.3) lands near 0.38 — above the retrieval floor, below the injection floor.
 const HALF: f64 = 0.5;
 
 /// How much a single-session claim is discounted.
-///
-/// One session repeating something is a person being emphatic; the same thing surfacing in
-/// unrelated runs is a property of the world. The gap between them is this constant.
 const LONE_SESSION: f64 = 0.75;
 
 /// What a superseded claim keeps.
 ///
-/// Not zero: "this was true until March" is a real answer to a question about March, and a
-/// claim whose confidence collapsed to nothing could not be told apart from one nobody ever
-/// had reason to believe.
+/// Not zero: "this was true until March" is a real answer to a question about March.
 const SUPERSEDED: f64 = 0.3;
 
 /// How much repetition within one source is worth.
 ///
 /// A quarter of the strongest witness, spread across every repeat. Ten copies of a claim from
-/// one document are worth 1.25 witnesses, not ten. Not zero, because a source that says the
-/// same thing consistently is marginally better evidence than one that says it once — and not
-/// more, because the alternative is a store where anything can be made true by being repeated.
+/// one document are worth 1.25 witnesses, not ten.
 const WITHIN_DOMAIN: f64 = 0.25;
 
 /// A claim pulling against this one, and how sure *it* is.
@@ -52,8 +42,7 @@ pub struct Contradiction {
 
 /// Confidence in a memory, from its evidence.
 ///
-/// `superseded` is whether the claim's validity interval has been closed — a fact that stopped
-/// being true is not a fact nobody witnessed, and the two must not score the same.
+/// `superseded` is whether the claim's validity interval has been closed.
 #[must_use]
 pub fn of(
     witnesses: &[Witness],
@@ -62,13 +51,8 @@ pub fn of(
     pinned: bool,
     now: Timestamp,
 ) -> f64 {
-    // A pinned memory is one somebody chose to keep. Deriving a number for it and then arguing
-    // with them about it would be worse than useless.
-    //
-    // Superseding still applies. Pinning says "do not let this fade"; it does not say "this is
-    // true forever", and a pinned fact that has been corrected must stop being asserted like
-    // any other. Returning 1.0 here unconditionally had `balthasar recall` showing a replaced
-    // answer at full confidence beside the answer that replaced it.
+    // Superseding still applies to a pinned memory: pinning says "do not let this fade", it does
+    // not say "this is true forever".
     if pinned {
         return if superseded { SUPERSEDED } else { 1.0 };
     }
@@ -76,16 +60,9 @@ pub fn of(
         return 0.0;
     }
 
-    // Evidence is summed per source, not per witness.
-    //
-    // Ten sessions quoting one document are ten runs and one source. The document is what they
-    // all agree with, so counting them as ten observations would let repetition manufacture
-    // corroboration — which is the whole of the poisoning attack, and it defeats a defence that
-    // only discounts *diversity*, because the evidence sum would still grow ten-fold.
-    //
-    // Within one source the strongest witness carries it, and everything after adds at most
-    // WITHIN_DOMAIN. Saying the same thing twice from one place is slightly more than saying it
-    // once — it is consistent — and nowhere near twice.
+    // Evidence is summed per source, not per witness: ten sessions quoting one document are ten
+    // runs and one source. Within one source the strongest witness carries it, and everything
+    // after adds at most WITHIN_DOMAIN.
     let evidence: f64 = by_domain(witnesses, now)
         .into_values()
         .map(|values| {
@@ -97,10 +74,7 @@ pub fn of(
     let saturated = evidence / (evidence + HALF);
 
     // Independence is the narrower of two counts: how many runs saw it, and how many sources it
-    // came from.
-    //
-    // A witness with no recorded domain counts as its own session, so a person meeting the same
-    // problem in two runs is still worth two. Only an explicit shared origin collapses.
+    // came from. A witness with no recorded domain counts as its own session.
     let sessions: BTreeSet<&str> = witnesses.iter().map(|w| w.session.as_str()).collect();
     let domains: BTreeSet<String> = witnesses.iter().map(Witness::domain_of).collect();
     let independent = sessions.len().min(domains.len());
@@ -108,8 +82,6 @@ pub fn of(
     let diversity = if independent <= 1 {
         LONE_SESSION
     } else {
-        // Approaches 1.0 quickly: two independent runs is most of the signal, and the fifth
-        // adds very little that the second did not.
         1.0 - (1.0 - LONE_SESSION) * (-((independent - 1) as f64)).exp()
     };
 
@@ -157,9 +129,6 @@ mod tests {
 
     #[test]
     fn one_document_quoted_in_ten_runs_is_not_ten_witnesses() {
-        // The poisoning attack, as arithmetic. Ten genuinely distinct sessions each read the
-        // same page and each file a witness. Session diversity alone sees ten independent
-        // confirmations; domain diversity sees one source saying one thing ten times.
         let page = crate::Domain::external("https://example.test/guide");
         let poisoned: Vec<Witness> = (0..10)
             .map(|n| {
@@ -182,7 +151,6 @@ mod tests {
 
     #[test]
     fn a_document_read_twice_is_still_one_source() {
-        // Two runs, one origin: the discount is the lone-source one, not the two-session one.
         let page = crate::Domain::external("https://example.test/guide");
         let held: Vec<Witness> = ["s1", "s2"]
             .iter()
@@ -201,8 +169,6 @@ mod tests {
 
     #[test]
     fn two_different_sources_do_corroborate() {
-        // The defence must not make everything worthless. Two runs reading two different pages
-        // are two sources, and that is what corroboration is.
         let one = w(WitnessKind::Distillation, "s1").through(
             crate::Channel::ExternalContent,
             Some(crate::Domain::external("https://a.test/x")),
@@ -218,8 +184,6 @@ mod tests {
 
     #[test]
     fn a_person_repeating_themselves_across_runs_still_counts_twice() {
-        // Domains must not collapse the honest case. Meeting the same problem in two sessions
-        // is two occasions, and a defence that discounted it would punish ordinary use.
         let held = vec![
             w(WitnessKind::Imperative, "s1"),
             w(WitnessKind::Imperative, "s2"),
@@ -230,8 +194,6 @@ mod tests {
 
     #[test]
     fn summaries_of_one_document_are_not_independent_of_it() {
-        // Ten model summaries of one page are still one page. Every one carries the model's
-        // domain, so they collapse together however many sessions produced them.
         let held: Vec<Witness> = (0..10)
             .map(|n| {
                 w(WitnessKind::Distillation, &format!("s{n}"))
@@ -257,8 +219,6 @@ mod tests {
 
     #[test]
     fn pinning_does_not_make_a_corrected_fact_true() {
-        // Pinning says "do not let this fade". It does not say "this is true forever", and a
-        // pinned answer that has been replaced must stop being asserted like any other.
         let pinned_and_replaced = of(&[], &[], true, true, NOW);
         assert!(pinned_and_replaced < 0.35, "got {pinned_and_replaced}");
         assert!(
@@ -269,7 +229,6 @@ mod tests {
 
     #[test]
     fn many_sessions_beat_one_loud_session() {
-        // The cheapest defence there is against a single poisoned run.
         let loud = [
             w(WitnessKind::Repetition, "s1"),
             w(WitnessKind::Repetition, "s1"),
@@ -285,8 +244,6 @@ mod tests {
 
     #[test]
     fn one_distillation_is_findable_but_not_assertable() {
-        // Above the retrieval floor (0.10), below the injection floor (0.35). This is the
-        // whole point of §5.1's weight being 0.3.
         let c = plain(&[w(WitnessKind::Distillation, "s1")]);
         assert!(c > 0.10, "should still be findable, got {c}");
         assert!(c < 0.35, "should not be asserted, got {c}");
@@ -315,8 +272,6 @@ mod tests {
 
     #[test]
     fn a_superseded_claim_is_kept_but_no_longer_asserted() {
-        // "This was true until March" is a real answer. It must not score as if nobody ever
-        // had reason to believe it.
         let evidence = [w(WitnessKind::Imperative, "s1"), w(WitnessKind::Cost, "s2")];
         let live = of(&evidence, &[], false, false, NOW);
         let past = of(&evidence, &[], true, false, NOW);

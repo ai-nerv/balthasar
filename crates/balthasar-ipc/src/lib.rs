@@ -1,17 +1,19 @@
-//! balthasar's socket.
-//!
-//! Layer three of the family's arrangement. Layers one and two — the stream primitive and the
-//! plain-Lua client stub — are copied between siblings so that a fix to the framing reaches all
-//! of them; this is the end that listens.
-//!
-//! **The surface is small on purpose.** It is not a mirror of what balthasar can do; it is the
-//! handful of things another program has a real reason to ask a memory layer. `prompt`, `run`
-//! and `eval` are absent and stay absent.
+//! balthasar's socket: the end of the family arrangement that listens, offering the handful of
+//! things another program has a reason to ask a memory layer.
 
+mod corpses;
+mod encoding;
 mod frame;
 mod peer;
 mod serve;
+mod stop;
 
-pub use frame::{FAMILY, Fault, MAX_FRAME, Reply, Request, WireError, recv, send};
+pub use corpses::swept;
+pub use encoding::Wire;
+pub use frame::{FAMILY, Fault, MAX_FRAME, Reply, Request, SURFACE, WireError, recv, send};
 pub use peer::Peer;
-pub use serve::{Listener, socket_dir, socket_path, tool_descriptor};
+pub use serve::{
+    Listener, legacy_socket_dir, legacy_socket_path, socket_dir, socket_dirs, socket_path,
+    tool_descriptor,
+};
+pub use stop::hold as hold_stop_signals;

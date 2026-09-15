@@ -35,6 +35,7 @@ impl Held {
             scrollback: None,
             scratch: None,
             scope: ScopeId::new("/w/thing"),
+            agent: balthasar_model::AgentId::main(),
             now: NOW,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
@@ -47,8 +48,7 @@ impl Held {
 fn value(reply: &balthasar_ipc::Reply) -> serde_json::Value {
     reply
         .result
-        .as_ref()
-        .and_then(|r| r.first())
+        .first()
         .cloned()
         .unwrap_or(serde_json::Value::Null)
 }
@@ -60,9 +60,8 @@ fn verbs_ships_from_the_first_version() {
     let mut held = Held::new();
     let reply = held.ask(&Door::Owner, &call("verbs", vec![]));
     assert!(reply.ok);
-    let names: Vec<String> = value(&reply)
-        .as_array()
-        .expect("a list")
+    let names: Vec<String> = reply
+        .result
         .iter()
         .filter_map(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_owned))
         .collect();
@@ -257,12 +256,7 @@ fn recall_says_whether_each_answer_is_asserted() {
         &call("recall", vec![serde_json::json!("deploy")]),
     );
 
-    let found = value(&reply);
-    let first = found
-        .as_array()
-        .expect("a list")
-        .first()
-        .expect("something");
+    let first = reply.result.first().expect("something");
     assert!(first.get("asserted").is_some());
     assert!(
         first.get("project").is_some(),

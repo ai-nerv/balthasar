@@ -1,13 +1,4 @@
 //! Which retrieval behaviour a query gets, and how a different one is tried safely.
-//!
-//! A policy decides where candidates come from, how far to walk, and how the signals are
-//! weighted. It does **not** decide what may be asserted, what may be injected, or what a peer
-//! is allowed to see — those are hard constraints outside every policy, because a policy is a
-//! thing you experiment with and a constraint is a thing you do not.
-//!
-//! **Shadow mode** is what makes experimenting safe. A shadow policy computes its own candidate
-//! list and its answer is thrown away; only the comparison is kept. Nobody is served an
-//! experiment, and the data to judge one accumulates anyway.
 
 use crate::Shape;
 use balthasar_model::Family;
@@ -47,9 +38,6 @@ impl Policy {
     }
 
     /// The permanent floor and the control group.
-    ///
-    /// No vectors, no traversal. Every experiment is measured against this, and if a clever
-    /// policy cannot beat it then the cleverness is not worth its latency.
     #[must_use]
     pub fn lexical_only() -> Self {
         Self {
@@ -127,10 +115,6 @@ impl Policy {
     }
 
     /// The same policy with vectors unavailable.
-    ///
-    /// Not a different policy — the same one, degraded. A timeout or a missing embedder must
-    /// fall back to something that still works rather than to something that behaves
-    /// differently in ways nobody predicted.
     #[must_use]
     pub fn without_vectors(mut self) -> Self {
         self.vectors = false;
@@ -145,9 +129,6 @@ impl Policy {
 }
 
 /// What running a shadow policy beside the real one found.
-///
-/// Bounded on purpose. A shadow comparison that stored both result sets would be a second copy
-/// of the store's contents keyed by query, which is a privacy problem wearing a research hat.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Shadow {
     /// The policy that was served.
@@ -166,10 +147,6 @@ pub struct Shadow {
 
 impl Shadow {
     /// Compare two result sets by identity.
-    ///
-    /// Overlap of one means the shadow would have changed nothing and is not worth serving.
-    /// Overlap of zero means it is a different system, and the outcome data will say which is
-    /// better long before anybody's intuition does.
     #[must_use]
     pub fn of(
         served: &Policy,
@@ -226,16 +203,14 @@ mod tests {
 
     #[test]
     fn a_question_about_the_past_may_look_in_the_archive() {
-        // What happened before something is often no longer live, and refusing to look there
-        // makes the temporal family useless exactly where it is needed.
+        // What happened before something is often no longer live.
         assert!(Policy::for_shape(Shape::Temporal).archive);
         assert!(Policy::for_shape(Shape::Causal).archive);
     }
 
     #[test]
     fn the_control_group_uses_nothing_clever() {
-        // Every experiment is measured against this. If a policy cannot beat full-text search
-        // then its latency is not buying anything.
+        // Every experiment is measured against this.
         let held = Policy::lexical_only();
         assert!(!held.vectors);
         assert_eq!(held.hops, 0);
@@ -295,8 +270,7 @@ mod tests {
 
     #[test]
     fn a_shadow_of_nothing_is_not_a_perfect_score() {
-        // An empty served set with an empty shadow must not read as complete agreement, or a
-        // policy that returns nothing would look like the best one.
+        // An empty served set with an empty shadow must not read as complete agreement.
         let served = Policy::balanced();
         let shadow = Policy::lexical_only();
         let held = Shadow::of(&served, &shadow, &[], &[], 0, 100);
@@ -305,8 +279,7 @@ mod tests {
 
     #[test]
     fn a_shadow_records_what_it_would_have_cost() {
-        // A policy that wins by injecting twice as much has not won, and without the token
-        // count nothing would say so.
+        // A policy that wins by injecting twice as much has not won.
         let held = Shadow::of(
             &Policy::balanced(),
             &Policy::for_shape(Shape::Entity),

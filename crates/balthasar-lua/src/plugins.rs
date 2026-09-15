@@ -1,8 +1,10 @@
 //! Where configuration comes from, and in what order.
 //!
 //! neovim's model, unchanged: a runtimepath of roots, `plugin/` run at startup, `lua/` required
-//! on demand, `after/` last. Twenty years of real plugins have been written against it and most
-//! people arriving already know it. Deviating buys nothing and costs everyone the transfer.
+//! on demand, `after/` last. Every sibling has the same roots in the same order — `plugin/`, then
+//! installed packages under `pack/*/start/*`, then `after/`; see `FAMILY.md`. The sandbox is what
+//! makes discovery safe to have: a file that arrives by being installed rather than by being
+//! named still cannot spawn a process.
 
 use std::path::{Path, PathBuf};
 
@@ -36,9 +38,7 @@ pub struct Roots {
     /// What a coordinator said, read last of all.
     ///
     /// A root like the others rather than a path this module goes and looks up, so
-    /// [`runtimepath`] is a function of what it is handed. Reading it inside meant the answer
-    /// depended on whether *this machine* happened to have a coordinator running — which made
-    /// every test of the order pass alone and fail beside a real session.
+    /// [`runtimepath`] is a function of what it is handed.
     pub given: Option<PathBuf>,
 }
 
@@ -107,10 +107,8 @@ pub fn runtimepath(roots: &Roots) -> Vec<(PathBuf, bool)> {
         }
     }
 
-    // What a coordinator said, last of all and trusted like the owner's own: whoever starts this
-    // process is deciding what it should be, and a file on disk that quietly won would be the
-    // disagreement the arrangement exists to end. Absent is the ordinary case — a balthasar
-    // nobody is coordinating reads its own files exactly as before.
+    // What a coordinator said, last of all and trusted like the owner's own. Absent is the
+    // ordinary case.
     if let Some(given) = &roots.given
         && given.is_file()
     {
@@ -121,9 +119,8 @@ pub fn runtimepath(roots: &Roots) -> Vec<(PathBuf, bool)> {
 
 /// Whether a project directory is one the owner vouched for.
 ///
-/// `balthasar.trusted = { "/home/you/work" }` in the owner's own configuration. A directory under a
-/// vouched-for one counts, so vouching for a workspace does not mean listing every repository
-/// in it.
+/// `balthasar.trusted = { "/home/you/work" }` in the owner's own configuration. A directory under
+/// a vouched-for one counts.
 #[must_use]
 pub fn vouched_for(trusted: &[String], project: &Path) -> bool {
     trusted
@@ -131,10 +128,8 @@ pub fn vouched_for(trusted: &[String], project: &Path) -> bool {
         .any(|root| !root.is_empty() && project.starts_with(root))
 }
 
-/// Every `.lua` directly in a directory, alphabetically.
-///
-/// Alphabetical rather than by whatever the filesystem answers: a load order that changes
-/// between machines is a configuration that behaves differently on each of them.
+/// Every `.lua` directly in a directory, alphabetically rather than by whatever the filesystem
+/// answers: a load order that changes between machines behaves differently on each of them.
 fn lua_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -198,8 +193,6 @@ mod tests {
 
     #[test]
     fn after_gets_the_last_word() {
-        // Registrars are keyed, so whoever registers last decides. That is what makes
-        // `after/` mean anything at all.
         let root = scratch("after");
         let config = root.join("config");
         touch(&config.join("plugin/aaa.lua"));
@@ -241,9 +234,7 @@ mod tests {
 
     #[test]
     fn what_a_coordinator_said_comes_after_everything_on_disk() {
-        // The point of the arrangement: whoever started this process is deciding what it should
-        // be, and registrars are keyed, so the last word has to be theirs. A file on disk that
-        // quietly won would be the disagreement this exists to end.
+        // Registrars are keyed, so the coordinator's word has to come last.
         let root = scratch("coordinated");
         let config = root.join("config");
         touch(&config.join("init.lua"));
@@ -264,8 +255,7 @@ mod tests {
 
     #[test]
     fn a_coordinator_that_said_nothing_adds_nothing() {
-        // The ordinary case: a balthasar nobody is coordinating reads its own files exactly as
-        // it did before any of this existed.
+        // The ordinary case: a balthasar nobody is coordinating reads its own files.
         let root = scratch("uncoordinated");
         let config = root.join("config");
         touch(&config.join("init.lua"));
@@ -322,5 +312,55 @@ mod tests {
             given: None,
         });
         assert!(files.is_empty());
+    }
+}
+
+/// Every installed package file, as against the owner's own.
+///
+/// [`runtimepath`]'s boolean says whether a file may declare; this says who wrote it. A package
+/// under `site/pack/` arrived by being fetched and can change between one run and the next.
+///
+/// See [`crate::acknowledged`].
+#[must_use]
+pub fn installed(roots: &Roots) -> Vec<PathBuf> {
+    let Some(site) = &roots.site else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for package in packages(&site.join("pack")) {
+        out.extend(lua_files(&package.join("plugin")));
+    }
+    out
+}
+
+#[cfg(test)]
+mod installed_tests {
+    use super::*;
+    use balthasar_model::scratch::Scratch;
+
+    #[test]
+    fn only_what_came_from_site_counts_as_installed() {
+        let root = Scratch::new("balthasar-rtp", "installed");
+        let config = root.join("config");
+        let site = root.join("site");
+        for at in ["plugin/mine.lua", "after/plugin/also-mine.lua"] {
+            let path = config.join(at);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            std::fs::write(&path, "-- nothing\n").expect("write");
+        }
+        let theirs = site.join("pack/vendor/start/thing/plugin/theirs.lua");
+        std::fs::create_dir_all(theirs.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&theirs, "-- nothing\n").expect("write");
+
+        let roots = Roots {
+            config: Some(config),
+            site: Some(site),
+            project: None,
+            given: None,
+        };
+        assert_eq!(runtimepath(&roots).len(), 3, "all three are read");
+        let installed = installed(&roots);
+        assert_eq!(installed.len(), 1, "{installed:?}");
+        assert!(installed[0].ends_with("theirs.lua"));
     }
 }

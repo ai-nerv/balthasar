@@ -22,6 +22,7 @@ balthasar-cli.workspace = true
 [dev-dependencies]
 balthasar-model.workspace = true
 balthasar-store.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

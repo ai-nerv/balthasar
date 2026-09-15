@@ -1,20 +1,7 @@
 //! What a procedure claims about itself, and where it applies.
 //!
-//! A habit is the most dangerous kind of memory, because it is the one an agent imitates. A
-//! wrong fact makes a model say something untrue; a wrong habit makes it *do* something. So the
-//! rules here are stricter than anywhere else in the model.
-//!
-//! **One success is advisory.** A procedure derived from a single repair is a hypothesis about
-//! what works, not a rule. It is offered as a suggestion and labelled as one until something
-//! independent corroborates it.
-//!
-//! **A failure narrows, it does not prohibit.** "Do not do X" as a global rule is almost always
-//! wrong — X failed *under conditions*, and a negative habit that cannot name those conditions
-//! is a superstition. Every avoidance here has to say when.
-//!
-//! **The environment is part of the claim.** A procedure that worked on one machine is not
-//! known to work on another, and pretending otherwise is how a memory layer starts confidently
-//! breaking things.
+//! One success is advisory. A failure narrows rather than prohibits: every avoidance names the
+//! conditions it failed under. The environment is part of the claim.
 
 use std::fmt;
 use std::str::FromStr;
@@ -106,10 +93,6 @@ impl fmt::Display for Standing {
 }
 
 /// The conditions a procedure was learned under.
-///
-/// Cheap and explicit on purpose. Capturing the whole environment would destroy both privacy
-/// and matching — every run would differ in something irrelevant, and nothing would ever match
-/// anything. These are the parts that actually decide whether a command works.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Environment {
     /// Which project.
@@ -135,12 +118,8 @@ pub struct Environment {
 impl Environment {
     /// How well this matches the conditions a procedure was learned under.
     ///
-    /// Only fields both sides state are compared. An unstated field is unknown, not different —
-    /// a caller that reports nothing should get a procedure offered, with its conditions shown,
-    /// rather than silently excluded for failing to answer a question nobody asked.
-    ///
-    /// Returns `None` when there is nothing in common to compare, which is a real answer and
-    /// not a score of zero.
+    /// Only fields both sides state are compared; an unstated field is unknown, not different.
+    /// `None` when there is nothing in common to compare.
     #[must_use]
     pub fn agreement(&self, other: &Self) -> Option<f64> {
         let pairs: [(&Option<String>, &Option<String>); 5] = [
@@ -165,9 +144,7 @@ impl Environment {
 
     /// Whether the conditions have changed enough that a procedure should stop being offered.
     ///
-    /// Deliberately conservative: only a *stated disagreement* suspends. Missing information
-    /// never does, because the alternative is a memory layer that goes quiet whenever a harness
-    /// stops reporting its architecture.
+    /// Only a *stated disagreement* suspends; missing information never does.
     #[must_use]
     pub fn has_moved_from(&self, learned: &Self) -> bool {
         self.agreement(learned).is_some_and(|share| share < 0.5)
@@ -207,9 +184,6 @@ pub struct Record {
 
 impl Record {
     /// Where this procedure stands, given its record and its conditions.
-    ///
-    /// A single success is advisory however good it looked. Establishment needs the thing a
-    /// single run cannot provide: independent repetition, and nothing outstanding against it.
     #[must_use]
     pub fn standing(&self, moved: bool, unresolved_harm: bool) -> Standing {
         if moved {
@@ -235,18 +209,13 @@ impl Record {
 
     /// Count an attempt that did not.
     ///
-    /// `tried` moves and `worked` does not, which is the whole arithmetic: a procedure that
-    /// fails becomes less certain without being erased, and its record still says how often it
-    /// used to work.
+    /// `tried` moves and `worked` does not.
     pub fn failed(&mut self) {
         self.tried = self.tried.saturating_add(1);
     }
 }
 
 /// What a negative procedure has to name before it is worth keeping.
-///
-/// A vague failure must not become a global prohibition. "That did not work once" is not
-/// knowledge; "that fails on this branch, and this is what to do instead" is.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Avoidance {
     /// What not to do.
@@ -263,9 +232,7 @@ pub struct Avoidance {
 impl Avoidance {
     /// Whether this is narrow enough to be worth keeping.
     ///
-    /// All three of what, when and what-happened. A negative habit missing any of them is a
-    /// superstition, and storing it would teach an agent to refuse things for reasons nobody
-    /// can inspect.
+    /// All three of what, when and what-happened.
     #[must_use]
     pub fn is_narrow(&self) -> bool {
         !self.rejected.trim().is_empty()
@@ -288,7 +255,6 @@ mod tests {
 
     #[test]
     fn one_success_is_never_more_than_advisory() {
-        // The rule that stops a single lucky repair becoming a rule the agent follows.
         let held = Record {
             tried: 1,
             worked: 1,
@@ -310,8 +276,6 @@ mod tests {
 
     #[test]
     fn an_unresolved_harm_holds_a_procedure_back() {
-        // Six successes and one unexplained failure is not an established procedure. It is a
-        // procedure with something outstanding against it.
         let held = Record {
             tried: 7,
             worked: 6,
@@ -321,7 +285,6 @@ mod tests {
 
     #[test]
     fn changed_conditions_suspend_rather_than_archive() {
-        // The machine changed; what was learned did not stop being true of the old one.
         let held = Record {
             tried: 9,
             worked: 9,
@@ -344,8 +307,6 @@ mod tests {
 
     #[test]
     fn an_unstated_condition_is_unknown_and_not_different() {
-        // A caller that reports nothing should get the procedure with its conditions shown, not
-        // silently excluded for failing to answer a question nobody asked it.
         let learned = env("/w/p", "linux");
         let quiet = Environment::default();
         assert_eq!(quiet.agreement(&learned), None);
@@ -374,8 +335,6 @@ mod tests {
 
     #[test]
     fn a_negative_habit_must_say_what_when_and_what_happened() {
-        // "That did not work once" is a superstition. Storing it would teach an agent to refuse
-        // things for reasons nobody can inspect.
         let vague = Avoidance {
             rejected: "cargo test".to_owned(),
             ..Avoidance::default()
@@ -393,8 +352,6 @@ mod tests {
 
     #[test]
     fn a_negative_habit_may_not_know_the_replacement_yet() {
-        // Knowing what fails is useful before knowing what works. Requiring a fix would throw
-        // away the more common half of what a failure teaches.
         let held = Avoidance {
             rejected: "cargo test".to_owned(),
             when: "in this workspace".to_owned(),

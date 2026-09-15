@@ -2,22 +2,15 @@
 //!
 //! Handlers are functions, and a function cannot cross the boundary — so the VM keeps them in
 //! two globals and Rust keeps only their names. Calling one is a generated chunk that reads
-//! arguments from a global and leaves an answer in another, which is the same mechanism the
-//! family uses for anything it registers that carries a callback.
+//! arguments from a global and leaves an answer in another.
 
 use crate::convert;
 use luna::{Callback, CallbackReturn, Table, Value};
 
-/// Questions `balthasar.on.<name>` may be registered against.
+/// Questions `balthasar.on.<name>` may be registered against, whose answer is used.
 ///
-/// Enumerated rather than open, so reading this list tells you every decision a config can
-/// take part in. A surface you have to run something to learn is one nobody audits.
-/// Handlers that are asked a question and whose answer is used.
-///
-/// `outcome` is here rather than in [`TOLD`] because §6.7 has it *returning* a classification:
-/// a configuration may look at an action and say how it went. The two namespaces stay disjoint,
-/// which is what keeps "balthasar asked and used the answer" distinguishable from "balthasar mentioned it
-/// happened" — a test holds them apart.
+/// `outcome` is here rather than in [`TOLD`] because §6.7 has it returning a classification. The
+/// two namespaces stay disjoint, and a test holds them apart.
 pub const ASKED: &[&str] = &[
     "scope",
     "admit",
@@ -132,8 +125,7 @@ mod tests {
 
     #[test]
     fn the_two_namespaces_do_not_overlap() {
-        // `on.promote` asks whether to; `did.promote` says that it happened. They are
-        // different contracts and must not be reachable through one name.
+        // `on.promote` asks whether to; `did.promote` says that it happened.
         for name in ASKED {
             assert!(
                 !TOLD.contains(name) || *name == "promote",

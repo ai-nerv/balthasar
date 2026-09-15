@@ -65,6 +65,7 @@ impl Held {
             scrollback: None,
             scratch: None,
             scope: ScopeId::new("/w/thing"),
+            agent: balthasar_model::AgentId::main(),
             now: NOW,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
@@ -81,12 +82,7 @@ impl Held {
     }
 
     fn field(reply: &Reply, name: &str) -> Option<serde_json::Value> {
-        reply
-            .result
-            .as_ref()
-            .and_then(|values| values.first())
-            .and_then(|v| v.get(name))
-            .cloned()
+        reply.result.first().and_then(|v| v.get(name)).cloned()
     }
 }
 

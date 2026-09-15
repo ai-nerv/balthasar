@@ -1,8 +1,4 @@
 //! What another program may ask balthasar, and what it may not.
-//!
-//! The dispatcher sits between the socket and the same functions the CLI calls. That is the
-//! arrangement that keeps the two from drifting into describing a memory differently: there is
-//! one implementation of `recall`, and this decides who is allowed to reach it.
 
 mod ceiling;
 mod dispatch;

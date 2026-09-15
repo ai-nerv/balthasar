@@ -253,13 +253,11 @@ fn rebuilding_a_derivation_leaves_every_memory_untouched() {
     assert_eq!(before, after, "a rebuild moved a memory");
 }
 
-#[test]
-fn a_dense_store_stays_within_its_bounds() {
-    // §8.9: relationship candidates remain bounded under a dense synthetic store. Two thousand
-    // edges out of one hub, and a traversal must still answer in budget.
+/// A store with `edges` edges out of one hub, and the hub.
+fn a_hub_of(edges: usize) -> (Store, MemoryId) {
     let mut store = Store::ephemeral().expect("store");
     let hub = MemoryId::new("hub");
-    let edges: Vec<balthasar_model::Relation> = (0..2000)
+    let spokes: Vec<balthasar_model::Relation> = (0..edges)
         .map(|n| balthasar_model::Relation {
             from: hub.clone(),
             to: MemoryId::new(format!("m{n}")),
@@ -271,20 +269,76 @@ fn a_dense_store_stays_within_its_bounds() {
             created_at: NOW,
         })
         .collect();
-    store.relate(&edges).expect("relate");
+    store.relate(&spokes).expect("relate");
+    (store, hub)
+}
 
-    let started = std::time::Instant::now();
+/// The quickest of three walks out of a hub of `edges` edges, in microseconds.
+fn walking_a_hub_of(edges: usize) -> f64 {
+    let (store, hub) = a_hub_of(edges);
+    // Once first, so the page cache and the prepared statement are not part of the measurement.
+    store
+        .traverse(
+            std::slice::from_ref(&hub),
+            &[Family::Entity],
+            &Reach::default(),
+        )
+        .expect("warm");
+    (0..3)
+        .map(|_| {
+            let started = std::time::Instant::now();
+            let found = store
+                .traverse(
+                    std::slice::from_ref(&hub),
+                    &[Family::Entity],
+                    &Reach::default(),
+                )
+                .expect("walk");
+            assert!(
+                found.len() <= Reach::default().fan_out,
+                "{} came back",
+                found.len()
+            );
+            started.elapsed().as_secs_f64() * 1e6
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+#[test]
+fn a_dense_store_stays_within_its_bounds() {
+    // §8.9: relationship candidates stay bounded however dense the store is. The bound is what
+    // comes back, and it is `fan_out` whether one memory has eight edges or eight thousand.
+    let (store, hub) = a_hub_of(2000);
     let found = store
         .traverse(&[hub], &[Family::Entity], &Reach::default())
         .expect("walk");
-    let took = started.elapsed();
-
     assert!(
         found.len() <= Reach::default().fan_out,
         "{} came back",
         found.len()
     );
-    assert!(took.as_millis() < 50, "took {took:?} on a dense store");
+}
+
+#[test]
+fn a_walk_costs_what_it_returns_rather_than_what_the_hub_holds() {
+    // A ratio rather than a wall-clock budget: a loaded machine inflates both measurements, so
+    // it cancels. Walking every edge would land near 8; the bar sits well under it.
+    let few = walking_a_hub_of(500);
+    let many = walking_a_hub_of(4000);
+
+    let grew = many / few;
+    assert!(
+        grew < 3.0,
+        "eight times the edges cost {grew:.2}x the walk ({few:.0}us -> {many:.0}us); \
+         the traversal is reading edges it does not return"
+    );
+}
+
+#[test]
+#[ignore = "wall-clock; grades the machine, not the code. Run it to read the number."]
+fn a_walk_stays_inside_its_declared_budget() {
+    let took = walking_a_hub_of(2000);
+    assert!(took < 50_000.0, "took {took:.0}us on a dense store");
 }
 
 #[test]

@@ -1,9 +1,6 @@
 //! `balthasar init` — say that memory for this subtree belongs here.
 //!
-//! Not needed for an ordinary project: opening a store in a checkout creates its home at the
-//! repository root. This is for the case the root gets wrong — a monorepo where each package
-//! should remember separately, or a directory that is not a checkout at all and would otherwise
-//! keep its memory in the data directory.
+//! Not needed in an ordinary checkout, where opening a store creates a home at the root.
 
 use crate::render;
 use clap::Parser;
@@ -12,13 +9,13 @@ use std::path::PathBuf;
 /// Make this directory the root of its own memory.
 #[derive(Debug, Parser)]
 pub struct Args {
-    /// Where, if not here.
-    #[arg(value_name = "DIR")]
+    /// Where, if not here. Its own id: `at` is the global `--at` seconds, and two arguments of one
+    /// name and different types made `init DIR` fail before it did anything.
+    #[arg(id = "dir", value_name = "DIR")]
     at: Option<PathBuf>,
 
-    /// Answer as JSON.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Create the store home.
@@ -34,11 +31,9 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
     .is_some_and(|_| home.join(".store").is_file());
     balthasar_store::make_home(&home)?;
 
-    if args.json {
-        crate::say!(
-            "{}",
-            serde_json::json!({ "home": home.to_string_lossy(), "existed": existed })
-        );
+    if args.how.framed() {
+        args.how
+            .one(serde_json::json!({ "home": home.to_string_lossy(), "existed": existed }));
         return Ok(());
     }
     crate::say!("{}", render::bold(&home.display().to_string()));

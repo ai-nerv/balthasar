@@ -1,8 +1,6 @@
 //! `balthasar export` and `balthasar import` — the backup, and the way back.
 //!
-//! JSONL, one memory per line, witnesses and links included. A memory system without an export
-//! is a memory system that owns you, and the export is also the only way to inspect what a
-//! store holds without trusting the code that prints it.
+//! JSONL, one memory per line, witnesses and links included.
 
 use crate::Which;
 use crate::{now, open};
@@ -17,6 +15,9 @@ pub struct ExportArgs {
     /// Where to write. Standard output when not given.
     #[arg(long, short)]
     out: Option<PathBuf>,
+
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Read something back.
@@ -28,6 +29,9 @@ pub struct ImportArgs {
     /// Say what would happen without writing anything.
     #[arg(long)]
     dry_run: bool,
+
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Every memory, one JSON object per line, oldest first.
@@ -44,8 +48,9 @@ pub fn export(
         Some(path) => Box::new(std::fs::File::create(path)?),
         None => Box::new(std::io::stdout().lock()),
     };
+    // One memory per value, in whichever encoding: a dump is the rows, not one row that is a list.
     for memory in &everything {
-        writeln!(out, "{}", serde_json::to_string(memory)?)?;
+        args.how.write(&mut out, &serde_json::to_value(memory)?)?;
     }
     out.flush()?;
     if args.out.is_some() {
@@ -56,10 +61,8 @@ pub fn export(
 
 /// Read memories back in.
 ///
-/// Each line goes through `remember`, not through a raw insert: an import is evidence arriving,
-/// and it must land on the same ladder as everything else. Importing a store into itself
-/// therefore reinforces rather than duplicating, which is the property that makes an import
-/// safe to re-run.
+/// Each line goes through `remember` rather than a raw insert, so importing a store into itself
+/// reinforces rather than duplicating.
 pub fn import(
     store_path: Option<&Path>,
     scope: &ScopeId,
@@ -82,8 +85,7 @@ pub fn import(
         }
         let memory: Memory =
             serde_json::from_str(&line).map_err(|e| anyhow::anyhow!("line {}: {e}", number + 1))?;
-        // A memory with no evidence cannot be imported as a durable one: the whole design is
-        // that a fact answers for itself, and an import is not an exception to that.
+        // A memory with no evidence cannot be imported as a durable one.
         let Some(witness) = memory.witnesses.first().cloned() else {
             skipped += 1;
             continue;
@@ -99,6 +101,16 @@ pub fn import(
         }
     }
 
+    if args.how.framed() {
+        args.how.one(serde_json::json!({
+            "dry_run": args.dry_run,
+            "added": added,
+            "reinforced": reinforced,
+            "superseded": superseded,
+            "skipped": skipped,
+        }));
+        return Ok(());
+    }
     let verb = if args.dry_run { "would add" } else { "added" };
     crate::say!(
         "{verb} {added}, reinforced {reinforced}, superseded {superseded}, skipped {skipped}"

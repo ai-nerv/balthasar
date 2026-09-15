@@ -1,9 +1,4 @@
 //! The verbs that close the loop: what was used, how it went, and what followed from what.
-//!
-//! A caller that never reports anything is a supported caller. Every verb here is optional, and
-//! recall behaves identically whether or not any of them is ever called — which is the only way
-//! a measurement of utility can be honest, because a system that needed the reports would only
-//! ever hear from the callers that agree with it.
 
 use crate::{Answering, Door};
 use balthasar_ipc::{Reply, Request};
@@ -12,9 +7,7 @@ use balthasar_store::{Use, Verdict};
 
 /// `used(injection, {memories, tool, action, attribution, session})`.
 ///
-/// A caller reporting that it acted on something it was given. The memories it names are the
-/// ones it says it followed; naming none is allowed and means the action had nothing to do with
-/// what was injected, which is a useful thing to be able to say.
+/// A caller reporting that it acted on something it was given.
 pub fn used(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
     let Some(injection) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("used needs an injection id");
@@ -33,9 +26,7 @@ pub fn used(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         })
         .unwrap_or_default();
 
-    // A caller may not promote its own attribution above what it can support. Saying "I
-    // followed this memory" is explicit; a peer claiming a structural match balthasar did not
-    // observe would be asserting an analysis rather than reporting an action.
+    // A caller may not promote its own attribution above what it can support.
     let asked: Attribution = said
         .and_then(|s| s.get("attribution"))
         .and_then(serde_json::Value::as_str)
@@ -47,9 +38,7 @@ pub fn used(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         (held, _) => held,
     };
 
-    // What balthasar can see for itself. A caller reporting "I ran `make test`" after being handed
-    // a memory that says to run `make test` is a structural match — and working it out here
-    // rather than asking is the difference between an observation and a claim.
+    // What balthasar can see for itself: an action that runs what a memory names is a match.
     let ran = text(said, "action").unwrap_or_default();
     let matched = if memories.is_empty() && !ran.trim().is_empty() {
         structural(at, injection, &ran)
@@ -69,8 +58,7 @@ pub fn used(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         session: text(said, "session").map(SessionId::new),
         reported_at: at.now,
         tool: text(said, "tool"),
-        // Hashed here rather than trusted from the caller, so the ledger cannot be used to
-        // smuggle a command line into a table that promises not to hold one.
+        // Hashed here rather than trusted from the caller.
         action_hash: balthasar_model::content_hash(&ran)[..16].to_owned(),
         attribution,
         memories,
@@ -96,8 +84,7 @@ pub fn outcome(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply 
         .and_then(|t| t.parse().ok())
         .unwrap_or(OutcomeKind::Unknown);
 
-    // Who says so. A peer reports as itself; only the owner's door may record that the person
-    // judged it, because those two carry different weight everywhere they are read.
+    // Who says so. A peer reports as itself; only the owner records the person's judgment.
     let asked = text(said, "evaluator").unwrap_or_else(|| "caller".to_owned());
     let evaluator = if asked == "user" && !door.may_evaluate_as_user() {
         match door.who() {
@@ -109,8 +96,7 @@ pub fn outcome(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply 
     };
 
     let held = Verdict {
-        // Derived from the action, so a caller replaying its log updates one row rather than
-        // accumulating agreement with itself.
+        // Derived from the action, so a caller replaying its log updates one row.
         id: format!("{action}-outcome"),
         action: action.to_owned(),
         observed_at: at.now,
@@ -185,8 +171,7 @@ pub fn utility(at: &mut Answering<'_>, request: &Request) -> Reply {
         "proximal": held.proximal,
         "last_verified_at": held.last_verified_at,
         "helpfulness": held.helpfulness(),
-        // Beside, never folded in. The gap between how often something was retrieved and how
-        // often it demonstrably helped is the number this whole milestone exists to expose.
+        // Beside, never folded in.
         "times_considered": considered,
         "times_returned": selected,
     }))
@@ -206,14 +191,7 @@ fn short(id: &str) -> String {
 
 /// Which injected memories an action visibly followed.
 ///
-/// The cheap, honest half of attribution. A memory that names `make test` and an action that
-/// runs `make test` are related in a way balthasar can check, so it checks rather than asking — which
-/// matters because a caller claiming a structural match is asserting an analysis it did not
-/// perform, and this is the analysis.
-///
-/// Deliberately strict. It looks for a distinctive run of the memory's own text inside the
-/// action, not for shared words: "run the tests" and "make test" share a word and mean different
-/// things, and a loose match here would attribute every outcome to everything.
+/// Deliberately strict: a distinctive run of the memory's own text, not shared words.
 fn structural(at: &mut Answering<'_>, injection: &str, action: &str) -> Vec<MemoryId> {
     let Ok(held) = at.store.injected_in(injection) else {
         return Vec::new();
@@ -225,8 +203,7 @@ fn structural(at: &mut Answering<'_>, injection: &str, action: &str) -> Vec<Memo
             let Ok(Some(memory)) = at.store.get(id) else {
                 return false;
             };
-            // Backticked commands first: a memory that quotes a command is naming it exactly,
-            // and that is the strongest signal available without a model.
+            // Backticked commands first: a memory that quotes a command is naming it exactly.
             quoted(&memory.text())
                 .iter()
                 .any(|command| lowered.contains(&command.to_lowercase()))

@@ -1,19 +1,9 @@
 //! Being told how to behave, by whoever is coordinating.
 //!
-//! balthasar runs alone perfectly well and reads its own `config/` when it does. Under a
-//! coordinator it should not: the coordinator decides, and two configurations that must agree are one
-//! that will not. So this is the other way in — the same Lua, the same VM, the same registrars,
-//! arriving down a pipe instead of off a disk.
-//!
-//! **What it takes is declared, not guessed.** [`needs`] is the list a coordinator reads to know
-//! what to send; anything else sent is refused by name rather than ignored, because a setting
-//! that silently does nothing is the worst kind of typo.
-//!
-//! # What is trusted
-//!
-//! Whoever started this process. The chunk arrives on argv or stdin, never on the socket: a
-//! socket that runs Lua is remote code execution, and the spawn link is where the trust already
-//! is — a parent that can send this could have passed the same file as configuration anyway.
+//! The same Lua, the same VM, the same registrars, arriving down a pipe instead of off a disk.
+//! [`needs`] is the list a coordinator reads to know what to send; anything else sent is refused
+//! by name. The chunk arrives on argv or stdin, never on the socket: a socket that runs Lua is
+//! remote code execution.
 
 use crate::LuaError;
 use crate::config::Config;
@@ -24,11 +14,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
-    /// A string.
     Text,
-    /// A number.
     Number,
-    /// True or false.
     Flag,
     /// A table — a list or a map, and `about` says which.
     Table,
@@ -39,7 +26,6 @@ pub enum Kind {
 pub struct Need {
     /// What to set, as the config names it.
     pub name: String,
-    /// What sort of value it takes.
     pub kind: Kind,
     /// One line, for a person reading the list.
     pub about: String,
@@ -73,17 +59,14 @@ impl Applied {
 /// One setting balthasar would not take.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Refused {
-    /// What was sent.
     pub name: String,
-    /// Why it was not taken.
     pub why: String,
 }
 
 /// The settings a coordinator may set.
 ///
-/// The thresholds and decay rates `init.lua` documents. A registrar — `    std::fs::write(path, source).map_err(|source| LuaError::Io {`, `section`,
-/// `extractor`, `tool` — is called rather than assigned, so it is declared in [`needs`] but not
-/// listed here.
+/// A registrar — `source`, `section`, `extractor`, `tool` — is called rather than assigned, so it
+/// is declared in [`needs`] but not listed here.
 const SETTINGS: &[&str] = &[
     "promote_floor",
     "hold_floor",
@@ -95,9 +78,7 @@ const SETTINGS: &[&str] = &[
     "scope",
 ];
 
-/// What balthasar wants to be told.
-///
-/// Everything has a default. A coordinator must be able to start one by saying nothing at all.
+/// What balthasar wants to be told. Everything has a default.
 #[must_use]
 pub fn needs() -> Vec<Need> {
     vec![
@@ -178,25 +159,18 @@ pub fn needs() -> Vec<Need> {
 /// Run a chunk of config Lua and say what it did.
 ///
 /// # Errors
-/// When the chunk will not compile or raises. Fatal rather than partial: a description that did
-/// not run has expressed no intention, and applying half of one is worse than applying none.
+/// When the chunk will not compile or raises.
 pub fn configure(source: &str) -> Result<Applied, LuaError> {
     configure_into(&given(), source)
 }
 
-/// The same, kept somewhere named.
-///
-/// The path is a parameter so a test can own one. It was a process-wide constant, and tests
-/// running together deleted each other's -- which is the same shape as two coordinators sharing
-/// a balthasar, and neither should.
+/// The same, kept somewhere named. The path is a parameter so a test can own one.
 ///
 /// # Errors
 /// As [`configure`].
 pub fn configure_into(path: &std::path::Path, source: &str) -> Result<Applied, LuaError> {
     let mut engine = Engine::new();
-    // What the VM holds before the chunk runs. The module carries entries of its own, and a
-    // hardcoded list of those would be a list to keep in step with the VM; the difference is
-    // what the coordinator said.
+    // What the VM holds before the chunk runs; the difference is what the coordinator said.
     engine.harvest();
     let before = held(&engine.config());
 
@@ -206,8 +180,7 @@ pub fn configure_into(path: &std::path::Path, source: &str) -> Result<Applied, L
     let config = engine.config();
     let mut applied = Applied::default();
     for name in SETTINGS {
-        // Changed, not merely present. The VM installs tables of its own -- `decay`, `witness`
-        // -- so "is there" would report every one of them as something the coordinator said.
+        // Changed, not merely present: the VM installs `decay` and `witness` itself.
         if config.get(name).is_some() && config.get(name) != before.get(*name) {
             applied.set.push((*name).to_owned());
         }
@@ -235,17 +208,11 @@ pub fn configure_into(path: &std::path::Path, source: &str) -> Result<Applied, L
 }
 
 /// Every setting a config left behind, with its value.
-///
-/// Values rather than names, because the question is what *changed*: a VM that installs its own
-/// tables would otherwise report each of them as something a coordinator set.
 fn held(config: &Config) -> serde_json::Map<String, serde_json::Value> {
     config.settings.clone()
 }
 
-/// Where configuration sent by a coordinator is kept.
-///
-/// The runtime directory rather than the config directory: this is what a coordinator said for
-/// as long as it is running, not something a person edits or should find later.
+/// Where configuration sent by a coordinator is kept: the runtime directory, not `config/`.
 #[must_use]
 pub fn given() -> std::path::PathBuf {
     let base = std::env::var_os("XDG_RUNTIME_DIR")
@@ -268,8 +235,26 @@ fn remember(path: &std::path::Path, source: &str) -> Result<(), LuaError> {
 }
 
 /// Forget what a coordinator said, so a restart reads the files again.
-pub fn forget() {
-    let _ = std::fs::remove_file(given());
+///
+/// # Errors
+/// When the file is there and will not go. Nothing to forget is not a failure.
+pub fn forget() -> Result<(), LuaError> {
+    forget_from(&given())
+}
+
+/// The half that does not read the environment, so a test can exercise it.
+///
+/// # Errors
+/// When the file is there and will not go.
+pub fn forget_from(path: &std::path::Path) -> Result<(), LuaError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(why) if why.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(LuaError::Io {
+            file: path.display().to_string(),
+            source,
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -318,6 +303,25 @@ mod tests {
         let path = mine("broken");
         configure_into(&path, "this is not lua at all !!").expect_err("must fail");
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn forgetting_what_was_never_said_is_not_a_failure() {
+        let path = mine("nothing");
+        forget_from(&path).expect("a balthasar nobody configured has no file to remove");
+    }
+
+    #[test]
+    fn forgetting_says_so_when_the_file_will_not_go() {
+        // A directory in the file's place makes `remove_file` refuse.
+        let path = mine("stuck");
+        std::fs::create_dir_all(&*path).expect("mkdir");
+        std::fs::write(path.join("occupied"), "x").expect("write");
+        let why = forget_from(&path).expect_err("a directory does not unlink");
+        assert!(
+            why.to_string().contains(&path.display().to_string()),
+            "it has to name the file: {why}"
+        );
     }
 
     #[test]

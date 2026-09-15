@@ -1,8 +1,4 @@
 //! `balthasar remember` — the manual door onto the ladder.
-//!
-//! One of the three ways an imperative reaches the store, and the only one that exists at M0.
-//! What is typed here is what a person chose to keep, so it arrives as evidence of the
-//! strongest kind and pins unless told not to.
 
 use crate::Which;
 use crate::{now, open, render};
@@ -23,10 +19,8 @@ pub struct Args {
 
     /// What the claim is about. With `--predicate`, this makes it a slot.
     ///
-    /// A slotted fact gets contradiction handling for free: the store refuses to hold two live
-    /// answers to one slot, so a later `remember` for the same pair supersedes rather than
-    /// piling up. Without a slot the claim is kept and found like any other and simply cannot
-    /// be told apart from the claim it replaces.
+    /// A slotted fact gets contradiction handling: the store refuses to hold two live answers
+    /// to one slot, so a later `remember` for the same pair supersedes.
     #[arg(long)]
     subject: Option<String>,
 
@@ -48,15 +42,12 @@ pub struct Args {
 
     /// Attribute this to a session, and keep it only for that session.
     ///
-    /// Without it, what is remembered belongs to the project and every session in it shares it
-    /// — which is what a durable memory is for. With it, the memory is the session's own and
-    /// stays there until something on the ladder carries it across.
+    /// Without it, what is remembered belongs to the project and every session in it shares it.
     #[arg(long, value_name = "NAME")]
     session: Option<String>,
 
-    /// Say what was done in machine-readable form.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    how: crate::render::How,
 }
 
 /// Keep what was typed.
@@ -81,13 +72,11 @@ pub fn run(
 
     let body = match (&args.subject, &args.predicate) {
         (Some(subject), Some(predicate)) => Body::fact(subject, predicate, text),
-        // A claim nobody reduced to a slot is still a claim. Reducing it takes a person or a
-        // model, and balthasar requires neither in order to work.
+        // A claim nobody reduced to a slot is still a claim.
         _ => Body::note(text, NoteKind::Claim),
     };
 
-    // A project's memory is shared by every session in it; a session's is its own. Which of
-    // the two this is decides the tier, and the tier decides whether it outlives the run.
+    // Which of the two this is decides the tier, and the tier decides if it outlives the run.
     let session = match &args.session {
         Some(handle) => Some(
             store
@@ -105,8 +94,7 @@ pub fn run(
     let mut memory = Memory::new(mint(at), tier, scope.clone(), body, at);
     memory.session = session.as_ref().map(|s| s.id.clone());
     memory.strength.importance = importance;
-    // A session note is not a standing choice about the project, so it is not pinned by
-    // default however emphatically it was typed.
+    // A session note is not a standing choice about the project, so it is not pinned by default.
     memory.strength.pinned = !args.no_pin && session.is_none();
     memory.privacy = if args.local {
         Privacy::Local
@@ -129,14 +117,12 @@ pub fn run(
 
     let landing = store.remember(memory, witness, at)?;
     announce(&store, &landing, loaded)?;
-    say(&store, &landing, args.json, at, floors)
+    say(&store, &landing, args.how, at, floors)
 }
 
 /// Tell whatever the configuration registered.
 ///
-/// A supersession is two events, not one: something became true, and something else stopped
-/// being. A handler that only heard the first would have no way to notice a store changing
-/// its mind.
+/// A supersession is two events: something became true, and something else stopped being.
 fn announce(
     store: &balthasar_store::Store,
     landing: &Landing,
@@ -163,11 +149,11 @@ fn announce(
     Ok(())
 }
 
-/// Report what the store decided, because the three outcomes are genuinely different.
+/// Report what the store decided.
 fn say(
     store: &balthasar_store::Store,
     landing: &Landing,
-    json: bool,
+    how: crate::render::How,
     at: balthasar_model::Timestamp,
     floors: Floors,
 ) -> anyhow::Result<()> {
@@ -176,7 +162,7 @@ fn say(
         .get(id)?
         .ok_or_else(|| anyhow::anyhow!("the store lost what it just wrote"))?;
 
-    if json {
+    if how.framed() {
         let what = match landing {
             Landing::Added(_) => "added",
             Landing::Reinforced(_) => "reinforced",
@@ -186,15 +172,12 @@ fn say(
             Landing::Superseded { was, .. } => Some(was.to_string()),
             _ => None,
         };
-        crate::say!(
-            "{}",
-            serde_json::json!({
-                "landing": what,
-                "id": id.to_string(),
-                "was": was,
-                "confidence": memory.confidence,
-            })
-        );
+        how.one(serde_json::json!({
+            "landing": what,
+            "id": id.to_string(),
+            "was": was,
+            "confidence": memory.confidence,
+        }));
         return Ok(());
     }
 
@@ -223,8 +206,7 @@ fn say(
             );
         }
     }
-    // The second line of the rendered form is the standing: what tier, how old, how sure. The
-    // first is the text, which the caller has just been told in its own words.
+    // The second line of the rendered form is the standing: what tier, how old, how sure.
     let rendered = render::line(&memory, floors.inject, at);
     let standing = rendered.lines().nth(1).unwrap_or_default().trim();
     crate::say!("     {}", render::dim(standing));

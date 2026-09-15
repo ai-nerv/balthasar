@@ -1,8 +1,6 @@
 //! Stamp the checkout into the binary, for evaluation artifacts.
 //!
-//! A benchmark number that cannot name the revision that produced it cannot be compared against
-//! a later one. Best effort on purpose: a build from a tarball has no repository, and that is
-//! `unknown` rather than a failure.
+//! Best effort: a build with no repository stamps `unknown` rather than failing.
 
 fn main() {
     println!("cargo:rerun-if-changed=../../.git/HEAD");

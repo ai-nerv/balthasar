@@ -1,8 +1,7 @@
 //! What a memory actually says.
 //!
-//! One payload per tier. The fact variant is memvid's slot model — `(subject, predicate,
-//! object)` — which is what makes "what is true now" and "what was true in March" both
-//! answerable against a validity interval instead of a graph database.
+//! One payload per tier. The fact variant is a `(subject, predicate, object)` slot, which makes
+//! "what is true now" and "what was true in March" answerable against a validity interval.
 
 /// Why a note was written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -14,15 +13,12 @@ pub enum NoteKind {
     Summary,
     /// The model writing to itself.
     Scratch,
-    /// A candidate that reached the hold floor but not the promotion floor, waiting for a
-    /// second witness rather than dying with the session.
+    /// A candidate that reached the hold floor but not the promotion floor.
     Held,
     /// A durable claim that could not be reduced to a slot.
     ///
-    /// "We deploy with fly" is a fact, but naming its subject and predicate takes either a
-    /// person or a model, and balthasar requires neither to work. An unslotted claim is kept, found
-    /// and asserted like any other; what it gives up is automatic contradiction detection,
-    /// because nothing can tell it apart from the claim it replaces without reading it.
+    /// Kept, found and asserted like any other; what it gives up is automatic contradiction
+    /// detection, because nothing can tell it apart from the claim it replaces without reading it.
     Claim,
 }
 
@@ -53,39 +49,25 @@ pub enum Outcome {
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Body {
     /// A raw observation or a note. What scratch holds.
-    Note {
-        /// What it says.
-        text: String,
-        /// Why it was written.
-        note: NoteKind,
-    },
+    Note { text: String, note: NoteKind },
     /// A distilled span of a session. What episode holds.
     Episode {
-        /// What happened, in prose.
         summary: String,
-        /// Which part of the transcript it covers.
         span: Span,
         /// Which tools were involved, so a later question about a tool can find it.
         tools: Vec<String>,
-        /// How it ended.
         outcome: Outcome,
     },
     /// A claim. What fact holds.
     Fact {
-        /// What the claim is about.
         subject: String,
-        /// Which property of it.
         predicate: String,
-        /// And the value.
         object: String,
     },
     /// A procedure. What habit holds.
     Habit {
-        /// When this applies.
         trigger: String,
-        /// What to do.
         steps: Vec<String>,
-        /// How many times it has been attempted.
         tried: u32,
         /// And how many of those worked. The ratio is why a habit is worth asserting.
         worked: u32,
@@ -93,7 +75,6 @@ pub enum Body {
 }
 
 impl Body {
-    /// A plain note.
     #[must_use]
     pub fn note(text: impl Into<String>, note: NoteKind) -> Self {
         Self::Note {
@@ -116,7 +97,6 @@ impl Body {
         }
     }
 
-    /// A distilled span of work.
     #[must_use]
     pub fn episode(
         summary: impl Into<String>,
@@ -146,8 +126,7 @@ impl Body {
     /// The slot this occupies, when it occupies one.
     ///
     /// A fact answers exactly one `(subject, predicate)`, and that is the pair the store's
-    /// partial unique index keys on. Nothing else has a slot, which is why nothing else can
-    /// contradict.
+    /// partial unique index keys on.
     #[must_use]
     pub fn slot(&self) -> Option<(&str, &str)> {
         match self {
@@ -168,9 +147,6 @@ impl Body {
     }
 
     /// One line of prose, for hashing, ranking, indexing and showing a person.
-    ///
-    /// Everything that has to treat memories uniformly goes through here, so a new body
-    /// variant that forgets to render is a compile error rather than an empty search result.
     #[must_use]
     pub fn text(&self) -> String {
         match self {
@@ -199,7 +175,6 @@ impl Body {
     }
 }
 
-/// When an episode's span is a single point.
 impl Span {
     /// One cursor.
     #[must_use]
@@ -229,7 +204,6 @@ mod tests {
 
     #[test]
     fn only_a_fact_occupies_a_slot() {
-        // Nothing else can contradict, because nothing else claims a slot.
         assert_eq!(
             Body::fact("project", "test_command", "make test").slot(),
             Some(("project", "test_command"))
@@ -270,8 +244,6 @@ mod tests {
 
     #[test]
     fn a_body_round_trips_as_json() {
-        // The store keeps this column as JSON, so a variant that will not serialise is a
-        // memory that cannot be written.
         let body = Body::episode(
             "did a thing",
             Span { from: 1, to: 9 },

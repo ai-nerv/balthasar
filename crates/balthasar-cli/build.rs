@@ -1,12 +1,7 @@
 //! Embedding the shipped configuration.
 //!
-//! Walked rather than listed. `balthasar configs` has to carry every file in `config/`, and a hand-
-//! written list is a list somebody forgets to add to — a new source adapter would then load
-//! from a checkout and silently not exist for anybody who installed the binary.
-//!
-//! Walking also keeps `gate-independent` able to stay strict: naming `sources/<harness>.lua` in
-//! a `.rs` file would put a harness's name in balthasar's Rust, and the gate is right to refuse that
-//! however harmless the mention.
+//! Walked rather than listed: a new file in `config/` needs no list adding to, and no `.rs` file
+//! names a harness, which `gate-independent` refuses.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

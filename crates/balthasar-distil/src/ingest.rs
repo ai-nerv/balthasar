@@ -3,9 +3,8 @@
 //! A source adapter is Lua and lives in `config/sources/`. This walks whatever it names,
 //! converts each line through it, runs the extractors, and offers what survives to the store.
 //!
-//! Re-running is safe and cheap. Every file is stamped with the extractor version that read it,
-//! so a second pass skips what has not changed — and a *better* extractor, being a new version,
-//! reads everything again without anybody having to remember to say so.
+//! Re-running is safe and cheap: every file is stamped with the extractor version that read it,
+//! so a second pass skips what has not changed and a better extractor reads everything again.
 
 use crate::{Candidate, DistilError, Extracted, Meta, Observation, Verdict, extract, weigh};
 use balthasar_lua::{Engine, Settings};
@@ -14,14 +13,12 @@ use balthasar_store::{Landing, Store, mint};
 
 /// The extractor version stamped against every file this build reads.
 ///
-/// Bumping it is how a better rule gets applied to old material: the stamp no longer matches,
-/// so the next ingest reads everything again.
+/// Bumping it is how a better rule gets applied to old material.
 pub const EXTRACTOR_VERSION: i64 = 1;
 
 /// What to read, and how much of it.
 #[derive(Debug, Clone)]
 pub struct Ingest {
-    /// Which registered source.
     pub source: String,
     /// Which memory to write into.
     pub scope: ScopeId,
@@ -44,14 +41,10 @@ pub struct Source {
 
 /// Where a batch of candidates came from, in the only terms landing them needs.
 ///
-/// Both readers fill this in: one walks a harness's own journal files, the other walks balthasar's
-/// transcript. What follows — the floors, the configuration's gate, the witness — must not be
-/// able to tell them apart, because the evidence is the same evidence.
+/// Both readers fill this in, and what follows must not be able to tell them apart.
 #[derive(Debug, Clone)]
 pub struct Provenance {
-    /// Which project.
     pub scope: ScopeId,
-    /// Which run taught it.
     pub session: SessionId,
     /// What to record as having carried it in.
     pub through: balthasar_model::Through,
@@ -61,14 +54,12 @@ pub struct Provenance {
     pub happened: Timestamp,
     /// The moment being scored against.
     pub now: Timestamp,
-    /// Say what would happen without writing anything.
     pub dry_run: bool,
 }
 
 /// What an ingest did.
 #[derive(Debug, Default, Clone)]
 pub struct Report {
-    /// Sessions the source named.
     pub sessions: usize,
     /// Sessions skipped because their stamp already matched.
     pub already_read: usize,
@@ -82,15 +73,12 @@ pub struct Report {
     pub by: Option<String>,
     /// Candidates that crossed the gate.
     pub promoted: usize,
-    /// Candidates that reinforced something already held.
     pub reinforced: usize,
-    /// Candidates that replaced something.
     pub superseded: usize,
     /// Candidates that waited for a second witness.
     pub held: usize,
     /// Candidates a floor or a configuration refused, with why.
     pub refused: Vec<(String, String)>,
-    /// Whether anything was written.
     pub dry_run: bool,
 }
 
@@ -128,8 +116,7 @@ pub fn ingest(
             continue;
         }
 
-        // The session is recorded before anything it taught, so every memory can name the run
-        // it came from and a person can ask what one run left behind.
+        // The session is recorded before anything it taught, so every memory can name its run.
         store.open_session(
             &SessionId::new(&source.meta.id),
             &ask.scope,
@@ -187,8 +174,7 @@ fn describe(engine: &mut Engine, source: &str, file: &str) -> Result<Option<Sour
         .call("source", source, "meta", &[serde_json::json!(first)])
         .and_then(|v| serde_json::from_value::<Meta>(v).ok());
 
-    // A file the adapter will not describe is one it does not recognise. Skipping is right:
-    // a sessions() that globs a directory will find things that are not transcripts.
+    // A file the adapter will not describe is one it does not recognise, so it is skipped.
     Ok(meta.map(|meta| Source {
         file: file.to_owned(),
         meta,
@@ -208,8 +194,7 @@ fn read(
         if line.trim().is_empty() {
             continue;
         }
-        // A line the adapter skips or raises on costs that line and nothing else. A source
-        // walks somebody else's file and one bad record must not end the ingest.
+        // A line the adapter skips or raises on costs that line and nothing else.
         let Some(value) = engine.call("source", source, "line", &[serde_json::json!(line)]) else {
             continue;
         };
@@ -271,14 +256,12 @@ pub(crate) fn land(
 
 /// The floors first, then whatever the configuration wants to say about it.
 ///
-/// A handler may promote something the floors would have held, refuse something they would
-/// have promoted, or amend how fast it fades. What it must not do is go unheard, which is why
-/// this runs on every candidate rather than only on the borderline ones.
+/// A handler may promote something the floors would have held, refuse something they would have
+/// promoted, or amend how fast it fades, so it runs on every candidate.
 fn decide(engine: &mut Engine, settings: &Settings, candidate: &Candidate, score: f64) -> Verdict {
     let floors = settings.floors();
     let mut verdict = weigh(score, floors.promote, floors.hold);
-    // Somebody insisting is not asking for a memory that decays. Applied before the
-    // configuration sees it, so a gate can still overrule.
+    // Applied before the configuration sees it, so a gate can still overrule.
     if candidate.pinned
         && let Verdict::Promote { importance, pinned } = &mut verdict
     {
@@ -320,13 +303,9 @@ fn decide(engine: &mut Engine, settings: &Settings, candidate: &Candidate, score
 
 /// Keep a candidate that did not earn a place, with the evidence it did earn.
 ///
-/// "Not yet" is the whole reason there are three verdicts rather than two, and until now it did
-/// nothing — a held candidate was counted and dropped, so a claim one witness short of the floor
-/// died with the pass that found it and the second witness had nothing to land on.
-///
-/// It lands as scratch, which is the tier that means *this session's own*: findable, decaying,
-/// and below anything that gets asserted. What makes it worth writing is that consolidation
-/// reads scratch, so the next run to say the same thing corroborates it.
+/// It lands as scratch, the tier that means *this session's own*: findable, decaying, and below
+/// anything asserted. Consolidation reads scratch, so the next run to say the same thing
+/// corroborates it.
 fn hold(store: &mut Store, from: &Provenance, candidate: &Candidate) -> Result<(), DistilError> {
     let mut memory = Memory::new(
         mint(from.now),
@@ -359,9 +338,8 @@ fn witness_for(from: &Provenance, candidate: &Candidate) -> Witness {
         from.scope.clone(),
         from.happened,
     )
-    // What produced it, in its own terms. A model-proposed claim already says which backend
-    // read it, and appending "rules, not a model" to that would make `balthasar why` state the
-    // opposite of the truth about the one witness kind where it matters most.
+    // What produced it, in its own terms: a model-proposed claim already names its backend, and
+    // appending "rules, not a model" to that would state the opposite of the truth.
     .noted(
         if candidate.witness == balthasar_model::WitnessKind::Inferred {
             candidate.from.clone()
@@ -384,8 +362,7 @@ fn write(
     pinned: bool,
 ) -> Result<Landing, DistilError> {
     let session = from.session.clone();
-    // The claim dates from when it happened, not from when the backfill ran. Six months of
-    // transcripts read this afternoon did not all become true this afternoon.
+    // The claim dates from when it happened, not from when the backfill ran.
     let happened = from.happened;
     let mut memory = Memory::new(
         mint(from.now),

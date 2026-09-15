@@ -1,14 +1,10 @@
 //! Forgetting, as arithmetic.
 //!
 //! Ebbinghaus decay with a floor: strength falls exponentially with elapsed time, and the rate
-//! is damped by how often the memory has actually been needed. Without decay a store grows
-//! without bound and retrieval drowns in stale noise; without the floor, the thing the agent
-//! reaches for every day fades at the same rate as a passing remark.
+//! is damped by how often the memory has actually been needed.
 //!
-//! Confidence (`crate::confidence`) is a different quantity and they are easy to confuse.
-//! Strength says *how faded* — a function of time and use. Confidence says *how sure* — a
-//! function of evidence. A well-witnessed fact nobody has needed in a year is confident and
-//! faint; a guess repeated this morning is doubtful and bright.
+//! Strength says *how faded* — a function of time and use. Confidence (`crate::confidence`) says
+//! *how sure* — a function of evidence.
 
 use crate::Timestamp;
 use std::fmt;
@@ -31,9 +27,6 @@ pub enum Importance {
 
 impl Importance {
     /// Base decay constant per day.
-    ///
-    /// LivingBrain's numbers, taken unchanged: they are the Ebbinghaus curve, and there is
-    /// nothing here to improve on.
     #[must_use]
     pub fn rate(self) -> f64 {
         match self {
@@ -61,7 +54,6 @@ impl Importance {
 pub struct Strength {
     /// Current strength, `0.0..=1.0`.
     pub value: f64,
-    /// Which decay class this belongs to.
     pub importance: Importance,
     /// When it was last recalled or reinforced.
     pub last_accessed: Timestamp,
@@ -87,8 +79,7 @@ impl Strength {
     /// The decay constant actually applied, after inertia.
     ///
     /// Logarithmic damping by access count: 1 access leaves the rate alone, ~50 quarter it,
-    /// ~1000 reduce it roughly sevenfold. A memory the agent keeps needing stops fading, which
-    /// is the floor the literature asks for and forty lines of arithmetic supply.
+    /// ~1000 reduce it roughly sevenfold.
     #[must_use]
     pub fn effective_rate(&self) -> f64 {
         if self.pinned {
@@ -101,8 +92,7 @@ impl Strength {
     /// Strength as it would be at `now`, without writing it back.
     ///
     /// Separate from [`Self::decay`] so `balthasar decay --preview` can show what a pass would do
-    /// before it does it. Forgetting is the most alarming thing this system performs and it
-    /// should never be a surprise.
+    /// before it does it.
     #[must_use]
     pub fn at(&self, now: Timestamp) -> f64 {
         if self.pinned {
@@ -114,10 +104,8 @@ impl Strength {
 
     /// What this will be worth at `now`, for a memory of this tier.
     ///
-    /// The tier-aware form. A fact and an afternoon's episode should not fade at the same
-    /// speed: disuse is not evidence against a claim about the world, and it is exactly what an
-    /// episode's worth is made of. See [`crate::tempo`] for the multipliers and the case for
-    /// each one.
+    /// A fact and an afternoon's episode should not fade at the same speed; see [`crate::tempo`]
+    /// for the multipliers.
     #[must_use]
     pub fn at_tier(&self, tier: crate::Tier, now: Timestamp) -> f64 {
         if self.pinned {
@@ -217,8 +205,6 @@ mod tests {
 
     #[test]
     fn what_is_needed_often_resists_fading() {
-        // The floor the literature asks for: a memory the agent keeps reaching for should not
-        // fade at the same rate as a passing remark.
         let once = Strength::fresh(Importance::Normal, NOW);
         let mut often = Strength::fresh(Importance::Normal, NOW);
         often.access_count = 50;
@@ -238,7 +224,6 @@ mod tests {
 
     #[test]
     fn previewing_does_not_change_anything() {
-        // `balthasar decay --preview` has to be able to show the future without causing it.
         let s = Strength::fresh(Importance::Normal, NOW);
         let before = s.value;
         let _ = s.at(NOW + 100 * DAY);

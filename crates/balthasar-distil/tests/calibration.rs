@@ -1,9 +1,8 @@
 //! The corpus the near-match threshold was chosen from, held open.
 //!
-//! `akin::SAME_CLAIM` is a number, and a number picked once and never checked again is a number
-//! that drifts. This is the evidence for it: two populations of claim pairs, and the assertion
-//! that they do not touch. A change to the stemmer, the grammar list or the threshold that
-//! closes the gap fails here rather than in somebody's project six months later.
+//! `akin::SAME_CLAIM` is a number, and this is the evidence for it: two populations of claim
+//! pairs, and the assertion that they do not touch. A change to the stemmer, the grammar list or
+//! the threshold that closes the gap fails here.
 //!
 //! Run with `--nocapture` to see the numbers rather than only the verdict.
 
@@ -38,8 +37,8 @@ const SAME: &[(&str, &str)] = &[
     ),
 ];
 
-/// Pairs that are different claims, several of them a claim beside its own replacement.
-/// None may merge, and the ones that are revisions are the ones that would do real harm.
+/// Pairs that are different claims, several of them a claim beside its own replacement. None may
+/// merge.
 const DIFFERENT: &[(&str, &str)] = &[
     ("we use make test", "we use cargo build"),
     (
@@ -72,7 +71,6 @@ const DIFFERENT: &[(&str, &str)] = &[
         "the staging url is app.staging.example.com",
         "the prod url is app.example.com",
     ),
-    // Both found by other suites rather than by this corpus, which is why they are in it now.
     // A single content word swapped inside a short frame scores exactly 0.600 — high enough to
     // read as a rewording by any threshold that catches real ones.
     ("loud says the same thing", "spread says the same thing"),
@@ -97,8 +95,8 @@ fn every_rewording_is_recognised_as_one_claim() {
 
 #[test]
 fn no_different_claim_is_taken_for_a_rewording() {
-    // The direction that matters. A missed merge delays one promotion; a false one puts a claim
-    // in a project's memory that no run ever made.
+    // A missed merge delays one promotion; a false one puts a claim in a project's memory that
+    // no run ever made.
     for (a, b) in DIFFERENT {
         assert!(
             !same_claim(a, b),
@@ -110,7 +108,6 @@ fn no_different_claim_is_taken_for_a_rewording() {
 
 #[test]
 fn a_restatement_never_substitutes_one_word_for_another() {
-    // The rule that carries most of the weight, and the one the threshold cannot express.
     // Restating adds words, drops them or reorders them; saying something else swaps one for
     // another, leaving both claims holding something the other lacks.
     for (a, b) in SAME {
@@ -130,8 +127,8 @@ fn a_restatement_never_substitutes_one_word_for_another() {
 }
 
 /// Pairs that overlap enough to look like rewordings and are not, because a content word was
-/// swapped. Kept apart from [`DIFFERENT`] because the *threshold* does not settle these — the
-/// substitution rule does — so they would wrongly narrow the measured gap below.
+/// swapped. Kept apart from [`DIFFERENT`]: the substitution rule settles these, not the
+/// threshold.
 const SUBSTITUTIONS: &[(&str, &str)] = &[
     ("loud says the same thing", "spread says the same thing"),
     (
@@ -144,12 +141,8 @@ const SUBSTITUTIONS: &[(&str, &str)] = &[
 
 #[test]
 fn the_two_populations_do_not_touch() {
-    // Not just "the threshold works" but "there is room around it". A gap that has narrowed to
-    // nothing still passes the two tests above and is one new phrasing away from not.
-    //
-    // Scored on the pairs the score actually decides. The substitution cases are excluded on
-    // purpose: they are refused by a rule, not by a number, and folding them in here would
-    // measure the wrong thing.
+    // Not just "the threshold works" but "there is room around it". Scored on the pairs the
+    // score actually decides: the substitution cases are refused by a rule, not by a number.
     let worst_rewording = SAME
         .iter()
         .map(|(a, b)| claim_overlap(a, b))
@@ -177,12 +170,8 @@ fn the_two_populations_do_not_touch() {
 
 #[test]
 fn the_embedder_is_not_used_for_this_and_here_is_why() {
-    // Kept as a test rather than a comment because it is the reason for a design decision, and
-    // the obvious future change is "why not just use the vectors we already compute".
-    //
     // On the local hashed embedder, a claim and its own contradiction score higher than a true
-    // rewording. That is not a threshold that needs tuning; it is a signal measuring how a
-    // sentence is spelled rather than what it says.
+    // rewording: the signal measures how a sentence is spelled rather than what it says.
     use balthasar_embed::{Embed, Hashed};
 
     let cosine = |a: &str, b: &str| -> f32 {

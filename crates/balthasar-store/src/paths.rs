@@ -1,40 +1,36 @@
 //! Where a store lives, and which store a directory belongs to.
 //!
-//! Three levels, one tool namespace at every level. A session's scratch is its own file so that
-//! deleting one run is deleting one directory; a project's durable memory sits beside it; what
-//! is true everywhere lives in the data directory, because "I always use make" belongs to the
-//! person rather than to whichever project they last opened.
-//!
 //! ```text
-//! <project>/balthasar/<tool>/project.db          the checkout's memory, for that tool
-//! <project>/balthasar/<tool>/<session>/memory.db that run's scratch
-//! <project>/balthasar/<tool>/<session>/transcript.db
-//! ~/.local/share/balthasar/<tool>/global.db      yours, everywhere
+//! <project>/.balthasar/<tool>/project.db                   the checkout's memory, for that tool
+//! <project>/.balthasar/<tool>/<session>/<agent>/memory.db  that agent's scratch, in that run
+//! ~/.local/share/balthasar/<tool>/global.db               yours, everywhere
 //! ```
 //!
-//! Two rules hold here and are load-bearing elsewhere. **The store lives in the project**, so
-//! renaming a checkout moves its memory rather than orphaning it. And **every name that becomes
-//! a path component is validated**, because tool names arrive from the kernel and session names
-//! arrive from a harness: neither is this crate's to trust.
+//! The store lives in the project, so renaming a checkout moves its memory rather than orphaning
+//! it. Every name that becomes a path component is validated: tool names arrive from the kernel,
+//! session and agent names from a harness.
 
-use balthasar_model::{ScopeId, SessionId};
+use balthasar_model::{AgentId, ScopeId, SessionId};
 use std::path::{Path, PathBuf};
 
-/// The directory a project keeps its memory in.
-pub const HOME: &str = "balthasar";
+/// The directory a project keeps its memory in: hidden, like the rest of a checkout's tool state.
+pub const HOME: &str = ".balthasar";
 
-/// What marks one as balthasar's rather than a directory that happens to be called `balthasar`.
-///
-/// Without it, any directory containing a subdirectory named `balthasar` would be mistaken for a
-/// project root — including the parent of balthasar's own checkout, which is how this was found.
-const MARKER: &str = ".store";
+/// Where it was kept before, in plain sight. A store found there is moved to [`HOME`].
+const LEGACY_HOME: &str = "balthasar";
 
-/// What goes in the marker: enough to tell a later layout that this is an earlier one.
-const MARKER_BODY: &str = "balthasar store layout 1\n";
-
-/// Kept out of a checkout by default. Sessions are churn and belong to whoever ran them; a
-/// project's own memory is a decision rather than a default, so it is offered commented out.
+/// Kept out of a checkout entirely, so it never shows in `git status`. Keeping the project's own
+/// memory is offered commented out.
 const IGNORE_BODY: &str = "\
+# balthasar's memory for this checkout. None of it is committed unless you mean it to be: to keep
+# the project's own memory, replace `*` with the two lines under it.
+*
+# */*/
+# !*/project.db
+";
+
+/// What an older balthasar wrote there. Found as it was left, it is replaced; edited, it is not.
+const OLD_IGNORE_BODY: &str = "\
 # Session stores: churn, and personal to whoever ran them.
 */*/
 
@@ -42,11 +38,8 @@ const IGNORE_BODY: &str = "\
 # !*/project.db
 ";
 
-/// The directory holding balthasar's own data.
-///
-/// `$XDG_DATA_HOME/balthasar`, falling back to `~/.local/share/balthasar`. Beside the data rather than in
-/// the configuration: a store is not something anybody hand-edits, and losing it should cost
-/// memories rather than settings.
+/// The directory holding balthasar's own data: `$XDG_DATA_HOME/balthasar`, falling back to
+/// `~/.local/share/balthasar`.
 #[must_use]
 pub fn data_dir() -> PathBuf {
     if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
@@ -55,19 +48,15 @@ pub fn data_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(home).join(".local/share/balthasar");
     }
-    // Per user, the way the socket directory already is (`balthasar-ipc/src/serve.rs:18`). The
-    // temporary directory is shared: a fixed name there is the first caller's to own, and every
-    // later one either fails or writes its memory into somebody else's directory.
+    // Per user: a fixed name in the shared temporary directory is the first caller's to own.
     let uid = rustix::process::getuid().as_raw();
     std::env::temp_dir().join(format!("balthasar-{uid}"))
 }
 
 /// Which tool a memory belongs to.
 ///
-/// A path component, so it is validated rather than trusted: `[a-z0-9_-]`, non-empty, no
-/// leading dash, never `.` or `..`. The value normally arrives from `SO_PEERCRED` — the kernel
-/// naming the program on the other end of the socket — which makes it unspoofable but not
-/// automatically safe to join onto a path.
+/// A path component, so it is validated rather than trusted: `[a-z0-9_-]`, non-empty, no leading
+/// dash, never `.` or `..`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Tool(String);
 
@@ -76,9 +65,6 @@ impl Tool {
     pub const DEFAULT: &'static str = "balthasar";
 
     /// Take `name` as a tool, if it is already usable as one.
-    ///
-    /// Strict on purpose: this is the path used when somebody typed `--tool`, and silently
-    /// rewriting what they typed would put their memories somewhere they did not ask for.
     #[must_use]
     pub fn new(name: &str) -> Option<Self> {
         let usable = !name.is_empty()
@@ -92,11 +78,7 @@ impl Tool {
         usable.then(|| Self(name.to_owned()))
     }
 
-    /// Take a program name as a tool, making it usable first.
-    ///
-    /// For the peer end of a socket, where the name is whatever the executable is called.
-    /// Returns `None` when nothing survives — a caller that cannot be named should be refused
-    /// rather than filed under a guess.
+    /// Take a program name as a tool, making it usable first; `None` when nothing survives.
     #[must_use]
     pub fn from_program(name: &str) -> Option<Self> {
         let slug: String = name
@@ -136,10 +118,6 @@ impl std::fmt::Display for Tool {
 }
 
 /// The directory holding every store for `scope`.
-///
-/// A project's own `balthasar/` when the scope is a checkout, so that memory moves with the code.
-/// The data directory otherwise: `~/scratch` and `/tmp` should not sprout store directories,
-/// and the global scope belongs to nobody's project.
 #[must_use]
 pub fn home_of(scope: &ScopeId) -> PathBuf {
     if let Some(inside) = project_home(scope) {
@@ -152,46 +130,58 @@ pub fn home_of(scope: &ScopeId) -> PathBuf {
 }
 
 /// The directory inside the project that holds its stores, if the scope has a project at all.
-///
-/// `None` for the global scope and for a directory that is neither a checkout nor somewhere
-/// somebody ran `balthasar init`. Callers use it to decide whether there is a home to create: the
-/// data directory needs no marker and no ignore file.
 #[must_use]
 pub fn project_home(scope: &ScopeId) -> Option<PathBuf> {
     if scope.is_global() {
         return None;
     }
     let at = Path::new(scope.as_str());
-    let has = at.is_absolute() && (is_home(&at.join(HOME)) || at.join(".git").exists());
-    has.then(|| at.join(HOME))
+    if !at.is_absolute() {
+        return None;
+    }
+    let home = at.join(HOME);
+    // A store under the old, visible name is moved rather than started again beside it; one that
+    // cannot be moved is used where it is, so no memory is lost to the rename.
+    // Never a checkout that shares the name: in a superproject `balthasar/` is the code itself.
+    let legacy = at.join(LEGACY_HOME);
+    if !home.exists() && is_home(&legacy) && !legacy.join(".git").exists() {
+        if std::fs::rename(&legacy, &home).is_err() {
+            return Some(legacy);
+        }
+        let _ = keep_out(&home);
+    }
+    (is_home(&home) || at.join(".git").exists()).then_some(home)
 }
 
 /// Whether `dir` is a store home rather than a directory that shares its name.
 fn is_home(dir: &Path) -> bool {
-    dir.join(MARKER).is_file()
+    crate::layout::is_home(dir)
 }
 
-/// Create a store home, marking it and keeping it out of the checkout.
-///
-/// Idempotent, and never overwrites an existing `.gitignore`: whether to commit `project.db` is
-/// a decision, and having made it once it should not be unmade by the next write.
+/// Create a store home, marking it and keeping it out of the checkout. Overwrites neither a
+/// `.gitignore` somebody wrote nor an existing marker; layout moves are [`crate::layout`]'s to record.
 pub fn make_home(home: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(home)?;
-    let marker = home.join(MARKER);
+    let marker = home.join(crate::layout::MARKER);
     if !marker.exists() {
-        std::fs::write(&marker, MARKER_BODY)?;
+        std::fs::write(&marker, crate::layout::marker_body())?;
     }
+    keep_out(home)
+}
+
+/// Write the `.gitignore` a store home keeps: where there is none, or where the one there is what
+/// an older balthasar wrote and nobody has touched since.
+fn keep_out(home: &Path) -> std::io::Result<()> {
     let ignore = home.join(".gitignore");
-    if !ignore.exists() {
+    let ours = !ignore.exists()
+        || std::fs::read_to_string(&ignore).is_ok_and(|said| said == OLD_IGNORE_BODY);
+    if ours {
         std::fs::write(&ignore, IGNORE_BODY)?;
     }
     Ok(())
 }
 
 /// The file backing `scope` for `tool`.
-///
-/// The global scope's store is per-tool but not per-project, which is the whole distinction:
-/// what is true everywhere for a harness is not what is true everywhere for a shell.
 #[must_use]
 pub fn scope_path(scope: &ScopeId, tool: &Tool) -> PathBuf {
     if scope.is_global() {
@@ -200,40 +190,31 @@ pub fn scope_path(scope: &ScopeId, tool: &Tool) -> PathBuf {
     home_of(scope).join(tool.as_str()).join("project.db")
 }
 
-/// The directory holding one run's scratch and scrollback.
+/// The directory holding one agent's scratch, in one run.
 #[must_use]
-pub fn session_dir(scope: &ScopeId, tool: &Tool, session: &SessionId) -> PathBuf {
-    session_dir_in(&home_of(scope).join(tool.as_str()), session)
+pub fn session_dir(scope: &ScopeId, tool: &Tool, session: &SessionId, agent: &AgentId) -> PathBuf {
+    session_dir_in(&home_of(scope).join(tool.as_str()), session, agent)
 }
 
-/// One run.s directory under a tool.s home.
-///
-/// The half a scratchpad needs: it holds one tool.s home and opens runs beneath it, without
-/// having to carry a scope around to recompute what it already knows.
+/// One agent's directory under a tool's home.
 #[must_use]
-pub fn session_dir_in(home: &Path, session: &SessionId) -> PathBuf {
-    home.join(session_stem(session.as_str()))
+pub fn session_dir_in(home: &Path, session: &SessionId, agent: &AgentId) -> PathBuf {
+    run_dir_in(home, session).join(path_stem(agent.as_str()))
 }
 
-/// One run's scratch.
+/// One whole run's directory under a tool's home, every agent of it included.
 #[must_use]
-pub fn session_path(scope: &ScopeId, tool: &Tool, session: &SessionId) -> PathBuf {
-    session_dir(scope, tool, session).join("memory.db")
+pub fn run_dir_in(home: &Path, session: &SessionId) -> PathBuf {
+    home.join(path_stem(session.as_str()))
 }
 
-/// One run's scrollback.
-///
-/// Beside that run's scratch and never inside it: a transcript is orders of magnitude larger
-/// than the memories distilled from it, and sharing a file would make every recall walk past it.
+/// One agent's scratch.
 #[must_use]
-pub fn session_transcript_path(scope: &ScopeId, tool: &Tool, session: &SessionId) -> PathBuf {
-    session_dir(scope, tool, session).join("transcript.db")
+pub fn session_path(scope: &ScopeId, tool: &Tool, session: &SessionId, agent: &AgentId) -> PathBuf {
+    session_dir(scope, tool, session, agent).join("memory.db")
 }
 
 /// Which tools have durable memory in `scope`, in a stable order.
-///
-/// What a recall with no `--tool` reads across. Missing directories are not an error: a scope
-/// nothing has written to yet has no tools, and that is an empty answer rather than a failure.
 #[must_use]
 pub fn tools_in(scope: &ScopeId) -> Vec<Tool> {
     let home = home_of(scope);
@@ -255,14 +236,12 @@ pub fn tools_in(scope: &ScopeId) -> Vec<Tool> {
     found
 }
 
-/// A session name as a directory name.
+/// A harness-supplied name as a directory name.
 ///
-/// Session identities come from a harness, so this is a boundary rather than a nicety: `..` is
-/// a name a harness could reasonably produce and must never become a path component. A name
-/// that survives intact is used as it is, and one that does not carries a digest so two mangled
-/// names do not land on one directory.
-fn session_stem(session: &str) -> String {
-    let safe: String = session
+/// `..` must never become a path component. A name that survives intact is used as it is; one
+/// that does not carries a digest so two mangled names do not land on one directory.
+fn path_stem(name: &str) -> String {
+    let safe: String = name
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
@@ -273,11 +252,11 @@ fn session_stem(session: &str) -> String {
         })
         .take(64)
         .collect();
-    let usable = safe == session && !safe.is_empty() && safe != "." && safe != "..";
+    let usable = safe == name && !safe.is_empty() && safe != "." && safe != "..";
     if usable {
         return safe;
     }
-    let digest = balthasar_model::content_hash(session);
+    let digest = balthasar_model::content_hash(name);
     let head: String = safe.chars().filter(|c| *c != '-').take(16).collect();
     if head.is_empty() {
         format!("session-{}", &digest[..12])
@@ -307,11 +286,7 @@ fn file_stem(scope: &str) -> String {
 
 /// Which scope `cwd` belongs to.
 ///
-/// In order: a store home somebody already made, then the repository, then the directory
-/// itself. The first rule is what lets `balthasar init` in a subdirectory scope memory to a subtree
-/// — which is how a monorepo gets per-package memory without this crate knowing what a monorepo
-/// is. The second is why five worktrees of one project share one memory rather than starting
-/// each other's amnesia.
+/// In order: a store home somebody already made, then the repository, then the directory itself.
 #[must_use]
 pub fn scope_of(cwd: &Path) -> ScopeId {
     if let Some(home) = nearest_home(cwd) {
@@ -325,20 +300,21 @@ pub fn scope_of(cwd: &Path) -> ScopeId {
 
 /// The closest ancestor holding a store home, if any.
 ///
-/// **The walk stops at the first shared directory rather than at the filesystem root.** A store
-/// home is a claim about who owns a subtree, and `/tmp`, `/home` and `/` are owned by everybody:
-/// a `.store` in one of them says nothing about the project underneath it. Without the ceiling a
-/// single leftover `/tmp/balthasar/.store` made `/tmp` itself resolve as a store home, so every
-/// directory under it — every test fixture, and every session of every other user on the machine
-/// — was silently reparented into one scope. It was found by four tests failing for a reason
-/// that had nothing to do with what they were asserting.
+/// The walk stops at the first shared directory, not at the filesystem root: one leftover
+/// `/tmp/balthasar/.store` would otherwise reparent every path under `/tmp` into a single scope.
 fn nearest_home(from: &Path) -> Option<PathBuf> {
+    home_below(from, is_shared)
+}
+
+/// The walk itself, with the ceiling passed in so a test can put one where it can plant a home.
+fn home_below(from: &Path, ceiling: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     let mut at = from;
     loop {
-        if is_shared(at) {
+        if ceiling(at) {
             return None;
         }
-        if is_home(&at.join(HOME)) {
+        // Under the old name too: that is a project whose store has not been moved yet.
+        if is_home(&at.join(HOME)) || is_home(&at.join(LEGACY_HOME)) {
             return Some(at.to_owned());
         }
         at = at.parent()?;
@@ -348,9 +324,7 @@ fn nearest_home(from: &Path) -> Option<PathBuf> {
 /// Whether `dir` is a directory nobody in particular owns, and so cannot scope a project.
 ///
 /// The temporary directory, the parent of a home directory, and the filesystem root. Compared by
-/// path rather than by mode: a sticky world-writable bit is the usual signal, but `/home` has
-/// neither and is just as shared, and a mode check would also make the answer depend on how this
-/// machine happens to be set up.
+/// path rather than by mode: `/home` is just as shared and has no sticky world-writable bit.
 fn is_shared(dir: &Path) -> bool {
     if dir.parent().is_none() {
         return true;
@@ -366,18 +340,8 @@ fn is_shared(dir: &Path) -> bool {
         .is_some_and(|above| dir == above)
 }
 
-/// Whether a checkout rooted at `dir` would sweep in directories that have nothing to do with it.
-///
-/// The shared directories, and a home directory as well. `is_shared` is the ceiling for a store
-/// somebody *made* — `balthasar init` is a deliberate act and should win wherever it was run,
-/// including in a home directory. A `.git` is not that: it is inferred, and the two places a
-/// repository most often sits without meaning to own everything below it are exactly these.
-///
-/// Found by looking: this machine had both a `/tmp/.git` and a `$HOME/.git`, the second being an
-/// ordinary dotfiles repository. Between them, every directory that was not itself a checkout —
-/// every scratch directory, every unpacked tarball — resolved to one of two enormous scopes and
-/// shared one memory. A test that ran four sessions in four temporary directories was really
-/// running them in one, and the failure looked like a resume that lost the conversation.
+/// Whether a checkout rooted at `dir` would sweep in directories that have nothing to do with it:
+/// the shared directories, and a home directory, where a dotfiles repository would otherwise win.
 fn too_broad(dir: &Path) -> bool {
     if is_shared(dir) {
         return true;
@@ -387,11 +351,8 @@ fn too_broad(dir: &Path) -> bool {
         .is_some_and(|home| dir == Path::new(&home))
 }
 
-/// The repository a directory is in, walking up.
-///
-/// Reads `.git` when it is a file, because that is what a worktree has: a pointer at the real
-/// repository. Following it is the difference between one memory per project and one per
-/// checkout.
+/// The repository a directory is in, walking up. Reads `.git` when it is a file, because that is
+/// what a worktree has: a pointer at the real repository.
 fn git_common_dir(from: &Path) -> Option<PathBuf> {
     let mut at = from;
     loop {
@@ -403,8 +364,7 @@ fn git_common_dir(from: &Path) -> Option<PathBuf> {
             return Some(at.to_owned());
         }
         if dot.is_file() {
-            // `gitdir: /path/to/repo/.git/worktrees/name` — the repository is two levels up
-            // from the worktree entry.
+            // `gitdir: .../.git/worktrees/name` — the repository is two levels up from the entry.
             let pointer = std::fs::read_to_string(&dot).ok()?;
             let target = pointer.trim().strip_prefix("gitdir:")?.trim();
             let target = PathBuf::from(target);
@@ -424,18 +384,13 @@ mod tests {
     use super::*;
     use balthasar_model::scratch::Scratch;
 
-    /// A scratch directory nothing else is using.
-    ///
-    /// Named after the test rather than shared, because two tests tidying up one tree race
-    /// each other and the loser fails somewhere unrelated.
+    /// A scratch directory nothing else is using, named after the test rather than shared.
     fn scratch(name: &str) -> Scratch {
         Scratch::new("balthasar-paths", name)
     }
 
     #[test]
     fn a_tool_name_that_would_escape_its_directory_is_refused() {
-        // The reason this type exists. A tool name becomes a path component, and `..` arriving
-        // from a peer must not be able to write outside the store home.
         assert!(Tool::new("..").is_none());
         assert!(Tool::new(".").is_none());
         assert!(Tool::new("a/b").is_none());
@@ -447,8 +402,6 @@ mod tests {
 
     #[test]
     fn a_program_name_is_made_usable_rather_than_refused() {
-        // `--tool` is strict because somebody typed it; a program name is not typed by anybody
-        // and is worth salvaging.
         assert_eq!(
             Tool::from_program("My Harness").expect("slug").as_str(),
             "my-harness"
@@ -463,10 +416,8 @@ mod tests {
 
     #[test]
     fn a_session_name_cannot_climb_out_of_the_store() {
-        // A session identity is whatever a harness calls its run. `..` is a name a harness
-        // could plausibly produce and must never become a path component.
         for hostile in ["..", ".", "../../etc", "a/b"] {
-            let stem = session_stem(hostile);
+            let stem = path_stem(hostile);
             assert!(!stem.contains('/'), "{hostile} -> {stem}");
             assert_ne!(stem, "..", "{hostile}");
             assert_ne!(stem, ".", "{hostile}");
@@ -474,21 +425,33 @@ mod tests {
     }
 
     #[test]
+    fn an_agent_name_is_held_to_the_same_boundary_as_a_session_name() {
+        let home = Path::new("/w/p/balthasar/harness");
+        let run = SessionId::new("01K5X8ZQ");
+        let hostile = session_dir_in(home, &run, &AgentId::new("../../etc"));
+
+        assert_eq!(
+            hostile.parent(),
+            Some(run_dir_in(home, &run).as_path()),
+            "it stayed inside its run: {hostile:?}"
+        );
+        let leaf = hostile.file_name().expect("a name").to_string_lossy();
+        assert!(leaf != ".." && leaf != "." && !leaf.contains('/'), "{leaf}");
+    }
+
+    #[test]
     fn two_mangled_session_names_do_not_share_a_directory() {
-        // Without the digest, every unusual name would collapse onto one directory and two
-        // runs would overwrite each other's scrollback.
-        assert_ne!(session_stem("a/b"), session_stem("a:b"));
+        assert_ne!(path_stem("a/b"), path_stem("a:b"));
     }
 
     #[test]
     fn an_ordinary_session_name_is_left_alone() {
-        assert_eq!(session_stem("01K5X8ZQ"), "01K5X8ZQ");
+        assert_eq!(path_stem("01K5X8ZQ"), "01K5X8ZQ");
     }
 
     #[test]
     fn a_directory_named_balthasar_is_not_mistaken_for_a_store() {
-        // Found the hard way: balthasar's own checkout is called `balthasar`, so without the marker the
-        // parent of this repository would resolve as a project root.
+        // This checkout is called `balthasar`; without the marker its parent resolves as a root.
         let root = scratch("lookalike");
         std::fs::create_dir_all(root.join(HOME)).expect("mkdir");
         assert!(!is_home(&root.join(HOME)));
@@ -499,32 +462,38 @@ mod tests {
     }
 
     #[test]
-    fn a_store_home_in_a_shared_directory_scopes_nothing() {
-        // The bug this closes: a leftover `.store` in the temporary directory made *every* path
-        // under it resolve to one scope — every fixture in this file, and on a shared machine
-        // every other user's sessions too. Four tests in this module were failing for that
-        // reason and none of them was about it.
-        //
-        // Asserted against the real temporary directory rather than a fixture, because the
-        // property is about which directories nobody owns.
-        let shared = std::env::temp_dir();
-        assert!(is_shared(&shared), "{}", shared.display());
+    fn the_shared_directories_are_the_ones_nobody_owns() {
+        assert!(is_shared(&std::env::temp_dir()));
         assert!(is_shared(std::path::Path::new("/")));
-
-        // A marked home directly in it is still refused, which is the whole point.
-        let planted = shared.join(HOME);
-        if is_home(&planted) {
-            assert_eq!(nearest_home(&shared), None);
-            let under = shared.join("balthasar-ceiling-probe");
-            std::fs::create_dir_all(&under).expect("mkdir");
-            assert_eq!(nearest_home(&under), None);
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        if let Some(above) = home.as_deref().and_then(Path::parent) {
+            assert!(is_shared(above), "{}", above.display());
         }
     }
 
     #[test]
+    fn a_store_home_in_a_shared_directory_scopes_nothing() {
+        // A leftover `.store` in the temporary directory otherwise resolves every path under it
+        // to one scope. The ceiling is passed in because no test may write into the real `/tmp`.
+        let root = scratch("ceiling");
+        let shared = root.join("shared");
+        let under = shared.join("project");
+        std::fs::create_dir_all(&under).expect("mkdir");
+        make_home(&shared.join(HOME)).expect("make");
+
+        let stops = |dir: &Path| dir == shared;
+        assert_eq!(
+            home_below(&under, stops),
+            None,
+            "the walk passed the ceiling"
+        );
+        assert_eq!(home_below(&shared, stops), None);
+
+        assert_eq!(home_below(&under, |_| false), Some(shared.clone()));
+    }
+
+    #[test]
     fn a_store_home_scopes_the_subtree_it_sits_in() {
-        // What makes per-package memory in a monorepo possible without this crate knowing what
-        // a monorepo is: the home is nearer than the repository root, so it wins.
         let root = scratch("subtree");
         let package = root.join("crates/thing");
         std::fs::create_dir_all(root.join(".git")).expect("mkdir");
@@ -540,21 +509,17 @@ mod tests {
 
     #[test]
     fn a_repository_keeps_its_memory_inside_itself() {
-        // The point of the restructure: the store is in the project, so it is visible, movable
-        // and deletable with the checkout.
         let root = scratch("in-project");
         std::fs::create_dir_all(root.join(".git")).expect("mkdir");
         let scope = scope_of(&root);
         let path = scope_path(&scope, &Tool::default());
 
         assert!(path.starts_with(&root), "{}", path.display());
-        assert_eq!(path, root.join("balthasar/balthasar/project.db"));
+        assert_eq!(path, root.join(HOME).join("balthasar/project.db"));
     }
 
     #[test]
     fn renaming_a_project_keeps_its_memory() {
-        // The bug this replaces: scope used to be hashed into a filename in the data
-        // directory, so `mv` produced a different hash, an empty store, and no error.
         let root = scratch("rename");
         let before = root.join("before");
         std::fs::create_dir_all(before.join(".git")).expect("mkdir");
@@ -575,8 +540,6 @@ mod tests {
 
     #[test]
     fn everything_under_a_repository_shares_its_scope() {
-        // The contract: a scope is a project, not a directory. Working in `src/` and working
-        // in the root are the same project and must not be two memories.
         let root = scratch("in-repo");
         let deep = root.join("crates/thing/src");
         std::fs::create_dir_all(root.join(".git")).expect("mkdir");
@@ -588,8 +551,7 @@ mod tests {
 
     #[test]
     fn every_worktree_of_a_repository_shares_one_scope() {
-        // Without this, `git worktree add` starts a project with amnesia about the project it
-        // is a copy of. A worktree's `.git` is a file pointing at the real one.
+        // A worktree's `.git` is a file pointing at the real one.
         let root = scratch("worktree");
         let work = root.join("checkout");
         let tree = root.join("tree");
@@ -606,16 +568,14 @@ mod tests {
 
     #[test]
     fn a_directory_in_no_repository_is_its_own_scope() {
-        // Deliberately a path that does not exist: any real temporary directory may sit under
-        // somebody else's checkout, and a test that walks to the root is a test about the
-        // machine it runs on rather than about this function.
+        // Deliberately a path that does not exist: a real temporary directory may sit under
+        // somebody else's checkout.
         let nowhere = Path::new("/balthasar-no-such-root-9f3a/deep/inside");
         assert_eq!(scope_of(nowhere).as_str(), nowhere.to_string_lossy());
     }
 
     #[test]
     fn a_scope_with_no_project_keeps_its_memory_in_the_data_directory() {
-        // `/tmp` and `~/scratch` should not sprout store directories.
         let nowhere = ScopeId::new("/balthasar-no-such-root-9f3a/deep");
         let path = scope_path(&nowhere, &Tool::default());
         assert!(path.starts_with(data_dir()), "{}", path.display());
@@ -623,8 +583,6 @@ mod tests {
 
     #[test]
     fn the_global_store_is_per_tool_and_not_per_project() {
-        // What is true everywhere for a harness is not what is true everywhere for a shell,
-        // but neither belongs to a checkout.
         let tool = Tool::new("oslo").expect("valid");
         let path = scope_path(&ScopeId::global(), &tool);
         assert_eq!(path, data_dir().join("oslo/global.db"));
@@ -646,27 +604,30 @@ mod tests {
     }
 
     #[test]
-    fn a_run_keeps_its_scratch_and_its_scrollback_in_one_directory() {
-        // So that deleting one run is deleting one directory.
+    fn every_agent_of_a_run_keeps_its_scratch_under_that_run() {
         let scope = ScopeId::new("/balthasar-no-such-root-9f3a/p");
         let tool = Tool::default();
         let run = SessionId::new("01K5X8ZQ");
-        let dir = session_dir(&scope, &tool, &run);
+        let one = session_dir(&scope, &tool, &run, &AgentId::main());
+        let two = session_dir(&scope, &tool, &run, &AgentId::new("reviewer"));
 
-        assert_eq!(session_path(&scope, &tool, &run), dir.join("memory.db"));
+        assert_ne!(one, two, "two agents, two directories");
+        assert_eq!(one.parent(), two.parent(), "and one run above them");
         assert_eq!(
-            session_transcript_path(&scope, &tool, &run),
-            dir.join("transcript.db")
+            session_path(&scope, &tool, &run, &AgentId::main()),
+            one.join("memory.db")
         );
     }
 
     #[test]
-    fn a_session_directory_sits_beside_the_project_store_it_promotes_into() {
+    fn a_run_directory_sits_beside_the_project_store_it_promotes_into() {
         let scope = ScopeId::new("/balthasar-no-such-root-9f3a/p");
         let tool = Tool::default();
         let run = SessionId::new("01K5X8ZQ");
         assert_eq!(
-            session_dir(&scope, &tool, &run).parent(),
+            session_dir(&scope, &tool, &run, &AgentId::main())
+                .parent()
+                .and_then(Path::parent),
             scope_path(&scope, &tool).parent()
         );
     }
@@ -698,7 +659,10 @@ mod tests {
         let home = root.join(HOME);
         make_home(&home).expect("make");
         let body = std::fs::read_to_string(home.join(".gitignore")).expect("read");
-        assert!(body.contains("*/*/"), "sessions are ignored");
+        assert!(
+            body.lines().any(|line| line == "*"),
+            "none of it shows in git"
+        );
         assert!(
             body.contains("# !*/project.db"),
             "committing is offered, not chosen"
@@ -713,29 +677,62 @@ mod tests {
     }
 
     #[test]
+    fn a_store_under_the_old_name_is_moved_and_kept() {
+        // It used to be a visible `balthasar/` in every checkout, showing in `git status`.
+        let root = scratch("legacy");
+        std::fs::create_dir_all(root.join(".git")).expect("git");
+        let old = root.join(LEGACY_HOME);
+        make_home(&old).expect("make");
+        std::fs::write(old.join(".gitignore"), OLD_IGNORE_BODY).expect("the old ignore");
+        std::fs::create_dir_all(old.join("magi")).expect("tool");
+        std::fs::write(old.join("magi/project.db"), "memory").expect("db");
+
+        let scope = ScopeId::new(root.to_string_lossy().into_owned());
+        let home = project_home(&scope).expect("a home");
+        assert_eq!(home, root.join(HOME));
+        assert!(!old.exists(), "moved, not copied");
+        assert_eq!(
+            std::fs::read_to_string(home.join("magi/project.db")).expect("kept"),
+            "memory"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join(".gitignore")).expect("ignore"),
+            IGNORE_BODY,
+            "the old default is brought up to date"
+        );
+    }
+
+    #[test]
+    fn a_checkout_under_the_old_name_is_never_moved() {
+        // A superproject whose `balthasar/` is the code, with a store once written into it.
+        let root = scratch("legacy-checkout");
+        std::fs::create_dir_all(root.join(".git")).expect("git");
+        let code = root.join(LEGACY_HOME);
+        make_home(&code).expect("make");
+        std::fs::write(code.join(".git"), "gitdir: ../.git/modules/balthasar").expect("gitfile");
+        std::fs::write(code.join("Cargo.toml"), "[workspace]").expect("code");
+
+        let scope = ScopeId::new(root.to_string_lossy().into_owned());
+        assert_eq!(project_home(&scope), Some(root.join(HOME)));
+        assert!(code.join("Cargo.toml").exists(), "the checkout is where it was");
+    }
+
+    #[test]
     fn a_repository_in_a_shared_directory_scopes_nothing() {
-        // The same bug as the one above, in the other walk. A `.git` at the top of the temporary
-        // directory -- or in a home directory, which is what a dotfiles repository is -- made
-        // every directory below it resolve to that one root. The ceiling was added to the store
-        // walk when this was found there, and the git walk was left with none.
+        // A `.git` at the top of the temporary directory, or in a home directory, made every
+        // directory below it resolve to that one root.
         let shared = std::env::temp_dir();
         assert!(too_broad(&shared), "{}", shared.display());
 
-        let under = shared.join("balthasar-git-ceiling-probe");
-        std::fs::create_dir_all(&under).expect("mkdir");
-        // Whatever this machine happens to have at the top of its temporary directory, a
-        // directory under it scopes to itself and not to that.
+        let under = balthasar_model::scratch::Scratch::new("balthasar-git-ceiling", "probe");
         assert_eq!(git_common_dir(&under), None);
         assert_eq!(scope_of(&under).as_str(), under.to_string_lossy());
-        let _ = std::fs::remove_dir(&under);
     }
 
     #[test]
     fn a_home_directory_is_too_broad_to_be_a_project() {
         // A repository at `$HOME` is a dotfiles repository, not the project an unrelated
-        // subdirectory belongs to. Distinguished from `is_shared`, which stays as it was: a
-        // store somebody ran `balthasar init` to create is deliberate and wins wherever it sits,
-        // including here.
+        // subdirectory belongs to; `is_shared` still lets a deliberate store here count.
         let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) else {
             return;
         };
@@ -746,7 +743,6 @@ mod tests {
 
     #[test]
     fn a_real_checkout_is_still_found() {
-        // The ceiling must not cost the thing the walk is for.
         let root = scratch("checkout");
         std::fs::create_dir_all(root.join(".git")).expect("mkdir");
         let deep = root.join("crates/thing/src");

@@ -1,14 +1,8 @@
 //! Sessions, which are what a project has many of.
 //!
-//! The two scopes are different in kind and the difference is the whole shape of the thing:
-//!
-//! * a **project** is where durable memory lives, and every session in it shares that memory;
-//! * a **session** is one run, and what it holds is its own until something on the ladder
-//!   carries it across.
-//!
-//! Which means every memory has to be able to say where it came from. "You learned this in
-//! some session" is not an answer anybody can act on, so a session gets a name a person can
-//! say and a title saying what it was for.
+//! A project is where durable memory lives and every session in it shares that memory; a session
+//! is one run, and what it holds is its own until something on the ladder carries it across. So
+//! a session gets a name a person can say and a title saying what it was for.
 
 use crate::{Store, StoreError};
 use balthasar_model::{ScopeId, SessionId, Timestamp};
@@ -31,8 +25,7 @@ pub struct Session {
     pub opened: Timestamp,
     /// When it ended, if it has.
     pub closed: Option<Timestamp>,
-    /// What it was for — the first thing asked, which is the closest thing to a name that
-    /// exists without asking a model to invent one.
+    /// What it was for — the first thing asked.
     pub title: Option<String>,
 }
 
@@ -55,9 +48,7 @@ impl Session {
 
 /// A short, typeable name for a session started at `opened`.
 ///
-/// Month and day, then four characters of the session's own identity. Recognisable at a glance
-/// — a person knows what they were doing on the 31st — and short enough to type at a prompt,
-/// which a twenty-six character id is not.
+/// Month and day, then four characters of the session's own identity.
 #[must_use]
 pub fn name_for(id: &SessionId, opened: Timestamp) -> String {
     let days = opened.max(0) / 86_400;
@@ -78,8 +69,7 @@ pub fn name_for(id: &SessionId, opened: Timestamp) -> String {
 
 /// Month and day from days since the epoch.
 fn civil(days: i64) -> (i64, i64) {
-    // Howard Hinnant's civil_from_days, shifted so March is month 0 and the leap day lands at
-    // the end of a year. Shorter and less wrong than counting months in a loop.
+    // Howard Hinnant's civil_from_days, shifted so March is month 0 and the leap day lands last.
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
@@ -194,8 +184,7 @@ impl Store {
                 })
                 .collect();
         }
-        // An ambiguous handle answers nothing rather than guessing. Acting on the wrong
-        // session is worse than being asked again.
+        // An ambiguous handle answers nothing rather than guessing.
         Ok((matches.len() == 1).then(|| matches.remove(0)))
     }
 
@@ -249,8 +238,7 @@ mod tests {
 
     #[test]
     fn the_calendar_is_right_about_a_leap_day() {
-        // A day count converted with a loop over month lengths gets this wrong, and the
-        // failure is one wrong character in a name nobody would think to check.
+        // A day count converted with a loop over month lengths gets this wrong.
         let leap = 1_709_164_800; // 2024-02-29
         assert_eq!(civil(leap / 86_400), (2, 29));
     }
@@ -271,8 +259,7 @@ mod tests {
 
     #[test]
     fn a_title_is_the_first_thing_asked_and_stays_that() {
-        // A session that wandered onto three other topics is still named after where it
-        // started, which is what makes a list of them readable.
+        // A session that wandered onto three other topics is still named after where it started.
         let mut store = Store::ephemeral().expect("store");
         let id = SessionId::new("01H");
         store

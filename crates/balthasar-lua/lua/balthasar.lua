@@ -233,17 +233,35 @@ local function be32(s)
   return s:byte(1) * 16777216 + s:byte(2) * 65536 + s:byte(3) * 256 + s:byte(4)
 end
 
+--- Drop a connection that can no longer be trusted to be in step, and hand back why.
+---
+--- The handle goes to `nil` as well as closed, so the next call meets `Session:call`'s own guard
+--- and says "this connection is closed" rather than indexing nothing.
+local function adrift(session, why)
+  local handle = session.handle
+  session.handle = nil
+  if handle then pcall(handle.close, handle) end
+  return why or "balthasar went away mid-reply"
+end
+
 --- Read exactly `n` bytes, however many reads that takes.
 ---
 --- **A stream delivers what it likes.** One `recv` answering fewer bytes than asked for is
 --- ordinary, not an error, and a client that treated it as the whole message would desynchronise
 --- on the first reply large enough to be split.
-local function exactly(handle, n)
+---
+--- **A read that fails takes the connection with it.** A reply says nothing about which call it
+--- answers: one per call, in the order they were made. So a call given up on -- a timeout, a peer
+--- that went quiet -- leaves its reply on the wire for the NEXT call to read as its own, and every
+--- answer after that belongs to the call before it. Worse from the second read, where a frame
+--- header is already spent and what is left is a partial frame. Dropping the handle here rather
+--- than at each call site is what makes a read added later inherit the rule.
+local function exactly(session, n)
   local parts, have = {}, 0
   while have < n do
-    local chunk, why = handle:recv(n - have)
-    if not chunk then return nil, why end
-    if #chunk == 0 then return nil, "balthasar closed the connection" end
+    local chunk, why = session.handle:recv(n - have)
+    if not chunk then return nil, adrift(session, why) end
+    if #chunk == 0 then return nil, adrift(session, "balthasar closed the connection") end
     parts[#parts + 1] = chunk
     have = have + #chunk
   end
@@ -266,12 +284,14 @@ function Session:call(name, ...)
   local body = { call = name }
   if #args > 0 then body.args = args end
 
+  -- A send that failed may still have put part of a frame on the wire, which the far end reads
+  -- as the head of a call this side will never finish.
   local sent, why = self.handle:send(frame(encode(body)))
-  if not sent then return nil, why end
+  if not sent then return nil, adrift(self, why) end
 
-  local head, gone = exactly(self.handle, 4)
+  local head, gone = exactly(self, 4)
   if not head then return nil, gone end
-  local reply_body, cut = exactly(self.handle, be32(head))
+  local reply_body, cut = exactly(self, be32(head))
   if not reply_body then return nil, cut end
 
   local reply = decode(reply_body)
@@ -337,9 +357,33 @@ local SURFACE = {
   "forget",    -- (id)           -> { archived }
 }
 
+-- The verbs that answer one row per thing.
+--
+-- `result` is the rows and `n` is how many, so a listing arrives as N return values rather than
+-- as one value that is a list. The library gathers them back into a table, which is what a caller
+-- asking a memory layer for memories wants and is what `ipairs` reads.
+local LISTINGS = {
+  verbs = true, recall = true, sessions = true, replay = true,
+}
+
+--- Gather a listing verb's rows into one table, leaving every other verb alone.
+local function gathered(verb, ...)
+  if not LISTINGS[verb] then return ... end
+  local out = table.pack(...)
+  -- A refusal is `nil, why, fault` and passes through as it stands.
+  if out.n > 0 and out[1] == nil then return ... end
+  -- With its ledger on, balthasar answers `recall` with one record -- the injection and what it
+  -- served -- rather than with rows. That is a single thing and is handed over as one.
+  if verb == "recall" and out.n == 1 and type(out[1]) == "table" and out[1].memories then
+    return out[1]
+  end
+  out.n = nil
+  return out
+end
+
 local function attach(session)
   for _, verb in ipairs(SURFACE) do
-    session[verb] = function(...) return session:call(verb, ...) end
+    session[verb] = function(...) return gathered(verb, session:call(verb, ...)) end
   end
   return session
 end
@@ -400,27 +444,36 @@ local function list_candidates(dir)
   return (ok and found) or {}
 end
 
---- The directory balthasar binds its control sockets in.
+--- The directories the memory role binds its control sockets in, the role's own name first.
 ---
---- Mirrors balthasar's own socket directory: the default session binds straight under `<runtime>/balthasar`,
---- and only a NAMED instance gets a subdirectory. Appending "default" unconditionally looked
---- reasonable and found nothing at all.
-local function socket_dir()
+--- Mirrors balthasar's own socket directories: the default session binds straight under
+--- `<runtime>/memory`, and only a NAMED instance gets a subdirectory. Appending "default"
+--- unconditionally looked reasonable and found nothing at all.
+---
+--- `<runtime>/balthasar` is still searched, second: a daemon that has not been rebuilt binds
+--- there and nowhere else, and looking only at the new name would find nothing while it is
+--- running -- or, worse, find a neighbour and record into a store this caller never reads.
+local function socket_dirs()
   -- The host's own answer first: a sandboxed file has no `os.getenv`, and this is a path it can be
   -- handed rather than a reason to grant it every environment variable.
   for _, name in ipairs(HOSTS) do
     local h = _G[name]
     if h and h.fs and h.fs.dir then
       local d = h.fs.dir()
-      if d and d ~= "" then return d end
+      if d and d ~= "" then return { d } end
     end
   end
   local runtime = os.getenv("XDG_RUNTIME_DIR")
-  local base = (runtime and runtime ~= "")
-    and (runtime .. "/balthasar")
-    or ("/tmp/balthasar-" .. (os.getenv("UID") or "0"))
-  local instance = os.getenv("MAGI_BALTHASAR_INSTANCE")
-  return (instance and instance ~= "") and (base .. "/" .. instance) or base
+  local instance = os.getenv("MAGI_MEMORY_INSTANCE")
+  if not instance or instance == "" then instance = os.getenv("MAGI_BALTHASAR_INSTANCE") end
+  local dirs = {}
+  for _, named in ipairs({ "memory", "balthasar" }) do
+    local base = (runtime and runtime ~= "")
+      and (runtime .. "/" .. named)
+      or ("/tmp/" .. named .. "-" .. (os.getenv("UID") or "0"))
+    dirs[#dirs + 1] = (instance and instance ~= "") and (base .. "/" .. instance) or base
+  end
+  return dirs
 end
 
 --- Where a session's socket is, given what little the caller said.
@@ -444,13 +497,23 @@ local function find(where)
   local env = os.getenv("MAGI_API_SOCKET")
   if not named and env and env ~= "" then return { { path = env } } end
 
-  local dir = socket_dir()
-  if not named then return list_candidates(dir) end
+  local dirs = socket_dirs()
+  if not named then
+    local found = {}
+    for _, dir in ipairs(dirs) do
+      for _, candidate in ipairs(list_candidates(dir)) do found[#found + 1] = candidate end
+    end
+    return found
+  end
 
   -- A named instance is named by the file it bound, and nothing renames it afterwards. There
   -- is no "ask it what it calls itself now" to do, which is a question a session-oriented
   -- sibling has to answer and a memory layer does not.
-  return { { path = dir .. "/api@" .. named .. ".sock" } }
+  local named_paths = {}
+  for _, dir in ipairs(dirs) do
+    named_paths[#named_paths + 1] = { path = dir .. "/api@" .. named .. ".sock" }
+  end
+  return named_paths
 end
 
 --- Open a connection to a running balthasar.
@@ -579,7 +642,7 @@ function M.fetch(where, verb, ...)
   if session then
     local out = table.pack(session:call(verb, ...))
     session:close()
-    return table.unpack(out, 1, out.n)
+    return gathered(verb, table.unpack(out, 1, out.n))
   end
 
   local tool = type(where) == "table" and where.tool or (type(where) == "string" and where or M._NAME)
@@ -612,7 +675,8 @@ function M.fetch(where, verb, ...)
   if not reply.ok then
     return nil, reply.error or "the tool refused the call", reply.fault or "refused"
   end
-  return table.unpack(reply.result or {}, 1, reply.n or #(reply.result or {}))
+  local values = reply.result or {}
+  return gathered(verb, table.unpack(values, 1, reply.n or #values))
 end
 
 --- The socket path that would be tried first, without connecting. For a diagnostic.

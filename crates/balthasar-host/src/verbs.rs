@@ -1,25 +1,13 @@
 //! The exposed surface, spelled out.
-//!
-//! Written as a list rather than discovered at runtime, so reading this file tells you what a
-//! peer can ask of your memory. A surface you have to run something to learn is one nobody
-//! audits.
 
 /// Every verb balthasar answers.
-///
-/// `verbs` and `status` ship from the first version. One sibling having them and another not is
-/// how a family stops being one, and it cannot be retrofitted quietly.
 pub const SURFACE: &[Verb] = &[
     Verb {
         name: "verbs",
         writes: false,
         about: "every name this balthasar will answer",
     },
-    // Beside `verbs` on purpose, and for the same reason: `verbs` says what this surface speaks
-    // and this hands over the library that speaks it. `balthasar lua-api` prints the same source,
-    // which is enough for a host that can shell out and useless to a sandboxed VM that cannot —
-    // and a consumer keeping its own copy is a consumer whose copy goes stale. One did: a
-    // harness had a copy that predated a fix, so every session on that machine silently had no
-    // memory tools and nothing said why.
+    // For a sandboxed host that cannot shell out to `balthasar lua-api` for the same source.
     Verb {
         name: "client",
         writes: false,
@@ -136,9 +124,7 @@ pub fn known(name: &str) -> Option<&'static Verb> {
 
 /// Names that will never be verbs, and why.
 ///
-/// Checked by a test rather than merely intended. A socket that runs commands is remote code
-/// execution wearing a friendlier name, and the fact that a person would have typed the same
-/// thing does not make it the same thing when a process types it.
+/// Checked by a test rather than merely intended.
 pub const NEVER: &[&str] = &["prompt", "run", "eval", "exec", "shell", "purge", "sql"];
 
 #[cfg(test)]
