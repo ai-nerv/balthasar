@@ -439,11 +439,16 @@ fn arrange(
 /// the newest row.
 fn protected(shown: &[&Row], keep_turns: usize, keep_results: usize) -> HashSet<u64> {
     let users: Vec<u64> = shown.iter().filter(|r| r.user).map(|r| r.cursor).collect();
-    let results: Vec<u64> = shown.iter().filter(|r| r.tool).map(|r| r.cursor).collect();
-    let mut held: HashSet<u64> = users[users.len().saturating_sub(keep_turns)..]
+    let recent = &users[users.len().saturating_sub(keep_turns)..];
+    // Results the recent prompts work with: one from a prompt long finished is history, and holding
+    // it kept every summary at the turn before it.
+    let since = recent.first().copied().unwrap_or(0);
+    let results: Vec<u64> = shown
         .iter()
-        .copied()
+        .filter(|r| r.tool && r.cursor >= since)
+        .map(|r| r.cursor)
         .collect();
+    let mut held: HashSet<u64> = recent.iter().copied().collect();
     held.extend(&results[results.len().saturating_sub(keep_results)..]);
     held.extend(shown.last().map(|r| r.cursor));
     held

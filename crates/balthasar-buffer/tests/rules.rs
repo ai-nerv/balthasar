@@ -354,3 +354,28 @@ fn a_stub_applied_before_stays_a_stub() {
     let laid = lay(&Rules::default(), &ask(), &rows, &Held::default(), 1.0);
     assert_eq!(stubs(&laid.slots), [2]);
 }
+
+#[test]
+fn old_tool_results_do_not_hold_back_a_summary() {
+    // Two results from the first prompt stayed "the last results" through a conversation of prose
+    // since, and every summary stopped at the turn before them.
+    let mut rows = vec![
+        user(0, 50),
+        said(1, 100),
+        result(2, 1, 500),
+        said(3, 100),
+        result(4, 3, 500),
+    ];
+    let mut cursor = 5;
+    for _ in 0..14 {
+        rows.push(user(cursor, 50));
+        rows.push(said(cursor + 1, 10_000));
+        cursor += 2;
+    }
+    let laid = lay(&Rules::default(), &ask(), &rows, &Held::default(), 1.0);
+    let span = laid.compact.expect("a summary wanted");
+    assert!(
+        span.to > 4,
+        "held back by results from a finished prompt: {span:?}"
+    );
+}
