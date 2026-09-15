@@ -10,6 +10,7 @@ mod decay;
 mod entity;
 mod episode;
 mod export;
+mod laid;
 mod layout;
 mod mint;
 mod paths;
@@ -31,6 +32,7 @@ pub use decay::{Faded, Weakened};
 pub use entity::{Entity, Kind as EntityKind, extract as entities_in, rarity};
 pub use episode::Episode;
 pub use export::Row as TrainingRow;
+pub use laid::{Prompt, Proposal, Summary};
 pub use mint::mint;
 pub use paths::{
     HOME, Tool, data_dir, home_of, make_home, project_home, run_dir_in, scope_of, scope_path,

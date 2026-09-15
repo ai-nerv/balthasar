@@ -513,6 +513,7 @@ fn prepare(connection: &Connection) -> Result<(), StoreError> {
             connection.execute_batch(&format!("ALTER TABLE turn ADD COLUMN {name} {declared}"))?;
         }
     }
+    connection.execute_batch(crate::laid::SCHEMA)?;
     Ok(())
 }
 
