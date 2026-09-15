@@ -182,7 +182,10 @@ fn a_failed_job_is_tried_once_more_and_then_left() {
     assert!(harness.rows("jobs").is_empty(), "twice is enough");
 
     // A blocking job shaped one request, which has gone without it: never handed out again.
-    let _ = harness.ask("remember", vec![json!("the deploy target is fly.io"), json!({})]);
+    let _ = harness.ask(
+        "remember",
+        vec![json!("the deploy target is fly.io"), json!({})],
+    );
     harness.talk(8, "how do we deploy?");
     let curating = harness.one("layout", small(0, json!(["memory"])));
     let blocking = curating["jobs"]

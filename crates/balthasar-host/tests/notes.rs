@@ -120,7 +120,11 @@ fn a_finished_turn_is_read_for_notes_by_the_checklist() {
         .find(|j| j["kind"] == "extract")
         .expect("an extract job")
         .clone();
-    assert_eq!(job["covers"], json!([0, 2]), "this prompt and the turns before it");
+    assert_eq!(
+        job["covers"],
+        json!([0, 2]),
+        "this prompt and the turns before it"
+    );
     assert_eq!(job["role"], "memory");
     assert_eq!(job["fallback"], "skip");
     assert_eq!(job["schema"]["required"], json!(["ops"]));
@@ -167,7 +171,10 @@ fn notes_are_pinned_or_listed_and_a_new_rule_reaches_the_open_prompt() {
     );
     let same_prompt = harness.layout(1);
     let rule = &same_prompt["slots"][0];
-    assert_eq!(rule["kind"], "pinned", "a rule pinned mid-prompt is worth one cache miss");
+    assert_eq!(
+        rule["kind"], "pinned",
+        "a rule pinned mid-prompt is worth one cache miss"
+    );
     assert_eq!(
         harness.layout(2)["slots"][0]["text"],
         rule["text"],

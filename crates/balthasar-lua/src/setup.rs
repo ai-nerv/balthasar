@@ -235,10 +235,7 @@ pub const GIVEN: &str = "NERV_GIVEN";
 /// Where configuration sent by a coordinator is kept: the runtime directory, not `config/`.
 #[must_use]
 pub fn given() -> std::path::PathBuf {
-    given_from(
-        std::env::var_os(GIVEN),
-        std::env::var_os("XDG_RUNTIME_DIR"),
-    )
+    given_from(std::env::var_os(GIVEN), std::env::var_os("XDG_RUNTIME_DIR"))
 }
 
 /// The same, from what the environment said. One file per session when the coordinator names a
@@ -299,8 +296,14 @@ mod tests {
 
     #[test]
     fn a_session_that_names_a_directory_keeps_its_own_configuration() {
-        let own = given_from(Some("/run/coordinator/given/42".into()), Some("/run".into()));
-        assert_eq!(own, std::path::PathBuf::from("/run/coordinator/given/42/balthasar.lua"));
+        let own = given_from(
+            Some("/run/coordinator/given/42".into()),
+            Some("/run".into()),
+        );
+        assert_eq!(
+            own,
+            std::path::PathBuf::from("/run/coordinator/given/42/balthasar.lua")
+        );
         for unnamed in [None, Some(std::ffi::OsString::new())] {
             assert_eq!(
                 given_from(unnamed, Some("/run".into())),
