@@ -308,3 +308,40 @@ fn memory_is_curated_once_per_prompt_by_a_helper_that_can() {
         "once per prompt"
     );
 }
+
+#[test]
+fn a_long_answer_reaches_its_summary_whole() {
+    // A chapter's payoff is at its end: a summary that read only its first few thousand
+    // characters kept the cast and lost the story.
+    let mut harness = Harness::new();
+    let chapter = format!(
+        "{}the lamp was lit by Isolde at last.",
+        "The sea kept its counsel. ".repeat(350)
+    );
+    for n in 0..8 {
+        harness.observe(
+            json!({ "cursor": n * 2, "role": "user", "kind": "user", "tokens": 40,
+                                "text": "carry on" }),
+        );
+        harness.observe(
+            json!({ "cursor": n * 2 + 1, "role": "assistant", "kind": "assistant",
+                                "tokens": 2_000, "group": n * 2 + 1, "text": chapter }),
+        );
+    }
+    let laid = harness.one("layout", small(0, json!([])));
+    let job = laid["jobs"]
+        .as_array()
+        .expect("jobs")
+        .iter()
+        .find(|j| j["kind"] == "summarise")
+        .expect("a summary job")
+        .clone();
+    assert!(
+        job["input"]
+            .as_str()
+            .expect("text")
+            .contains("the lamp was lit by Isolde at last."),
+        "the end of a long answer was cut"
+    );
+    assert_eq!(job["timeout_ms"], 60_000);
+}

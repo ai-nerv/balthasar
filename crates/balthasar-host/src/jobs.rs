@@ -16,8 +16,11 @@ const RETRIES: u32 = 1;
 /// How many search hits a curate job chooses from.
 const CURATE_FROM: usize = 50;
 
-/// What one row may bring into a summary's input, in characters.
-const PER_ROW: usize = 4_000;
+/// What one row may bring into a summary's input, in characters: a whole reply of prose fits.
+const PER_ROW: usize = 16_000;
+
+/// What a large tool output brings instead: its head, since its size is the point.
+const TOOL_HEAD: usize = 2_000;
 
 /// What a summary's whole input may be, in characters.
 const INPUT: usize = 200_000;
@@ -76,7 +79,7 @@ pub(crate) fn summarise(
         let text = if input.len() > INPUT {
             turn.stub.clone().unwrap_or_else(|| "(elided)".to_owned())
         } else if turn.is_tool() && turn.weight() > rules.stub_over {
-            let head: String = turn.text.chars().take(PER_ROW / 2).collect();
+            let head: String = turn.text.chars().take(TOOL_HEAD).collect();
             format!(
                 "{} … ({} tokens of output)",
                 turn.stub.as_deref().unwrap_or(&head),
@@ -90,7 +93,7 @@ pub(crate) fn summarise(
     let spec = json!({
         "kind": "summarise", "role": "memory", "fallback": "main",
         "instruction": SUMMARISE, "input": input, "schema": null,
-        "max_tokens": max_tokens.clamp(256, 8_000), "blocking": false, "timeout_ms": 20_000,
+        "max_tokens": max_tokens.clamp(256, 8_000), "blocking": false, "timeout_ms": 60_000,
         "covers": [span.0, span.1],
     });
     scrollback.queue_job(
