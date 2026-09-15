@@ -10,7 +10,7 @@ use balthasar_store::{Change, Job, Note, Prompt, StoreError, Transcript, Turn, W
 use serde_json::{Value, json};
 
 mod ruling;
-use ruling::{laid_down, unpinned};
+use ruling::{echoes, laid_down, unpinned};
 
 /// `balthasar.memory`: how notes are kept.
 #[derive(Debug, Clone, PartialEq)]
@@ -468,6 +468,9 @@ fn propose(
                 let title = op["title"].as_str()?.trim();
                 live.iter().find(|n| n.title.eq_ignore_ascii_case(title))
             });
+        if op["op"].as_str() == Some("add") && target.is_none() && echoes(op, &live) {
+            continue;
+        }
         let (note, before, after, kind) = match (op["op"].as_str(), target) {
             (Some("retire"), Some(n)) => (Some(n.id.clone()), Some(n.fields()), None, "retire"),
             (Some("add" | "update"), Some(n)) => {

@@ -413,3 +413,33 @@ fn a_request_for_one_piece_of_work_pins_nothing() {
     );
     assert_eq!(notes["deferred"][0]["title"], "Target about 900 words");
 }
+
+#[test]
+fn a_rule_said_again_in_other_words_is_not_kept_twice() {
+    let mut harness = Harness::new();
+    harness.turn(
+        0,
+        "a firm rule: every chapter ends with the single word Selah",
+    );
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "add", "title": "Chapters end with Selah",
+                          "text": "Every chapter ends with the single word Selah.", "pinned": true }] }),
+    );
+    harness.turn(1, "write chapter two");
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "add", "title": "Fixed rule for chapters",
+                          "text": "Always a firm rule: every chapter ends with the single word Selah.",
+                          "pinned": false }] }),
+    );
+    let notes = harness.one("notes", json!({}));
+    let kept = notes["pinned"].as_array().map_or(0, Vec::len)
+        + notes["deferred"].as_array().map_or(0, Vec::len);
+    assert_eq!(kept, 1, "the same rule kept twice: {notes}");
+    assert_eq!(notes["pinned"][0]["title"], "Chapters end with Selah");
+}
