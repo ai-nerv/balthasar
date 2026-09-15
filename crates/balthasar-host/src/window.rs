@@ -348,9 +348,30 @@ pub fn replay(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Reply::refused("this balthasar keeps no scrollback");
     };
-    // Unbounded on purpose, and only here. Everything wanting part of a scrollback asks `scroll`.
+    // Whole on purpose, and only here: everything wanting part of a scrollback asks `scroll`. With
+    // `{from, bytes}` it comes a page at a time, since a long run in one frame was past the limit.
+    let paging = request.args.get(1);
+    let from = paging.and_then(|p| p["from"].as_u64()).unwrap_or(0);
+    let budget = paging
+        .and_then(|p| p["bytes"].as_u64())
+        .and_then(|b| usize::try_from(b).ok());
     match scrollback.replay(&session) {
-        Ok(turns) => Reply::rows(turns.iter().map(|turn| serde_json::json!(turn)).collect()),
+        Ok(turns) => {
+            let mut rows = Vec::new();
+            let mut spent = 0;
+            for turn in turns.iter().filter(|turn| turn.cursor >= from) {
+                let row = serde_json::json!(turn);
+                if let Some(budget) = budget {
+                    let size = row.to_string().len();
+                    if !rows.is_empty() && spent + size > budget {
+                        break;
+                    }
+                    spent += size;
+                }
+                rows.push(row);
+            }
+            Reply::rows(rows)
+        }
         Err(why) => Reply::refused(why.to_string()),
     }
 }

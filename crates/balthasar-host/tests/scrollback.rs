@@ -457,3 +457,44 @@ fn replay_answers_one_row_per_turn_rather_than_one_row_that_is_the_run() {
         );
     }
 }
+
+#[test]
+fn a_replay_comes_a_page_at_a_time_when_asked() {
+    // A long run in one frame was past the wire's limit, and the resume that asked for it got
+    // nothing. Asked with a budget, it comes in pages; asked without, it comes whole as before.
+    let mut held = Held::new();
+    for cursor in 0..5 {
+        let raw = serde_json::json!({ "text": "y".repeat(1_000) });
+        held.ask(
+            "observe",
+            vec![serde_json::json!(S), turn(cursor, "user", "hello", raw)],
+        );
+    }
+    let page = |held: &mut Held, from: u64| {
+        let rows = Held::rows(&held.ask(
+            "replay",
+            vec![
+                serde_json::json!(S),
+                serde_json::json!({ "from": from, "bytes": 1_500 }),
+            ],
+        ));
+        rows.iter()
+            .map(|row| row["cursor"].as_u64().expect("a cursor"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        page(&mut held, 0),
+        [0],
+        "one row fits the budget, and one always comes"
+    );
+    assert_eq!(page(&mut held, 3), [3]);
+    assert!(
+        page(&mut held, 5).is_empty(),
+        "past the end is an empty page"
+    );
+    assert_eq!(
+        Held::rows(&held.ask("replay", vec![serde_json::json!(S)])).len(),
+        5,
+        "unpaged is the whole run"
+    );
+}
