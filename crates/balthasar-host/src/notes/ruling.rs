@@ -38,23 +38,43 @@ pub(super) fn unpinned(ops: Vec<Value>) -> Vec<Value> {
         .collect()
 }
 
-/// Whether an added note only restates one already kept: either text holds the other, compared by
-/// their words alone. Skipped rather than merged, since a merge would carry its pinning over.
+/// Whether an added note only restates one already kept: nearly every word of the shorter text
+/// comes, in order, in the longer one, and it is all of it or most of the longer. Skipped rather
+/// than merged, since a merge would carry its pinning over.
 pub(super) fn echoes(op: &Value, kept: &[balthasar_store::Note]) -> bool {
-    let words = |text: &str| {
-        text.to_lowercase()
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { ' ' })
-            .collect::<String>()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let Some(new) = op["text"].as_str().map(words).filter(|t| t.len() >= 16) else {
+    let Some(new) = op["text"].as_str().map(words) else {
         return false;
     };
     kept.iter().any(|note| {
         let old = words(&note.text);
-        old.len() >= 16 && (new.contains(&old) || old.contains(&new))
+        let (short, long) = (new.len().min(old.len()), new.len().max(old.len()));
+        let shared = in_order(&new, &old);
+        short >= 4 && shared * 10 >= short * 9 && (shared == short || shared * 10 >= long * 6)
     })
+}
+
+fn words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// How many words the two share in the same order: the longest common subsequence.
+fn in_order(a: &[String], b: &[String]) -> usize {
+    let mut row = vec![0; b.len() + 1];
+    for x in a {
+        let mut diagonal = 0;
+        for (j, y) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = if x == y {
+                diagonal + 1
+            } else {
+                above.max(row[j])
+            };
+            diagonal = above;
+        }
+    }
+    row[b.len()]
 }

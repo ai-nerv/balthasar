@@ -445,6 +445,45 @@ fn a_rule_said_again_in_other_words_is_not_kept_twice() {
 }
 
 #[test]
+fn a_rule_with_words_added_in_the_middle_is_not_kept_twice() {
+    // A fresh session re-added the pinned Sources rule as "Every section *you write* in docs/…".
+    let mut harness = Harness::new();
+    harness.turn(
+        0,
+        "a firm rule: every section in docs/ ends with a Sources line",
+    );
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "add", "title": "Docs end with Sources",
+                          "text": "Every section in docs/ ends with a line 'Sources:' listing the files read for it.",
+                          "pinned": true }] }),
+    );
+    harness.turn(1, "write the glossary");
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [
+            { "op": "add", "title": "One rule per section",
+              "text": "Every section you write in docs/ ends with a line 'Sources:' listing the files read for it." },
+            { "op": "add", "title": "Package manager",
+              "text": "Use npm for installs, never pnpm, in this repo." }
+        ] }),
+    );
+    let notes = harness.one("notes", json!({}));
+    let deferred = notes["deferred"].as_array().cloned().unwrap_or_default();
+    assert_eq!(notes["pinned"].as_array().map_or(0, Vec::len), 1, "{notes}");
+    assert_eq!(
+        deferred.len(),
+        1,
+        "the rule kept twice, or a new note dropped: {notes}"
+    );
+    assert_eq!(deferred[0]["title"], "Package manager");
+}
+
+#[test]
 fn a_plain_request_never_unpins_a_rule() {
     // An update from a chapter request carried `pinned: true`; turning every pin off there
     // unpinned the rule the person had laid down in the first prompt.
