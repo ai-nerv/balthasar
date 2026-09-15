@@ -360,3 +360,36 @@ fn what_a_summary_will_replace_is_read_for_notes_first() {
     assert_eq!(notes["covers"][0], 0);
     assert_eq!(notes["covers"][1], summary["covers"][1]);
 }
+
+#[test]
+fn a_second_pinned_rule_has_the_notes_tidied_at_once() {
+    // Every pinned note rides along with every request, so one that says an old rule in new words
+    // is merged now rather than ten extractions later.
+    let mut harness = Harness::new();
+    harness.turn(0, "use uv, not pip");
+    let laid = harness.layout(0);
+    harness.answer(&laid["jobs"], "extract", learned());
+    assert!(
+        harness
+            .rows("jobs", json!({}))
+            .iter()
+            .all(|j| j["kind"] != "tidy"),
+        "one pinned rule has nothing to be merged with"
+    );
+
+    harness.turn(1, "a firm rule: we never push to main");
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "add", "title": "No pushing to main",
+                          "text": "Never push to main.", "pinned": true }] }),
+    );
+    assert!(
+        harness
+            .rows("jobs", json!({}))
+            .iter()
+            .any(|j| j["kind"] == "tidy"),
+        "a second pinned rule should have the notes tidied"
+    );
+}

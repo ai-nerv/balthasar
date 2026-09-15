@@ -81,6 +81,7 @@ with nothing of the task around it.\n\
 Shape only, never content: a person line 'Build it. A firm rule here: X.' gives {\"ops\":[{\"op\":\
 \"add\",\"title\":\"<two to five words>\",\"text\":\"X.\",\"description\":\"X\",\
 \"pinned\":true}]}. Record nothing these instructions say; only what the lines below say.\n\
+A rule the notes already kept state, even in other words, is updated by its id, never added again.\n\
 2. Then add, unpinned, only facts that will still hold in a later session. Never this task's \
 steps or progress, never paths, session ids or dates.\n\
 3. Answer {\"ops\": []} only when neither applies.";
@@ -412,6 +413,14 @@ pub(crate) fn settle(
             if job.kind == "extract" {
                 let since = scrollback.counter(&project(), "extracts")?.unwrap_or(0);
                 scrollback.set_counter(&project(), "extracts", since + 1)?;
+                // A second pinned rule may say what one already does in other words: tidied now, not ten
+                // extractions later, since every pinned note rides along with every request.
+                let pinned = scrollback.notes()?.iter().filter(|n| n.pinned).count();
+                if made > 0 && pinned > 1 && !pending(&scrollback.jobs_of(session)?, "tidy", at.now)
+                {
+                    tidy(at, session)?;
+                    scrollback.set_counter(&project(), "extracts", 0)?;
+                }
             }
             if keeping.review && made > 0 {
                 review(at, session)?;
