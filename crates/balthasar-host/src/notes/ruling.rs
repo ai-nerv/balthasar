@@ -53,6 +53,24 @@ pub(super) fn unpinned(ops: Vec<Value>) -> Vec<Value> {
         .collect()
 }
 
+/// Words a note uses to say how to work, rather than how things are.
+const DEONTIC: &[&str] = &["must", "should", "shall"];
+
+/// The ops a span with no rule in it may keep: an add saying how the work must be done is a rule no
+/// person stated, and is dropped.
+pub(super) fn factual(ops: Vec<Value>) -> Vec<Value> {
+    ops.into_iter()
+        .filter(|op| {
+            op["op"] != "add"
+                || !op["text"].as_str().is_some_and(|text| {
+                    words(text)
+                        .iter()
+                        .any(|word| DEONTIC.contains(&word.as_str()))
+                })
+        })
+        .collect()
+}
+
 /// Whether an added note only restates one already kept: nearly every word of the shorter text
 /// comes, in order, in the longer one, and it is all of it or most of the longer. Skipped rather
 /// than merged, since a merge would carry its pinning over.

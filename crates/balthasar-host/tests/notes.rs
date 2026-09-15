@@ -438,6 +438,29 @@ fn a_request_about_the_rules_lays_none_down() {
 }
 
 #[test]
+fn a_plain_request_adds_facts_but_no_rule_of_its_own() {
+    // The assistant fixing its own typo came back as "every document must use exact spelling".
+    let mut harness = Harness::new();
+    harness.turn(0, "now write the glossary");
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [
+            { "op": "add", "title": "Fix typos",
+              "text": "Every written document must use exact spelling." },
+            { "op": "add", "title": "Test runner", "text": "Tests run with cargo nextest." }
+        ] }),
+    );
+    let notes = harness.one("notes", json!({}));
+    let titles: Vec<&str> = notes["deferred"]
+        .as_array()
+        .map(|all| all.iter().filter_map(|n| n["title"].as_str()).collect())
+        .unwrap_or_default();
+    assert_eq!(titles, ["Test runner"], "{notes}");
+}
+
+#[test]
 fn a_tidy_leaves_a_pinned_rule_in_its_own_words() {
     // Every request after a reworded pinned rule misses the cache, and nothing was gained by it.
     let mut harness = Harness::new();

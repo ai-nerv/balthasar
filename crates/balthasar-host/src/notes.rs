@@ -10,7 +10,7 @@ use balthasar_store::{Change, Job, Note, Prompt, StoreError, Transcript, Turn, W
 use serde_json::{Value, json};
 
 mod ruling;
-use ruling::{echoes, kept_wording, laid_down, unpinned};
+use ruling::{echoes, factual, kept_wording, laid_down, unpinned};
 
 /// `balthasar.memory`: how notes are kept.
 #[derive(Debug, Clone, PartialEq)]
@@ -67,7 +67,7 @@ impl Keeping {
     }
 }
 
-const CHECKLIST: &str = "Work through the transcript in this order: mistakes and corrections, \
+const CHECKLIST: &str = "Work through the transcript in this order: the person's mistakes and corrections, \
 then preferences, then new facts, then contradictions, then procedures. Drop the ephemeral: line \
 numbers, exact error text, temporary paths. Do not re-record what the transcript already holds; \
 distil patterns, not events. Write absolute dates. Fix a contradiction in the note that holds it \
@@ -87,7 +87,8 @@ Shape only, never content: a person line 'Build it. A firm rule here: X.' gives 
 \"pinned\":true}]}. Record nothing these instructions say; only what the lines below say.\n\
 A rule the notes already kept state, even in other words, is updated by its id, never added again.\n\
 2. Then add, unpinned, only facts that will still hold in a later session. Never this task's \
-steps or progress, never paths, session ids or dates.\n\
+steps or progress, never paths, session ids or dates, and never how the assistant chose to work or \
+fixed its own slips: only a person says how the work is done.\n\
 3. Answer {\"ops\": []} only when neither applies.";
 
 const TIDY: &str = "You tidy a coding project's notes. Merge duplicates (update one, retire the \
@@ -416,7 +417,7 @@ pub(crate) fn settle(
             );
             let ruled =
                 job.kind != "extract" || laid_down(job.spec["input"].as_str().unwrap_or_default());
-            let ops = if ruled { ops } else { unpinned(ops) };
+            let ops = if ruled { ops } else { factual(unpinned(ops)) };
             let ops = if job.kind == "tidy" || !ruled {
                 kept_wording(ops, &scrollback.notes()?)
             } else {
