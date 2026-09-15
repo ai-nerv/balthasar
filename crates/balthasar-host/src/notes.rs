@@ -722,7 +722,7 @@ fn named(request: &Request, field: &str) -> Option<String> {
 }
 
 /// `YYYY-MM-DD` of a moment, in UTC.
-fn day(at: Timestamp) -> String {
+pub(crate) fn day(at: Timestamp) -> String {
     let z = at.div_euclid(86_400) + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;

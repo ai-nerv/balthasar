@@ -113,6 +113,13 @@ fn a_summary_is_asked_for_once_and_its_answer_stands_in_for_the_span() {
         job["input"]
             .as_str()
             .expect("text")
+            .starts_with("Today is "),
+        "a summary told to write absolute dates is told the date"
+    );
+    assert!(
+        job["input"]
+            .as_str()
+            .expect("text")
             .contains("[1] assistant: answer 0")
     );
     let to = job["covers"][1].as_u64().expect("a span");

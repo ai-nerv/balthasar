@@ -64,7 +64,8 @@ pub(crate) fn summarise(
         },
         &everything,
     )?;
-    let mut input = String::new();
+    // Dated, since the summary is told to write absolute dates: without it the helper invented one.
+    let mut input = format!("Today is {}.\n\n", crate::notes::day(at.now));
     if let Some(s) = &previous {
         input.push_str(&format!(
             "Previous summary (turns {}–{}):\n{}\n\n",
