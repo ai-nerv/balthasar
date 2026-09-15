@@ -104,6 +104,11 @@ fn lay_out(
         packed
     };
 
+    let known = at
+        .scrollback
+        .as_ref()
+        .map_or(Ok(Vec::new()), |s| s.jobs_of(session))
+        .map_err(|e| e.to_string())?;
     let mut stubs: HashMap<u64, String> = HashMap::new();
     let rows = rows_of(&turns, &rules, hooks, &mut stubs);
     let held = Held {
@@ -119,7 +124,9 @@ fn lay_out(
             memory.tokens
         },
         note: rules.estimate(&rules.warning),
-        compacting: if prompt.compactions >= rules.max_compactions_per_prompt {
+        compacting: if crate::jobs::pending(&known, "summarise", at.now) {
+            Compacting::Pending
+        } else if prompt.compactions >= rules.max_compactions_per_prompt {
             Compacting::Spent
         } else {
             Compacting::Allowed
@@ -130,6 +137,37 @@ fn lay_out(
     by_policy(
         hooks, &mut laid, &rows, &held, &mut stubs, &mut note, factor,
     );
+
+    // A summary when one is due, and a curated memory once per prompt when a helper can do it.
+    let e = |e: StoreError| e.to_string();
+    if let Some(span) = laid.compact {
+        crate::jobs::summarise(
+            at,
+            session,
+            (span.from, span.to),
+            &rules,
+            laid.budget.summary,
+        )
+        .map_err(e)?;
+        prompt.compactions += 1;
+    }
+    let curating = known
+        .iter()
+        .any(|job| job.kind == "curate" && job.context["mark"].as_str() == Some(&prompt.mark));
+    if ask.round == 0
+        && !curating
+        && !query.trim().is_empty()
+        && crate::jobs::can_run(&prompt.helpers, "memory")
+    {
+        let room = (f64::from(caps.memory) / factor) as u32;
+        crate::jobs::curate(at, session, &query, &prompt.mark, room, hooks).map_err(e)?;
+    }
+    let jobs = crate::jobs::hand_out(
+        at,
+        session,
+        (ask.round == 0).then_some(prompt.mark.as_str()),
+    )
+    .map_err(e)?;
 
     let fix = |tokens: u32| corrected(tokens, factor);
     let slots: Vec<Value> = laid
@@ -159,7 +197,7 @@ fn lay_out(
             "factor": (b.factor * 1000.0).round() / 1000.0,
         },
         "slots": slots,
-        "jobs": [],
+        "jobs": jobs,
         "fits": laid.fits,
         "why": laid.why,
     });

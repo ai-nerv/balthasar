@@ -94,6 +94,16 @@ pub const SURFACE: &[Verb] = &[
         about: "a layout was refused as too long: (session, { id, said }) -> a tighter layout",
     },
     Verb {
+        name: "jobs",
+        writes: true,
+        about: "helper-model work waiting to be run: (session) -> [job]",
+    },
+    Verb {
+        name: "job_done",
+        writes: true,
+        about: "what a job came back with: (session, { id, text | failed }) -> ok",
+    },
+    Verb {
         name: "amend",
         writes: true,
         about: "revise a turn where it stands: (session, turn) -> ok",

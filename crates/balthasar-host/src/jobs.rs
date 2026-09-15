@@ -1,0 +1,366 @@
+//! Jobs: helper-model work balthasar asks the harness to run, and what it does with the answers.
+//! balthasar never calls a model; a job is text in and text out, run by whoever holds one.
+
+use crate::supply;
+use crate::{Answering, Hooks};
+use balthasar_buffer::Rules;
+use balthasar_ipc::{Reply, Request};
+use balthasar_model::{SessionId, Timestamp};
+use balthasar_store::{Job, JobState, StoreError, Want};
+use serde_json::{Value, json};
+
+/// A failed job is handed out once more, and then left failed.
+const RETRIES: u32 = 1;
+
+/// How many search hits a curate job chooses from.
+const CURATE_FROM: usize = 50;
+
+/// What one row may bring into a summary's input, in characters.
+const PER_ROW: usize = 4_000;
+
+/// What a summary's whole input may be, in characters.
+const INPUT: usize = 200_000;
+
+const SUMMARISE: &str = "You keep the running summary of a coding session between a person and \
+an assistant. Fold the turns given into the previous summary, if there is one, and write the \
+whole summary again. Sections: Goal; Decisions and why; State (files touched, what works, what \
+fails); Open threads and next steps; Lookup keywords -- one line of exact file paths, \
+identifiers, commands and error names someone would search the transcript for to find the \
+details again. Quote the person's requests word for word. Write absolute dates. Answer with \
+the summary alone.";
+
+const CURATE: &str = "You choose what an assistant should be reminded of before it answers a \
+prompt. From the memories given, pick the few that matter for this prompt -- none, if none do \
+-- and write each as one short note. Never invent a fact that is not in a memory. Answer with \
+JSON: {\"chosen\": [memory ids], \"notes\": [one short note each]}.";
+
+/// Whether a job of `kind` is still on its way.
+pub(crate) fn pending(jobs: &[Job], kind: &str, now: Timestamp) -> bool {
+    jobs.iter().any(|job| {
+        job.kind == kind
+            && (job.state == JobState::Queued
+                || (job.state == JobState::Issued && !stale(job, now)))
+    })
+}
+
+/// Whether an issued job has waited longer than it could take.
+fn stale(job: &Job, now: Timestamp) -> bool {
+    let limit = job.spec["timeout_ms"].as_u64().unwrap_or(20_000) / 1_000 + 60;
+    job.state == JobState::Issued
+        && job
+            .issued
+            .is_some_and(|at| now.saturating_sub(at) > i64::try_from(limit).unwrap_or(i64::MAX))
+}
+
+/// Queue a summary of `from..=to`, folding in the stored one.
+pub(crate) fn summarise(
+    at: &Answering<'_>,
+    session: &SessionId,
+    span: (u64, u64),
+    rules: &Rules,
+    max_tokens: u32,
+) -> Result<(), StoreError> {
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Ok(());
+    };
+    let previous = scrollback.summary(session)?;
+    let fresh = previous.as_ref().map_or(span.0, |s| s.to + 1);
+    let everything = balthasar_store::Budget {
+        tokens: usize::MAX,
+        turns: usize::MAX,
+    };
+    let rows = scrollback.read(
+        session,
+        &Want::Span {
+            from: fresh,
+            to: span.1,
+        },
+        &everything,
+    )?;
+    let mut input = String::new();
+    if let Some(s) = &previous {
+        input.push_str(&format!(
+            "Previous summary (turns {}–{}):\n{}\n\n",
+            s.from, s.to, s.text
+        ));
+    }
+    input.push_str(&format!("Turns {fresh}–{} to fold in:\n", span.1));
+    for turn in &rows.turns {
+        let who = turn.tool.as_deref().map_or_else(
+            || turn.role.clone(),
+            |tool| format!("{} ({tool})", turn.role),
+        );
+        let text = if input.len() > INPUT {
+            turn.stub.clone().unwrap_or_else(|| "(elided)".to_owned())
+        } else if turn.is_tool() && turn.weight() > rules.stub_over {
+            let head: String = turn.text.chars().take(PER_ROW / 2).collect();
+            format!(
+                "{} … ({} tokens of output)",
+                turn.stub.as_deref().unwrap_or(&head),
+                turn.weight()
+            )
+        } else {
+            turn.text.chars().take(PER_ROW).collect()
+        };
+        input.push_str(&format!("[{}] {who}: {text}\n", turn.cursor));
+    }
+    let spec = json!({
+        "kind": "summarise", "role": "memory", "fallback": "main",
+        "instruction": SUMMARISE, "input": input, "schema": null,
+        "max_tokens": max_tokens.clamp(256, 8_000), "blocking": false, "timeout_ms": 20_000,
+        "covers": [span.0, span.1],
+    });
+    scrollback.queue_job(
+        session,
+        "summarise",
+        &spec,
+        &json!({ "from": span.0, "to": span.1 }),
+        at.now,
+    )?;
+    Ok(())
+}
+
+/// Queue a choice among what a search found for this prompt, when there is anything to choose.
+pub(crate) fn curate(
+    at: &mut Answering<'_>,
+    session: &SessionId,
+    query: &str,
+    mark: &str,
+    room: u32,
+    hooks: &mut dyn Hooks,
+) -> Result<(), StoreError> {
+    let found = supply::candidates(at, query, CURATE_FROM);
+    let mut listed = String::new();
+    for hit in &found {
+        if let Some(text) = hooks.redact(&hit.memory.text(), &hit.memory) {
+            listed.push_str(&format!("- {}: {}\n", hit.memory.id, text.trim()));
+        }
+    }
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Ok(());
+    };
+    if listed.is_empty() {
+        return Ok(());
+    }
+    let spec = json!({
+        "kind": "curate", "role": "memory", "fallback": "skip",
+        "instruction": CURATE,
+        "input": format!("The prompt:\n{query}\n\nThe memories:\n{listed}"),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "chosen": { "type": "array", "items": { "type": "string" } },
+                "notes": { "type": "array", "items": { "type": "string" } },
+            },
+            "required": ["chosen", "notes"],
+        },
+        "max_tokens": 1_000, "blocking": true, "timeout_ms": 2_000,
+    });
+    let context = json!({ "mark": mark, "query": query, "room": room });
+    scrollback.queue_job(session, "curate", &spec, &context, at.now)?;
+    Ok(())
+}
+
+/// Hand out every queued job, retiring what went stale. A curate goes out only in the first
+/// round of the prompt it was made for.
+pub(crate) fn hand_out(
+    at: &Answering<'_>,
+    session: &SessionId,
+    first_of: Option<&str>,
+) -> Result<Vec<Value>, StoreError> {
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for job in scrollback.jobs_of(session)? {
+        if stale(&job, at.now) {
+            retry_or_fail(at, &job)?;
+        }
+    }
+    for job in scrollback.jobs_of(session)? {
+        if job.state != JobState::Queued {
+            continue;
+        }
+        if job.kind == "curate" && first_of != job.context["mark"].as_str() {
+            scrollback.settle_job(&job.id, JobState::Failed, None, at.now)?;
+            continue;
+        }
+        scrollback.issue_job(&job.id, at.now)?;
+        out.push(job.handed());
+    }
+    Ok(out)
+}
+
+/// A failed job goes back in the queue once; after that it stays failed.
+fn retry_or_fail(at: &Answering<'_>, job: &Job) -> Result<(), StoreError> {
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Ok(());
+    };
+    let next = if job.attempts <= RETRIES {
+        JobState::Queued
+    } else {
+        JobState::Failed
+    };
+    scrollback.settle_job(&job.id, next, None, at.now)
+}
+
+/// `jobs(session)`: the background jobs waiting to be run.
+pub fn jobs(at: &mut Answering<'_>, request: &Request) -> Reply {
+    let Some(session) = request.args.first().and_then(Value::as_str) else {
+        return Reply::refused("jobs needs a session");
+    };
+    let session = SessionId::new(session);
+    if at.scrollback.is_none() {
+        return Reply::refused("jobs need a scrollback");
+    }
+    match hand_out(at, &session, None) {
+        Ok(jobs) => Reply::rows(jobs),
+        Err(why) => Reply::refused(why.to_string()),
+    }
+}
+
+/// `job_done(session, {id, text, usage, model} | {id, failed})`: what a job came back with.
+pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
+    let Some(session) = request.args.first().and_then(Value::as_str) else {
+        return Reply::refused("job_done needs a session");
+    };
+    let session = SessionId::new(session);
+    let said = request.args.get(1).cloned().unwrap_or(Value::Null);
+    let Some(id) = said["id"].as_str() else {
+        return Reply::refused("job_done needs the job's id");
+    };
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Reply::refused("jobs need a scrollback");
+    };
+    let job = match scrollback.job(id) {
+        Ok(Some(job)) if job.session == session => job,
+        Ok(_) => return Reply::refused(format!("no job called '{id}' in '{session}'")),
+        Err(why) => return Reply::refused(why.to_string()),
+    };
+    // A late or repeated answer changes nothing.
+    if job.state != JobState::Issued {
+        return Reply::none();
+    }
+    let text = said["text"]
+        .as_str()
+        .filter(|_| said.get("failed").is_none());
+    let settled = match text {
+        None => retry_or_fail(at, &job),
+        Some(text) => settle(at, &session, &job, text, hooks).and_then(|()| {
+            let kept = json!({ "text": text, "usage": said["usage"], "model": said["model"] });
+            at.scrollback.as_ref().map_or(Ok(()), |s| {
+                s.settle_job(&job.id, JobState::Done, Some(&kept), at.now)
+            })
+        }),
+    };
+    match settled {
+        Ok(()) => Reply::none(),
+        Err(why) => Reply::refused(why.to_string()),
+    }
+}
+
+/// Put what a job wrote where it belongs.
+fn settle(
+    at: &mut Answering<'_>,
+    session: &SessionId,
+    job: &Job,
+    text: &str,
+    hooks: &mut dyn Hooks,
+) -> Result<(), StoreError> {
+    match job.kind.as_str() {
+        "summarise" => {
+            let (Some(from), Some(to)) = (job.context["from"].as_u64(), job.context["to"].as_u64())
+            else {
+                return Ok(());
+            };
+            let Some(scrollback) = at.scrollback.as_ref() else {
+                return Ok(());
+            };
+            // A summary that already reaches further makes this one old news.
+            if scrollback.summary(session)?.is_some_and(|s| s.to >= to) || text.trim().is_empty() {
+                return Ok(());
+            }
+            scrollback.keep_summary(session, from, to, text.trim(), at.now)
+        }
+        "curate" => curated(at, session, job, text, hooks),
+        _ => Ok(()),
+    }
+}
+
+/// The memory slot as the helper chose it, for the rest of the prompt it was made for.
+fn curated(
+    at: &mut Answering<'_>,
+    session: &SessionId,
+    job: &Job,
+    text: &str,
+    hooks: &mut dyn Hooks,
+) -> Result<(), StoreError> {
+    let Some(said) = json_in(text) else {
+        return Ok(());
+    };
+    let strings = |name: &str| -> Vec<String> {
+        said[name]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let (chosen, notes) = (strings("chosen"), strings("notes"));
+    let query = job.context["query"].as_str().unwrap_or_default();
+    let room = job.context["room"]
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .unwrap_or(0);
+    let per = hooks.window().estimate_chars_per_token;
+    let found: Vec<_> = supply::candidates(at, query, CURATE_FROM)
+        .into_iter()
+        .filter(|hit| chosen.contains(&hit.memory.id.to_string()))
+        .collect();
+    let ids: Vec<String> = found.iter().map(|hit| hit.memory.id.to_string()).collect();
+    let supplied = if notes.is_empty() {
+        supply::pack(at, &found, room, per, hooks).unwrap_or_default()
+    } else {
+        supply::from_notes(&notes, ids, room, per).unwrap_or_default()
+    };
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Ok(());
+    };
+    let Some(mut prompt) = scrollback.prompt(session)? else {
+        return Ok(());
+    };
+    if Some(prompt.mark.as_str()) != job.context["mark"].as_str() {
+        return Ok(());
+    }
+    let mut kept = supplied.as_json(query);
+    kept["curated"] = json!(true);
+    prompt.memory = Some(kept);
+    scrollback.keep_prompt(session, &prompt)
+}
+
+/// The JSON object in what a model wrote, fences and chatter around it or not.
+pub(crate) fn json_in(text: &str) -> Option<Value> {
+    let (start, end) = (text.find('{')?, text.rfind('}')?);
+    serde_json::from_str(text.get(start..=end)?).ok()
+}
+
+/// Whether the harness said it can run jobs for `role`.
+pub(crate) fn can_run(helpers: &[String], role: &str) -> bool {
+    helpers.iter().any(|h| h == role)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_models_json_is_found_inside_its_chatter() {
+        let said = "Sure!\n```json\n{\"chosen\": [\"m-1\"], \"notes\": []}\n```";
+        assert_eq!(json_in(said).expect("json")["chosen"][0], "m-1");
+        assert!(json_in("no json here").is_none());
+    }
+}

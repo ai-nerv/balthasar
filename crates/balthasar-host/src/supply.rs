@@ -52,6 +52,32 @@ impl Supplied {
     }
 }
 
+/// A slot of short notes a helper wrote about `ids`, within `tokens` of room.
+pub(crate) fn from_notes(
+    notes: &[String],
+    ids: Vec<String>,
+    tokens: u32,
+    per_token: u32,
+) -> Option<Supplied> {
+    let total = tokens as usize * per_token as usize;
+    let mut out = format!("{PREFACE}\n{CURRENT}\n");
+    let mut wrote = false;
+    for note in notes {
+        let line = format!("- {}\n", note.trim());
+        if note.trim().is_empty() || out.len() + line.len() > total {
+            continue;
+        }
+        out.push_str(&line);
+        wrote = true;
+    }
+    if !wrote {
+        return None;
+    }
+    let text = out.trim_end().to_owned();
+    let tokens = u32::try_from(text.len().div_ceil(per_token as usize)).unwrap_or(u32::MAX);
+    Some(Supplied { text, ids, tokens })
+}
+
 /// What a search for `query` finds worth offering, best first.
 pub(crate) fn candidates(at: &mut Answering<'_>, query: &str, limit: usize) -> Vec<Scored> {
     let mut ask = Recall::of(query, at.now);

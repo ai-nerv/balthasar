@@ -118,6 +118,8 @@ pub fn answer_hooked(
         "layout" => crate::layout::layout(at, request, hooks),
         "applied" => crate::layout::applied(at, request),
         "overflowed" => crate::layout::overflowed(at, request, hooks),
+        "jobs" => crate::jobs::jobs(at, request),
+        "job_done" => crate::jobs::job_done(at, request, hooks),
         "used" => crate::outcome::used(at, door, request),
         "outcome" => crate::outcome::outcome(at, door, request),
         "trace" => crate::outcome::trace(at, request),
