@@ -5,7 +5,23 @@ use serde_json::Value;
 
 /// Words a person lays a rule down with, rather than asking for one piece of work.
 const RULE_WORDS: &[&str] = &[
-    "rule", "rules", "always", "never", "must", "prefer", "not", "avoid", "remember", "dont",
+    "always", "never", "must", "prefer", "not", "avoid", "remember", "dont",
+];
+
+/// Phrases that lay one down. "Rule" alone is not one: a request can be about the rules.
+const RULE_PHRASES: &[&str] = &[
+    "from now on",
+    "we use",
+    "a rule",
+    "firm rule",
+    "hard rule",
+    "house rule",
+    "golden rule",
+    "rule:",
+    "rules:",
+    "rule is",
+    "rules are",
+    "as a rule",
 ];
 
 /// Whether the person said anything rule-shaped in what an extraction read fresh: only then may it pin.
@@ -18,8 +34,7 @@ pub(super) fn laid_down(input: &str) -> bool {
         .filter(|line| line.contains("] person: "))
         .any(|line| {
             let line = line.to_lowercase().replace('\'', "");
-            line.contains("from now on")
-                || line.contains("we use")
+            RULE_PHRASES.iter().any(|phrase| line.contains(phrase))
                 || line
                     .split(|c: char| !c.is_alphanumeric())
                     .any(|word| RULE_WORDS.contains(&word))

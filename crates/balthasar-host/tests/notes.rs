@@ -414,6 +414,30 @@ fn a_plain_request_leaves_a_pinned_rule_in_its_own_words() {
 }
 
 #[test]
+fn a_request_about_the_rules_lays_none_down() {
+    // "List every standing rule…" had the request itself pinned into every later prompt.
+    let mut harness = Harness::new();
+    harness.turn(
+        0,
+        "Write docs/rules-check.md: list every standing rule or preference you were given, \
+         then say for each doc whether it follows them.",
+    );
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "add", "title": "Standing rules docs",
+                          "text": "Write docs/rules-check.md listing every standing rule.",
+                          "pinned": true }] }),
+    );
+    let notes = harness.one("notes", json!({}));
+    assert!(
+        notes["pinned"].as_array().is_none_or(Vec::is_empty),
+        "pinned from a request: {notes}"
+    );
+}
+
+#[test]
 fn a_tidy_leaves_a_pinned_rule_in_its_own_words() {
     // Every request after a reworded pinned rule misses the cache, and nothing was gained by it.
     let mut harness = Harness::new();
