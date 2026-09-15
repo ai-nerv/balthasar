@@ -205,14 +205,18 @@ impl Loaded {
 
     /// What a masked tool result should say instead.
     ///
-    /// Keyed on the tool. `None` leaves the turn alone.
+    /// Keyed on the tool. `None` hands the turn to the tool's own stub, then the generic one.
+    /// `tokens` is always a number: the row's own count, or its estimate.
     pub fn mask(&mut self, entry: &balthasar_store::Turn) -> Option<String> {
         let tool = entry.tool.as_deref()?;
         let item = serde_json::json!({
             "cursor": entry.cursor,
             "tool": tool,
-            "tokens": entry.tokens,
+            "tokens": entry.weight(),
             "kind": entry.kind,
+            "stub": entry.stub,
+            "handle": entry.handle,
+            "error": entry.error,
         });
         self.engine.mask_for(tool, &item)
     }

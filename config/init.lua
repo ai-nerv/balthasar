@@ -63,18 +63,21 @@ balthasar.load("sections.lua")
 -- What a masked tool result says instead of itself.
 --
 -- Masking is tried before summarising, always: it is free, it is reversible because the text
--- is still in scratch, and tool output is most of a coding session's window. Only the tool's
--- author knows what a useful stub says, so a tool with no handler here is left alone -- an
--- uninformative stub is worse than the output it replaced.
+-- is still in scratch, and tool output is most of a coding session's window. A handler here
+-- overrides; returning nil hands the row to the tool's own stub (casper's `brief`, in
+-- `item.stub`), and a tool that said nothing gets "`tool` result elided (~N tokens)".
 --
+-- `item` is { cursor, tool, tokens, kind, stub, handle, error }; `tokens` is always a number.
 -- Keyed, so re-reading this file replaces rather than accumulating.
 
 balthasar.mask["shell"] = function(item)
-  return ("`shell` output elided (~%d tokens) -- run it again if you need it"):format(item.tokens)
+  if item.stub then return nil end
+  return ("`shell` output elided (~%d tokens) -- run it again if you need it"):format(item.tokens or 0)
 end
 
 balthasar.mask["read"] = function(item)
-  return ("read a file (~%d tokens) -- it is still on disk, read it again if you need it"):format(item.tokens)
+  if item.stub then return nil end
+  return ("read a file (~%d tokens) -- it is still on disk, read it again if you need it"):format(item.tokens or 0)
 end
 
 -- ------------------------------------------------------------------ gates

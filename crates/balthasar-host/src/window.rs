@@ -152,11 +152,12 @@ pub fn model(at: &mut Answering<'_>, request: &Request) -> Reply {
 
 /// Say what a harness should send.
 ///
-/// `describe` is the mask handler for a tool; a turn nobody can describe is left alone.
+/// `describe` is the configured stub for a tool; without one a tool row gets its own stub or
+/// the generic one. Nothing is recorded: a plan is a proposal, and `applied` is what records.
 pub fn plan(
     at: &mut Answering<'_>,
     request: &Request,
-    describe: impl FnMut(&balthasar_store::Turn) -> Option<String>,
+    mut describe: impl FnMut(&balthasar_store::Turn) -> Option<String>,
 ) -> Reply {
     let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("plan needs a session");
@@ -194,21 +195,7 @@ pub fn plan(
         ));
     }
 
-    let plan = balthasar_buffer::plan(&entries, &window, describe);
-    // The plan is recorded as it is handed over, so asking again does not mask twice.
-    for masked in &plan.mask {
-        let _ = scrollback.mark(&session, masked.cursor, State::Masked);
-    }
-    if let Some(span) = plan.summarise {
-        for cursor in &plan.drop {
-            if *cursor >= span.from && *cursor <= span.to {
-                let _ = scrollback.mark(&session, *cursor, State::Summarised);
-            }
-        }
-        // TIDE. What was in a span leaving the window becomes a candidate, never a fact.
-        let _ = distil(at, &session, &entries, span);
-    }
-
+    let plan = balthasar_buffer::plan(&entries, &window, |turn| stub_for(turn, &mut describe));
     Reply::one(as_json(&plan))
 }
 
@@ -274,7 +261,55 @@ fn turn_of(
             .get("raw")
             .map(|raw| raw.as_str().map_or_else(|| raw.to_string(), str::to_owned)),
         revisions: 0,
+        // What the harness says about a tool row, all of it optional.
+        group: turn.get("group").and_then(serde_json::Value::as_u64),
+        stub: said(turn, "stub"),
+        handle: said(turn, "handle"),
+        keep: flag(turn, "keep"),
+        error: flag(turn, "error"),
     }
+}
+
+/// A non-empty string field.
+fn said(turn: &serde_json::Value, name: &str) -> Option<String> {
+    turn.get(name)
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_owned)
+}
+
+/// A boolean field, false when absent.
+fn flag(turn: &serde_json::Value, name: &str) -> bool {
+    turn.get(name)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// What a stubbed tool row says: a configured handler first, then the tool's own words, then a
+/// generic line. A turn that is not a tool's gets nothing.
+pub(crate) fn stub_for(
+    turn: &balthasar_store::Turn,
+    describe: &mut impl FnMut(&balthasar_store::Turn) -> Option<String>,
+) -> Option<String> {
+    if !turn.is_tool() {
+        return None;
+    }
+    if let Some(configured) = describe(turn) {
+        return Some(configured);
+    }
+    let said = turn.stub.clone().unwrap_or_else(|| {
+        format!(
+            "`{}` result elided (~{} tokens)",
+            turn.tool.as_deref().unwrap_or("tool"),
+            turn.weight()
+        )
+    });
+    Some(match &turn.handle {
+        Some(handle) if !said.contains(handle.as_str()) => {
+            format!("{said} — `{handle}` to see it again")
+        }
+        _ => said,
+    })
 }
 
 /// Revise the turn already at a cursor.
@@ -407,41 +442,6 @@ pub fn resume(at: &mut Answering<'_>, request: &Request) -> Reply {
     };
     let turns = scrollback.replay(&session).map(|t| t.len()).unwrap_or(0);
     Reply::one(serde_json::json!({ "next": next, "turns": turns }))
-}
-
-/// Attach a distillation witness to everything a summary is about to stand in for.
-///
-/// One witness per turn, weighted below the promotion floor.
-fn distil(
-    at: &mut Answering<'_>,
-    session: &SessionId,
-    entries: &[balthasar_store::Turn],
-    span: balthasar_buffer::Span,
-) -> Result<usize, balthasar_store::StoreError> {
-    let mut carried = 0;
-    for entry in entries {
-        if entry.cursor < span.from || entry.cursor > span.to {
-            continue;
-        }
-        let scope = at.scope.clone();
-        let Some(id) = at.run(session)?.scratch_for(&scope, session, &entry.text)? else {
-            continue;
-        };
-        let witness = balthasar_model::Witness::new(
-            balthasar_model::WitnessId::new(format!("tide-{}-{}", session, entry.cursor)),
-            balthasar_model::WitnessKind::Distillation,
-            session.clone(),
-            at.scope.clone(),
-            entry.at,
-        )
-        .at_cursor(entry.cursor)
-        .noted("left the context window (rules, not a model)");
-        // In the run's own store, which is where the memory a summary stands in for lives.
-        let now = at.now;
-        at.run(session)?.attach(&id, witness, now)?;
-        carried += 1;
-    }
-    Ok(carried)
 }
 
 /// A number a harness sent, or the shipped default.

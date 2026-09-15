@@ -175,23 +175,20 @@ fn the_recent_turns_are_never_masked() {
 }
 
 #[test]
-fn a_plan_is_not_re_applied_to_what_it_already_did() {
-    // A harness that applies a plan and asks again must not be told to mask what it has
-    // already masked — it would pay for the same saving twice and never converge.
+fn a_plan_records_nothing_so_asking_twice_says_the_same() {
+    // Answering is a proposal. Only `applied` records, so a request that never reached the
+    // provider cannot leave a turn marked as masked.
     let mut harness = Harness::new();
     for n in 0..30 {
         turn(&mut harness, n);
     }
     let first = harness.plan(window());
     let second = harness.plan(window());
-    let count = |plan: &serde_json::Value| plan["mask"].as_array().expect("a list").len();
-    assert!(count(&first) > 0);
-    assert!(
-        count(&second) < count(&first),
-        "the same turns were masked twice: {} then {}",
-        count(&first),
-        count(&second)
-    );
+    assert!(!first["mask"].as_array().expect("a list").is_empty());
+    assert_eq!(first, second);
+    let session = balthasar_model::SessionId::new(SESSION);
+    let rows = harness.scrollback.replay(&session).expect("replay");
+    assert!(rows.iter().all(|t| t.state.is_live()), "nothing was marked");
 }
 
 #[test]
@@ -212,9 +209,8 @@ fn a_window_with_room_is_told_to_send_what_it_has() {
 }
 
 #[test]
-fn a_turn_nobody_can_describe_is_left_alone() {
-    // Only a tool's author knows what a useful stub says. With no handler there is nothing
-    // honest to put in its place, and an uninformative one is worse than the output.
+fn a_tool_nobody_described_gets_the_generic_stub() {
+    // No handler and no stub from the tool: the row still says what it was and what it cost.
     let mut harness = Harness::new();
     for n in 0..30 {
         turn(&mut harness, n);
@@ -224,7 +220,37 @@ fn a_turn_nobody_can_describe_is_left_alone() {
         args: vec![serde_json::json!(SESSION), window()],
     });
     let plan = reply.result.into_iter().next().expect("a plan");
-    assert!(plan["mask"].as_array().expect("a list").is_empty());
+    let masked = plan["mask"].as_array().expect("a list");
+    assert!(!masked.is_empty());
+    assert_eq!(masked[0]["as"], "`shell` result elided (~900 tokens)");
+}
+
+#[test]
+fn a_tool_that_said_what_it_was_is_stubbed_in_its_own_words() {
+    let mut harness = Harness::new();
+    for n in 0..30 {
+        turn(&mut harness, n);
+    }
+    let reply = harness.ask(&Request {
+        call: "observe".into(),
+        args: vec![
+            serde_json::json!(SESSION),
+            serde_json::json!({
+                "cursor": 2, "role": "tool", "kind": "tool_result", "tool": "read",
+                "tokens": 900, "text": "x".repeat(3600), "group": 1,
+                "stub": "read src/main.rs (420 lines)", "handle": "read src/main.rs",
+            }),
+        ],
+    });
+    assert!(reply.ok);
+    let reply = harness.ask(&Request {
+        call: "plan".into(),
+        args: vec![serde_json::json!(SESSION), window()],
+    });
+    let plan = reply.result.into_iter().next().expect("a plan");
+    let first = &plan["mask"].as_array().expect("a list")[0];
+    assert_eq!(first["cursor"], 2);
+    assert_eq!(first["as"], "read src/main.rs (420 lines)");
 }
 
 #[test]
@@ -326,12 +352,19 @@ fn planning_does_not_read_what_it_cannot_use() {
     // needs none of them: it has a stub already. Reading them anyway would have every request
     // carry every byte the run ever produced.
     let mut harness = Harness::new();
+    let session = balthasar_model::SessionId::new(SESSION);
     for n in 0..40 {
         turn(&mut harness, n);
-        harness.plan(window());
+        // What a harness confirming the plan would have recorded.
+        for masked in harness.plan(window())["mask"].as_array().expect("a list") {
+            let cursor = masked["cursor"].as_u64().expect("a cursor");
+            harness
+                .scrollback
+                .mark(&session, cursor, balthasar_store::State::Masked)
+                .expect("mark");
+        }
     }
 
-    let session = balthasar_model::SessionId::new(SESSION);
     let all = harness.scrollback.replay(&session).expect("replay").len();
     let live = harness
         .scrollback
