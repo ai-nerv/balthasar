@@ -53,17 +53,22 @@ pub(super) fn echoes(op: &Value, kept: &[balthasar_store::Note]) -> bool {
     })
 }
 
-/// A tidy's ops with each pinned rule left in its own words, unless something is retired into it or
-/// it comes out much shorter: new words for the same rule only make every request miss the cache.
+/// Ops with each pinned rule left in its own words, by id or by title, unless something is retired
+/// into it or it comes out much shorter: new words for the same rule only make every request miss
+/// the cache.
 pub(super) fn kept_wording(ops: Vec<Value>, kept: &[balthasar_store::Note]) -> Vec<Value> {
     if ops.iter().any(|op| op["op"] == "retire") {
         return ops;
     }
     ops.into_iter()
         .map(|mut op| {
-            let rule = op["id"]
-                .as_str()
-                .and_then(|id| kept.iter().find(|n| n.id == id && n.pinned));
+            let rule = kept.iter().find(|n| {
+                n.pinned
+                    && (op["id"].as_str() == Some(n.id.as_str())
+                        || op["title"]
+                            .as_str()
+                            .is_some_and(|t| n.title.eq_ignore_ascii_case(t.trim())))
+            });
             let shorter = rule.is_some_and(|n| {
                 op["text"]
                     .as_str()

@@ -395,6 +395,25 @@ fn a_second_pinned_rule_has_the_notes_tidied_at_once() {
 }
 
 #[test]
+fn a_plain_request_leaves_a_pinned_rule_in_its_own_words() {
+    // "Reading each file yourself" had an extract re-add the pinned rule under its title, reworded.
+    let mut harness = Harness::new();
+    harness.turn(0, "use uv, not pip");
+    let laid = harness.layout(0);
+    harness.answer(&laid["jobs"], "extract", learned());
+    harness.turn(1, "now do the same for the parser, reading it yourself");
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [{ "op": "add", "title": "Package manager",
+                          "text": "Install packages with uv, never with pip.", "pinned": true }] }),
+    );
+    let notes = harness.one("notes", json!({}));
+    assert_eq!(notes["pinned"][0]["text"], "Use uv, not pip.", "{notes}");
+}
+
+#[test]
 fn a_tidy_leaves_a_pinned_rule_in_its_own_words() {
     // Every request after a reworded pinned rule misses the cache, and nothing was gained by it.
     let mut harness = Harness::new();

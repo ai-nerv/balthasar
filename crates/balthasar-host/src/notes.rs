@@ -417,7 +417,7 @@ pub(crate) fn settle(
             let ruled =
                 job.kind != "extract" || laid_down(job.spec["input"].as_str().unwrap_or_default());
             let ops = if ruled { ops } else { unpinned(ops) };
-            let ops = if job.kind == "tidy" {
+            let ops = if job.kind == "tidy" || !ruled {
                 kept_wording(ops, &scrollback.notes()?)
             } else {
                 ops
