@@ -209,8 +209,15 @@ fn every_job_has_its_own_id() {
         .iter()
         .map(|j| j["id"].as_str().expect("an id"))
         .collect();
-    assert_eq!(ids.len(), 2, "a summary and a curate");
-    assert_ne!(ids[0], ids[1]);
+    assert_eq!(
+        ids.len(),
+        3,
+        "a summary, notes before its cut, and a curate"
+    );
+    let mut distinct = ids.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(distinct.len(), ids.len(), "{ids:?}");
 }
 
 #[test]

@@ -28,8 +28,9 @@ pub struct Loaded {
     engine: Engine,
     settings: Settings,
     embedder: Option<Box<dyn balthasar_embed::Embed>>,
-    /// `balthasar.window`, read once.
+    /// `balthasar.window` and `balthasar.memory`, read once.
     window: balthasar_host::Rules,
+    keeping: balthasar_host::Keeping,
 }
 
 impl balthasar_host::Hooks for Loaded {
@@ -51,6 +52,10 @@ impl balthasar_host::Hooks for Loaded {
 
     fn window(&self) -> balthasar_host::Rules {
         self.window.clone()
+    }
+
+    fn memory(&self) -> balthasar_host::Keeping {
+        self.keeping.clone()
     }
 }
 
@@ -85,11 +90,13 @@ impl Loaded {
         let settings = Settings::from(&engine.config());
         let embedder = embedder_from(&engine.config());
         let window = balthasar_host::Rules::read(engine.config().get("window"));
+        let keeping = balthasar_host::Keeping::read(engine.config().get("memory"));
         Ok(Self {
             engine,
             settings,
             embedder,
             window,
+            keeping,
         })
     }
 
@@ -103,6 +110,7 @@ impl Loaded {
             settings: Settings::default(),
             embedder: balthasar_embed::open(&balthasar_embed::Spec::default()),
             window: balthasar_host::Rules::default(),
+            keeping: balthasar_host::Keeping::default(),
         }
     }
 

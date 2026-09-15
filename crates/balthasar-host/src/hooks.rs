@@ -26,6 +26,10 @@ pub trait Hooks {
     fn window(&self) -> Rules {
         Rules::default()
     }
+
+    fn memory(&self) -> crate::Keeping {
+        crate::Keeping::default()
+    }
 }
 
 /// A stub closure, as hooks that say nothing else.

@@ -204,14 +204,32 @@ fn retry_or_fail(at: &Answering<'_>, job: &Job) -> Result<(), StoreError> {
     scrollback.settle_job(&job.id, next, None, at.now)
 }
 
-/// `jobs(session)`: the background jobs waiting to be run.
-pub fn jobs(at: &mut Answering<'_>, request: &Request) -> Reply {
+/// `jobs(session, {helpers})`: the background jobs waiting to be run, with what a finished turn
+/// made due. The helpers the last layout named stand unless these name others.
+pub fn jobs(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
     let Some(session) = request.args.first().and_then(Value::as_str) else {
         return Reply::refused("jobs needs a session");
     };
     let session = SessionId::new(session);
-    if at.scrollback.is_none() {
+    let Some(scrollback) = at.scrollback.as_ref() else {
         return Reply::refused("jobs need a scrollback");
+    };
+    let said = request.args.get(1).and_then(|s| s["helpers"].as_array());
+    let helpers: Vec<String> = match said {
+        Some(named) => named
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        None => scrollback
+            .prompt(&session)
+            .ok()
+            .flatten()
+            .map(|p| p.helpers)
+            .unwrap_or_default(),
+    };
+    if let Err(why) = crate::notes::background(at, &session, &helpers, None, &hooks.memory()) {
+        return Reply::refused(why.to_string());
     }
     match hand_out(at, &session, None) {
         Ok(jobs) => Reply::rows(jobs),
@@ -283,7 +301,7 @@ fn settle(
             scrollback.keep_summary(session, from, to, text.trim(), at.now)
         }
         "curate" => curated(at, session, job, text, hooks),
-        _ => Ok(()),
+        _ => crate::notes::settle(at, session, job, text, &hooks.memory()),
     }
 }
 

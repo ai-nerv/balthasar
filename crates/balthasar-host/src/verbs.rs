@@ -104,6 +104,36 @@ pub const SURFACE: &[Verb] = &[
         about: "what a job came back with: (session, { id, text | failed }) -> ok",
     },
     Verb {
+        name: "notes",
+        writes: false,
+        about: "the project's notes: (session) -> { pinned, deferred }",
+    },
+    Verb {
+        name: "note_open",
+        writes: false,
+        about: "one note in full: (session, { id }) -> note",
+    },
+    Verb {
+        name: "changes",
+        writes: false,
+        about: "the notes' change log, newest first: (session, { limit }) -> [change]",
+    },
+    Verb {
+        name: "undo",
+        writes: true,
+        about: "revert one change to the notes, and log it: (session, { change }) -> ok",
+    },
+    Verb {
+        name: "approve",
+        writes: true,
+        about: "apply staged changes to the notes: (session, { changes }) -> { approved }",
+    },
+    Verb {
+        name: "reject",
+        writes: true,
+        about: "drop staged changes to the notes: (session, { changes }) -> { rejected }",
+    },
+    Verb {
         name: "amend",
         writes: true,
         about: "revise a turn where it stands: (session, turn) -> ok",

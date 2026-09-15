@@ -81,6 +81,17 @@ balthasar.load("sections.lua")
 --   policy = nil,        -- function(budget, items) -> { slots = {...}, why = "..." }
 -- }
 
+-- How notes are kept (Letta-style). Pinned notes are in every request; the rest are listed by
+-- a one-line description until the model opens one. A helper model (the harness's `memory`
+-- helper) extracts them in the background; every change is logged and can be undone.
+--
+-- balthasar.memory = {
+--   review        = false, -- true: changes wait until the main model approves them
+--   extract_every = 1,     -- user turns between extractions
+--   tidy_every    = 10,    -- extractions between tidy-ups (merge duplicates, retire stale)
+--   checklist     = nil,   -- replace the shipped reflection checklist with your own text
+-- }
+
 -- What a masked tool result says instead of itself.
 --
 -- Masking is tried before summarising, always: it is free, it is reversible because the text

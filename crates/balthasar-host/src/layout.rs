@@ -91,6 +91,13 @@ fn lay_out(
         tight: prompt.overflows,
     };
     let caps = balthasar_buffer::budget(&rules, &ask, factor);
+    let (pinned, pinned_tokens) = crate::notes::pinned_slot(
+        at,
+        &mut prompt,
+        (f64::from(caps.pinned) / factor) as u32,
+        rules.estimate_chars_per_token,
+    )
+    .map_err(|e| e.to_string())?;
 
     // Settled once per prompt, so every round of it sends the same memory.
     let memory = if let Some(kept) = Supplied::kept(prompt.memory.as_ref(), &query) {
@@ -117,7 +124,7 @@ fn lay_out(
             to: s.to,
             tokens: rules.estimate(&s.text),
         }),
-        pinned: 0,
+        pinned: pinned_tokens,
         memory: if memory.ids.is_empty() {
             0
         } else {
@@ -150,6 +157,20 @@ fn lay_out(
         )
         .map_err(e)?;
         prompt.compactions += 1;
+        let keeping = hooks.memory();
+        crate::notes::before_cut(at, session, span.to, &prompt.helpers, &keeping).map_err(e)?;
+    }
+    // What the turns before this prompt taught, read in the background.
+    let before = turns
+        .iter()
+        .rev()
+        .find(|t| t.role == "user")
+        .and_then(|t| t.cursor.checked_sub(1));
+    if ask.round == 0
+        && let Some(upto) = before
+    {
+        let keeping = hooks.memory();
+        crate::notes::background(at, session, &prompt.helpers, Some(upto), &keeping).map_err(e)?;
     }
     let curating = known
         .iter()
@@ -174,7 +195,9 @@ fn lay_out(
         .slots
         .iter()
         .map(|slot| match slot {
-            Slot::Pinned => json!({ "kind": "pinned", "text": "", "tokens": 0 }),
+            Slot::Pinned => {
+                json!({ "kind": "pinned", "text": pinned, "tokens": fix(pinned_tokens) })
+            }
             Slot::Summary => {
                 let s = summary.as_ref().expect("a summary slot has a summary");
                 json!({ "kind": "summary", "text": s.text, "covers": [s.from, s.to],
