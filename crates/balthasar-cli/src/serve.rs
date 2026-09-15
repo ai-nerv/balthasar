@@ -154,9 +154,7 @@ pub fn serve(
             live_floor: floors.live,
             capture,
         };
-        balthasar_host::answer_with(&mut at, &Door::Socket(peer.clone()), &request, |entry| {
-            loaded.mask(entry)
-        })
+        balthasar_host::answer_hooked(&mut at, &Door::Socket(peer.clone()), &request, loaded)
     });
 
     // The socket goes before the stores: closing a store checkpoints its WAL and fsyncs.
@@ -208,7 +206,7 @@ pub fn api(
                 capture,
             };
             // One-shot is the owner's own door: this process, with no socket in between.
-            balthasar_host::answer_with(&mut at, &Door::Owner, &request, |entry| loaded.mask(entry))
+            balthasar_host::answer_hooked(&mut at, &Door::Owner, &request, loaded)
         }
         Err(why) => Reply::refused(why.to_string()),
     };

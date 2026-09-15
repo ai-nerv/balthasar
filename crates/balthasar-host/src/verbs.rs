@@ -79,6 +79,21 @@ pub const SURFACE: &[Verb] = &[
         about: "what to send: (session, window) -> { keep, mask, drop, summarise, why }",
     },
     Verb {
+        name: "layout",
+        writes: true,
+        about: "what the next request holds: (session, request) -> { id, budget, slots, jobs }",
+    },
+    Verb {
+        name: "applied",
+        writes: true,
+        about: "a layout was sent and accepted: (session, { id, usage }) -> ok",
+    },
+    Verb {
+        name: "overflowed",
+        writes: true,
+        about: "a layout was refused as too long: (session, { id, said }) -> a tighter layout",
+    },
+    Verb {
         name: "amend",
         writes: true,
         about: "revise a turn where it stands: (session, turn) -> ok",

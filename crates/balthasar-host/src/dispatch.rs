@@ -69,6 +69,16 @@ pub fn answer_with(
     request: &Request,
     describe: impl FnMut(&balthasar_store::Turn) -> Option<String>,
 ) -> Reply {
+    answer_hooked(at, door, request, &mut crate::Describing(describe))
+}
+
+/// Answer one call, asking `hooks` whatever the configuration has a say in.
+pub fn answer_hooked(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
+) -> Reply {
     let Some(verb) = verbs::known(&request.call) else {
         // Naming what is available beats "unknown verb".
         return Reply::refused(format!(
@@ -104,7 +114,10 @@ pub fn answer_with(
         "scroll" => crate::window::scroll(at, request),
         "resume" => crate::window::resume(at, request),
         "model" => crate::window::model(at, request),
-        "plan" => crate::window::plan(at, request, describe),
+        "plan" => crate::window::plan(at, request, |turn| hooks.stub(turn)),
+        "layout" => crate::layout::layout(at, request, hooks),
+        "applied" => crate::layout::applied(at, request),
+        "overflowed" => crate::layout::overflowed(at, request, hooks),
         "used" => crate::outcome::used(at, door, request),
         "outcome" => crate::outcome::outcome(at, door, request),
         "trace" => crate::outcome::trace(at, request),

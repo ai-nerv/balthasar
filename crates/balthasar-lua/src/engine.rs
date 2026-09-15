@@ -177,6 +177,26 @@ impl Engine {
             .map(str::to_owned)
     }
 
+    /// Ask `balthasar.window.policy(budget, items)` for a layout. `None` when there is no policy,
+    /// it failed, or it answered nothing.
+    pub fn policy(
+        &mut self,
+        budget: &serde_json::Value,
+        items: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        let source = format!(
+            "local held = balthasar and balthasar.window\n\
+             local fn = type(held) == \"table\" and held.policy\n\
+             if type(fn) == \"function\" then\n\
+               local ok, said = pcall(fn, table.unpack({args}))\n\
+               {answer} = (ok and type(said) == \"table\") and said or nil\n\
+             else {answer} = nil end",
+            args = handler::ARGS,
+            answer = handler::ANSWER,
+        );
+        self.call_chunk(&source, &[budget.clone(), items.clone()])
+    }
+
     /// Whether a registered spec offers a function by that name.
     #[must_use]
     pub fn offers(&mut self, registrar: &str, id: &str, method: &str) -> bool {
@@ -278,7 +298,9 @@ impl Engine {
 
             // Made here so `balthasar.decay.normal = 0.02` works without a config writing
             // `balthasar.decay = {}` first.
-            for nested in ["decay", "witness", "buffer", "weights", "budget", "mask"] {
+            for nested in [
+                "decay", "witness", "buffer", "weights", "budget", "mask", "window", "memory",
+            ] {
                 balthasar.set(ctx, nested, Table::new(&ctx)).ok();
             }
 

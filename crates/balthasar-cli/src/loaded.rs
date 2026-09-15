@@ -28,6 +28,30 @@ pub struct Loaded {
     engine: Engine,
     settings: Settings,
     embedder: Option<Box<dyn balthasar_embed::Embed>>,
+    /// `balthasar.window`, read once.
+    window: balthasar_host::Rules,
+}
+
+impl balthasar_host::Hooks for Loaded {
+    fn stub(&mut self, turn: &balthasar_store::Turn) -> Option<String> {
+        self.mask(turn)
+    }
+
+    fn policy(
+        &mut self,
+        budget: &serde_json::Value,
+        items: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        self.engine.policy(budget, items)
+    }
+
+    fn redact(&mut self, text: &str, memory: &balthasar_model::Memory) -> Option<String> {
+        Loaded::redact(self, text, memory, true, &mut Vec::new())
+    }
+
+    fn window(&self) -> balthasar_host::Rules {
+        self.window.clone()
+    }
 }
 
 impl Loaded {
@@ -60,10 +84,12 @@ impl Loaded {
 
         let settings = Settings::from(&engine.config());
         let embedder = embedder_from(&engine.config());
+        let window = balthasar_host::Rules::read(engine.config().get("window"));
         Ok(Self {
             engine,
             settings,
             embedder,
+            window,
         })
     }
 
@@ -76,6 +102,7 @@ impl Loaded {
             engine: Engine::new(),
             settings: Settings::default(),
             embedder: balthasar_embed::open(&balthasar_embed::Spec::default()),
+            window: balthasar_host::Rules::default(),
         }
     }
 
