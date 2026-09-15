@@ -36,15 +36,13 @@ pub struct Loaded {
 impl balthasar_host::Hooks for Loaded {
     fn stub(&mut self, turn: &balthasar_store::Turn) -> Option<String> {
         let said = self.mask(turn);
-        balthasar_model::noted!(
-            "hook: stub for cursor {} {}",
-            turn.cursor,
-            if said.is_some() {
-                "answered"
-            } else {
-                "had nothing"
-            }
-        );
+        if let Some(stub) = &said {
+            balthasar_model::noted!(
+                "hook: stub for cursor {} in {} chars",
+                turn.cursor,
+                stub.chars().count()
+            );
+        }
         said
     }
 
