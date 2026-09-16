@@ -80,7 +80,8 @@ const DEONTIC: &[&str] = &["must", "should", "shall"];
 const TOLD: &[&str] = &[
     "read", "write", "use", "run", "keep", "make", "add", "fix", "check", "ensure", "follow",
     "include", "name", "list", "put", "start", "end", "do", "ask", "tell", "verify", "report",
-    "describe", "split", "send", "set", "call", "treat",
+    "describe", "split", "send", "set", "call", "treat", "plan", "spawn", "wait", "create",
+    "explain", "prefer", "avoid",
 ];
 
 /// The ops a span with no rule in it may keep: a new note saying how the work must be done, or
