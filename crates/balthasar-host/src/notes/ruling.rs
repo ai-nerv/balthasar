@@ -41,8 +41,27 @@ pub(super) fn laid_down(input: &str) -> bool {
         })
 }
 
+/// What an extraction or a tidy may keep, by whether a person laid a rule down in what it read.
+pub(super) fn allowed(
+    ops: Vec<Value>,
+    kept: &[balthasar_store::Note],
+    ruled: bool,
+    kind: &str,
+) -> Vec<Value> {
+    let ops = if ruled {
+        ops
+    } else {
+        factual(unpinned(ops), kept)
+    };
+    if kind == "tidy" || !ruled {
+        kept_wording(ops, kept)
+    } else {
+        ops
+    }
+}
+
 /// The same ops with no say over pinning: a new note is unpinned, one on a kept note left as it was.
-pub(super) fn unpinned(ops: Vec<Value>) -> Vec<Value> {
+fn unpinned(ops: Vec<Value>) -> Vec<Value> {
     ops.into_iter()
         .map(|mut op| {
             if let Some(fields) = op.as_object_mut() {
@@ -67,7 +86,7 @@ const TOLD: &[&str] = &[
 /// The ops a span with no rule in it may keep: a new note saying how the work must be done, or
 /// opening by telling the assistant to do it, is a rule no person stated. One that lands on a note
 /// already kept is an update to it, and goes through.
-pub(super) fn factual(ops: Vec<Value>, kept: &[balthasar_store::Note]) -> Vec<Value> {
+fn factual(ops: Vec<Value>, kept: &[balthasar_store::Note]) -> Vec<Value> {
     ops.into_iter()
         .filter(|op| {
             let known = kept.iter().any(|n| {
@@ -107,7 +126,7 @@ pub(super) fn echoes(op: &Value, kept: &[balthasar_store::Note]) -> bool {
 /// Ops with each pinned rule left in its own words, by id or by title, unless something is retired
 /// into it or it comes out much shorter: new words for the same rule only make every request miss
 /// the cache.
-pub(super) fn kept_wording(ops: Vec<Value>, kept: &[balthasar_store::Note]) -> Vec<Value> {
+fn kept_wording(ops: Vec<Value>, kept: &[balthasar_store::Note]) -> Vec<Value> {
     if ops.iter().any(|op| op["op"] == "retire") {
         return ops;
     }

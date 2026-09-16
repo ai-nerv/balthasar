@@ -10,7 +10,7 @@ use balthasar_store::{Change, Job, Note, Prompt, StoreError, Transcript, Turn, W
 use serde_json::{Value, json};
 
 mod ruling;
-use ruling::{echoes, factual, kept_wording, laid_down, unpinned};
+use ruling::{allowed, echoes, laid_down};
 
 /// `balthasar.memory`: how notes are kept.
 #[derive(Debug, Clone, PartialEq)]
@@ -417,16 +417,7 @@ pub(crate) fn settle(
             );
             let ruled =
                 job.kind != "extract" || laid_down(job.spec["input"].as_str().unwrap_or_default());
-            let ops = if ruled {
-                ops
-            } else {
-                factual(unpinned(ops), &scrollback.notes()?)
-            };
-            let ops = if job.kind == "tidy" || !ruled {
-                kept_wording(ops, &scrollback.notes()?)
-            } else {
-                ops
-            };
+            let ops = allowed(ops, &scrollback.notes()?, ruled, &job.kind);
             let pinned = |s: &Transcript| -> Result<usize, StoreError> {
                 Ok(s.notes()?.iter().filter(|n| n.pinned).count())
             };
