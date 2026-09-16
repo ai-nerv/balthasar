@@ -56,16 +56,34 @@ pub(super) fn unpinned(ops: Vec<Value>) -> Vec<Value> {
 /// Words a note uses to say how to work, rather than how things are.
 const DEONTIC: &[&str] = &["must", "should", "shall"];
 
-/// The ops a span with no rule in it may keep: an add saying how the work must be done is a rule no
-/// person stated, and is dropped.
-pub(super) fn factual(ops: Vec<Value>) -> Vec<Value> {
+/// Verbs a note opens with when it is telling the assistant what to do: a fact opens with its
+/// subject instead.
+const TOLD: &[&str] = &[
+    "read", "write", "use", "run", "keep", "make", "add", "fix", "check", "ensure", "follow",
+    "include", "name", "list", "put", "start", "end", "do", "ask", "tell", "verify", "report",
+    "describe", "split", "send", "set", "call", "treat",
+];
+
+/// The ops a span with no rule in it may keep: a new note saying how the work must be done, or
+/// opening by telling the assistant to do it, is a rule no person stated. One that lands on a note
+/// already kept is an update to it, and goes through.
+pub(super) fn factual(ops: Vec<Value>, kept: &[balthasar_store::Note]) -> Vec<Value> {
     ops.into_iter()
         .filter(|op| {
+            let known = kept.iter().any(|n| {
+                op["id"].as_str() == Some(n.id.as_str())
+                    || op["title"]
+                        .as_str()
+                        .is_some_and(|t| n.title.eq_ignore_ascii_case(t.trim()))
+            });
             op["op"] != "add"
+                || known
                 || !op["text"].as_str().is_some_and(|text| {
-                    words(text)
-                        .iter()
-                        .any(|word| DEONTIC.contains(&word.as_str()))
+                    let said = words(text);
+                    said.iter().any(|word| DEONTIC.contains(&word.as_str()))
+                        || said
+                            .first()
+                            .is_some_and(|word| TOLD.contains(&word.as_str()))
                 })
         })
         .collect()

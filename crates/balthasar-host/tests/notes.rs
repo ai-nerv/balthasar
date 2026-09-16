@@ -461,6 +461,33 @@ fn a_plain_request_adds_facts_but_no_rule_of_its_own() {
 }
 
 #[test]
+fn a_note_that_says_the_request_back_is_no_note() {
+    // "Read every Rust file … then write the doc" came back as a note in three runs running.
+    let mut harness = Harness::new();
+    harness.turn(
+        0,
+        "Read every Rust file under crates/parse, whole and yourself, then write docs/parse.md \
+         with one section per file.",
+    );
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({ "ops": [
+            { "op": "add", "title": "Read Rust files whole",
+              "text": "Read every Rust file under the given directories whole and yourself." },
+            { "op": "add", "title": "Parser home", "text": "The parser lives in crates/parse." }
+        ] }),
+    );
+    let notes = harness.one("notes", json!({}));
+    let titles: Vec<&str> = notes["deferred"]
+        .as_array()
+        .map(|all| all.iter().filter_map(|n| n["title"].as_str()).collect())
+        .unwrap_or_default();
+    assert_eq!(titles, ["Parser home"], "{notes}");
+}
+
+#[test]
 fn a_tidy_leaves_a_pinned_rule_in_its_own_words() {
     // Every request after a reworded pinned rule misses the cache, and nothing was gained by it.
     let mut harness = Harness::new();
@@ -564,8 +591,7 @@ fn a_rule_with_words_added_in_the_middle_is_not_kept_twice() {
         json!({ "ops": [
             { "op": "add", "title": "One rule per section",
               "text": "Every section you write in docs/ ends with a line 'Sources:' listing the files read for it." },
-            { "op": "add", "title": "Package manager",
-              "text": "Use npm for installs, never pnpm, in this repo." }
+            { "op": "add", "title": "Test runner", "text": "Tests run with cargo nextest." }
         ] }),
     );
     let notes = harness.one("notes", json!({}));
@@ -576,7 +602,7 @@ fn a_rule_with_words_added_in_the_middle_is_not_kept_twice() {
         1,
         "the rule kept twice, or a new note dropped: {notes}"
     );
-    assert_eq!(deferred[0]["title"], "Package manager");
+    assert_eq!(deferred[0]["title"], "Test runner");
 }
 
 #[test]
