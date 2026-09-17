@@ -39,6 +39,16 @@ pub struct Answering<'a> {
 }
 
 impl Answering<'_> {
+    pub(crate) fn run_id(
+        &self,
+        session: &SessionId,
+    ) -> Result<SessionId, balthasar_store::StoreError> {
+        match &self.scrollback {
+            Some(transcript) => transcript.run_of(session),
+            None => Ok(session.clone()),
+        }
+    }
+
     /// The store a run's own memories belong in.
     ///
     /// The run's own file when this host keeps one, and the project's store otherwise.
@@ -48,8 +58,9 @@ impl Answering<'_> {
     ) -> Result<&mut Store, balthasar_store::StoreError> {
         // The pinned agent, taken from this connection rather than from the call.
         let agent = self.agent.clone();
+        let session = self.run_id(session)?;
         match self.scratch.as_mut() {
-            Some(pad) => pad.of(session, &agent),
+            Some(pad) => pad.of(&session, &agent),
             None => Ok(self.store),
         }
     }

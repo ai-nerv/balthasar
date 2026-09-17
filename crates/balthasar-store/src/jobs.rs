@@ -17,7 +17,7 @@ pub enum JobState {
 }
 
 impl JobState {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "queued",
             Self::Issued => "issued",

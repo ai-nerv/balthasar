@@ -65,7 +65,7 @@ pub(crate) fn summarise(
         &everything,
     )?;
     // Dated, since the summary is told to write absolute dates: without it the helper invented one.
-    let mut input = format!("Today is {}.\n\n", crate::notes::day(at.now));
+    let mut input = format!("Today is {}.\n\n", crate::calendar::day(at.now));
     if let Some(s) = &previous {
         input.push_str(&format!(
             "Previous summary (turns {}–{}):\n{}\n\n",
@@ -162,7 +162,7 @@ pub(crate) fn hand_out(
     let mut out = Vec::new();
     for job in scrollback.jobs_of(session)? {
         if stale(&job, at.now) {
-            retry_or_fail(at, &job)?;
+            retry_or_fail(at, &job, Some(&json!({"failed":"helper timed out"})))?;
         }
     }
     for job in scrollback.jobs_of(session)? {
@@ -188,7 +188,7 @@ pub(crate) fn hand_out(
 
 /// A failed job goes back in the queue once; after that it stays failed. A blocking one is never
 /// retried: it was there to shape one request, and that request has gone without it.
-fn retry_or_fail(at: &Answering<'_>, job: &Job) -> Result<(), StoreError> {
+fn retry_or_fail(at: &Answering<'_>, job: &Job, result: Option<&Value>) -> Result<(), StoreError> {
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Ok(());
     };
@@ -198,7 +198,7 @@ fn retry_or_fail(at: &Answering<'_>, job: &Job) -> Result<(), StoreError> {
     } else {
         JobState::Failed
     };
-    scrollback.settle_job(&job.id, next, None, at.now)
+    scrollback.settle_job(&job.id, next, result, at.now)
 }
 
 /// `jobs(session, {helpers})`: the background jobs waiting to be run, with what a finished turn
@@ -211,6 +211,25 @@ pub fn jobs(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) ->
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Reply::refused("jobs need a scrollback");
     };
+    if request
+        .args
+        .get(1)
+        .is_some_and(|opts| opts["inspect"] == true)
+    {
+        return match crate::notes::extraction::status(scrollback, &session) {
+            Ok(status) => Reply::one(status),
+            Err(why) => Reply::refused(why.to_string()),
+        };
+    }
+    if request
+        .args
+        .get(1)
+        .is_some_and(|opts| opts["retry_extraction"] == true)
+        && let Err(why) =
+            crate::notes::extraction::queue(at, &session, None, &hooks.memory(), false, true)
+    {
+        return Reply::refused(why.to_string());
+    }
     let said = request.args.get(1).and_then(|s| s["helpers"].as_array());
     let helpers: Vec<String> = match said {
         Some(named) => named
@@ -259,15 +278,48 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
     let text = said["text"]
         .as_str()
         .filter(|_| said.get("failed").is_none());
-    let settled = match text {
-        None => retry_or_fail(at, &job),
-        Some(text) => settle(at, &session, &job, text, hooks).and_then(|()| {
-            let kept = json!({ "text": text, "usage": said["usage"], "model": said["model"] });
-            at.scrollback.as_ref().map_or(Ok(()), |s| {
-                s.settle_job(&job.id, JobState::Done, Some(&kept), at.now)
-            })
-        }),
+    let curated = match text {
+        Some(text) if job.kind == "curate" => curation(at, &job, text, hooks),
+        _ => None,
     };
+    let keeping = hooks.memory();
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Reply::refused("jobs need a scrollback");
+    };
+    let settled = scrollback.atomic(|scrollback| {
+        let Some(current) = scrollback.job(id)? else {
+            return Err(StoreError::Unknown(format!("no job called '{id}'")));
+        };
+        if current.state != JobState::Issued {
+            return Ok(());
+        }
+        if current != job {
+            return Err(StoreError::Unknown(format!(
+                "job '{id}' changed during completion"
+            )));
+        }
+        match text {
+            None => retry_or_fail(at, &current, Some(&json!({"failed":said["failed"].as_str().unwrap_or("helper returned no text"),"usage":said["usage"],"model":said["model"]}))),
+            Some(text) => {
+                if matches!(current.kind.as_str(), "extract" | "tidy")
+                    && let Err(reason) = crate::notes::extraction::validate(text) {
+                    return retry_or_fail(at, &current, Some(&json!({"failed":reason,"text":text,"usage":said["usage"],"model":said["model"]})));
+                }
+                if !settle(at, &session, &current, text, &keeping, curated.as_ref())? {
+                    return retry_or_fail(at, &current, Some(&json!({"failed":"source evidence changed or note operations were rejected","text":text,"usage":said["usage"],"model":said["model"]})));
+                }
+                if current.kind == "extract" && current.context["coverage"]["version"] == 1 {
+                    let coverage = &current.context["coverage"];
+                    let (Some(from), Some(to)) = (coverage["from"].as_u64(), coverage["to"].as_u64()) else {
+                        return Err(StoreError::Foreign("extraction coverage is missing".into()));
+                    };
+                    scrollback.acknowledge_extraction(&session, id, from, to)?;
+                }
+                let kept = json!({ "text": text, "usage": said["usage"], "model": said["model"] });
+                scrollback.settle_job(id, JobState::Done, Some(&kept), at.now)
+            }
+        }
+    });
     match settled {
         Ok(()) => Reply::none(),
         Err(why) => Reply::refused(why.to_string()),
@@ -276,43 +328,52 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
 
 /// Put what a job wrote where it belongs.
 fn settle(
-    at: &mut Answering<'_>,
+    at: &Answering<'_>,
     session: &SessionId,
     job: &Job,
     text: &str,
-    hooks: &mut dyn Hooks,
-) -> Result<(), StoreError> {
+    keeping: &crate::Keeping,
+    curated: Option<&Value>,
+) -> Result<bool, StoreError> {
     match job.kind.as_str() {
         "summarise" => {
             let (Some(from), Some(to)) = (job.context["from"].as_u64(), job.context["to"].as_u64())
             else {
-                return Ok(());
+                return Ok(false);
             };
             let Some(scrollback) = at.scrollback.as_ref() else {
-                return Ok(());
+                return Ok(false);
             };
             // A summary that already reaches further makes this one old news.
             if scrollback.summary(session)?.is_some_and(|s| s.to >= to) || text.trim().is_empty() {
-                return Ok(());
+                return Ok(true);
             }
-            scrollback.keep_summary(session, from, to, text.trim(), at.now)
+            scrollback
+                .keep_summary(session, from, to, text.trim(), at.now)
+                .map(|()| true)
         }
-        "curate" => curated(at, session, job, text, hooks),
-        _ => crate::notes::settle(at, session, job, text, &hooks.memory()),
+        "curate" => {
+            let Some(scrollback) = at.scrollback.as_ref() else {
+                return Ok(false);
+            };
+            let Some(mut prompt) = scrollback.prompt(session)? else {
+                return Ok(true);
+            };
+            if let Some(kept) = curated
+                && Some(prompt.mark.as_str()) == job.context["mark"].as_str()
+            {
+                prompt.memory = Some(kept.clone());
+                scrollback.keep_prompt(session, &prompt)?;
+            }
+            Ok(true)
+        }
+        _ => crate::notes::settle(at, session, job, text, keeping),
     }
 }
 
-/// The memory slot as the helper chose it, for the rest of the prompt it was made for.
-fn curated(
-    at: &mut Answering<'_>,
-    session: &SessionId,
-    job: &Job,
-    text: &str,
-    hooks: &mut dyn Hooks,
-) -> Result<(), StoreError> {
-    let Some(said) = json_in(text) else {
-        return Ok(());
-    };
+/// Prepare a curated slot without changing its prompt or job.
+fn curation(at: &mut Answering<'_>, job: &Job, text: &str, hooks: &mut dyn Hooks) -> Option<Value> {
+    let said = json_in(text)?;
     let strings = |name: &str| -> Vec<String> {
         said[name]
             .as_array()
@@ -342,17 +403,7 @@ fn curated(
     } else {
         supply::from_notes(&notes, ids, room, per).unwrap_or_default()
     };
-    let Some(scrollback) = at.scrollback.as_ref() else {
-        return Ok(());
-    };
-    let Some(mut prompt) = scrollback.prompt(session)? else {
-        return Ok(());
-    };
-    if Some(prompt.mark.as_str()) != job.context["mark"].as_str() {
-        return Ok(());
-    }
     let mut kept = supplied.as_json(query);
     kept["curated"] = json!(true);
-    prompt.memory = Some(kept);
-    scrollback.keep_prompt(session, &prompt)
+    Some(kept)
 }

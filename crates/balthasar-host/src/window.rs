@@ -18,6 +18,14 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
     };
     let session = SessionId::new(session);
 
+    if at.scrollback.is_none() {
+        return Reply::failed("this balthasar keeps no scrollback: the turn was not recorded");
+    }
+    let run = match bind_run(at, &session, turn) {
+        Ok(run) => run,
+        Err(why) => return Reply::refused(why),
+    };
+
     // Recorded on first sight rather than requiring a harness to open one first.
     if let Some(scrollback) = at.scrollback.as_mut() {
         let _ = scrollback.open_run(
@@ -88,7 +96,7 @@ pub fn observe(at: &mut Answering<'_>, request: &Request) -> Reply {
             Body::note(text, NoteKind::Observation),
             at.now,
         );
-        held.session = Some(session.clone());
+        held.session = Some(run.clone());
         // The id that actually holds the text, which is not always the one that went in.
         let landed = match at.run(&session) {
             Ok(run) => run.keep_scratch(held),
@@ -323,6 +331,9 @@ pub fn amend(at: &mut Answering<'_>, request: &Request) -> Reply {
         return Reply::refused("amend needs a turn");
     };
     let session = SessionId::new(session);
+    if let Err(why) = bind_run(at, &session, turn) {
+        return Reply::refused(why);
+    }
     let held = turn_of(&session, turn, at.now);
 
     let Some(scrollback) = at.scrollback.as_mut() else {
@@ -335,6 +346,26 @@ pub fn amend(at: &mut Answering<'_>, request: &Request) -> Reply {
         Ok(()) => Reply::none(),
         Err(why) => Reply::refused(why.to_string()),
     }
+}
+
+fn bind_run(
+    at: &Answering<'_>,
+    session: &SessionId,
+    turn: &serde_json::Value,
+) -> Result<SessionId, String> {
+    let run = match turn.get("run") {
+        None => None,
+        Some(serde_json::Value::String(run)) => Some(run.as_str()),
+        Some(_) => return Err("turn.run must be a non-empty string".into()),
+    };
+    let transcript = at
+        .scrollback
+        .as_ref()
+        .ok_or("this balthasar keeps no scrollback")?;
+    transcript
+        .bind_run(session, run)
+        .map_err(|why| why.to_string())?;
+    transcript.run_of(session).map_err(|why| why.to_string())
 }
 
 /// Everything a run said, in order.
@@ -462,7 +493,11 @@ pub fn resume(at: &mut Answering<'_>, request: &Request) -> Reply {
         Err(why) => return Reply::refused(why.to_string()),
     };
     let turns = scrollback.replay(&session).map(|t| t.len()).unwrap_or(0);
-    Reply::one(serde_json::json!({ "next": next, "turns": turns }))
+    let run = match scrollback.run_of(&session) {
+        Ok(run) => run,
+        Err(why) => return Reply::refused(why.to_string()),
+    };
+    Reply::one(serde_json::json!({ "next": next, "turns": turns, "run": run.as_str() }))
 }
 
 /// A number a harness sent, or the shipped default.

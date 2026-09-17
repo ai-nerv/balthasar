@@ -88,6 +88,7 @@ balthasar.load("sections.lua")
 -- balthasar.memory = {
 --   review        = false, -- true: changes wait until the main model approves them
 --   extract_every = 1,     -- user turns between extractions
+--   extract_bytes = 100000,-- input bytes per extraction (4096..1000000)
 --   tidy_every    = 10,    -- extractions between tidy-ups (merge duplicates, retire stale)
 --   checklist     = nil,   -- replace the shipped reflection checklist with your own text
 -- }

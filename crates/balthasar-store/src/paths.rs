@@ -168,7 +168,7 @@ fn only_a_store(dir: &Path) -> bool {
 }
 
 /// Create a store home, marking it and keeping it out of the checkout. Overwrites neither a
-/// `.gitignore` somebody wrote nor an existing marker; layout moves are [`crate::layout`]'s to record.
+/// `.gitignore` somebody wrote nor an existing marker; layout moves are `crate::layout`'s to record.
 pub fn make_home(home: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(home)?;
     let marker = home.join(crate::layout::MARKER);

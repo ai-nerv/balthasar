@@ -9,6 +9,9 @@ use serde_json::{Value, json};
 const NOW: balthasar_model::Timestamp = 1_756_000_000;
 const SESSION: &str = "01LAY";
 
+#[path = "laying/atomic.rs"]
+mod atomic;
+
 struct Plain;
 impl Hooks for Plain {}
 

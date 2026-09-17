@@ -123,7 +123,9 @@ dependencies = [
  "balthasar-lua",
  "balthasar-model",
  "balthasar-store",
+ "rusqlite",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

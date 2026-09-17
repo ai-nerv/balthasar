@@ -9,6 +9,21 @@ use serde_json::{Value, json};
 const NOW: balthasar_model::Timestamp = 1_756_000_000;
 const SESSION: &str = "01NOTE";
 
+#[path = "notes/provenance.rs"]
+mod provenance;
+
+#[path = "notes/atomic.rs"]
+mod atomic;
+
+#[path = "notes/coverage.rs"]
+mod coverage;
+
+#[path = "notes/projection.rs"]
+mod projection;
+
+#[path = "notes/quoting.rs"]
+mod quoting;
+
 struct Keep(Keeping);
 impl Hooks for Keep {
     fn memory(&self) -> Keeping {
@@ -172,7 +187,7 @@ fn notes_are_pinned_or_listed_and_a_new_rule_reaches_the_open_prompt() {
     let same_prompt = harness.layout(1);
     let rule = &same_prompt["slots"][0];
     assert_eq!(
-        rule["kind"], "pinned",
+        rule["kind"], "rules",
         "a rule pinned mid-prompt is worth one cache miss"
     );
     assert_eq!(
@@ -184,12 +199,22 @@ fn notes_are_pinned_or_listed_and_a_new_rule_reaches_the_open_prompt() {
     harness.turn(2, "next thing");
     let next = harness.layout(0);
     let pinned = &next["slots"][0];
-    assert_eq!(pinned["kind"], "pinned");
+    assert_eq!(pinned["kind"], "rules");
     let text = pinned["text"].as_str().expect("text");
-    assert!(text.contains("Package manager: Use uv, not pip."), "{text}");
+    assert!(text.contains("- Use uv, not pip."), "{text}");
+    assert!(!text.contains("Parser"), "{text}");
+    let index = next["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .find(|s| s["kind"] == "observations")
+        .expect("observation index");
+    let index = index["text"].as_str().expect("text");
     assert!(
-        text.contains("N-2 Parser: The parser lives in src/parse.rs."),
-        "{text}"
+        index.contains("N-2")
+            && index.contains("Parser")
+            && index.contains("The parser lives in src/parse.rs."),
+        "{index}"
     );
     let open = harness.one("note_open", json!({ "id": "N-2" }));
     assert_eq!(
@@ -244,7 +269,7 @@ fn a_contradiction_is_fixed_where_it_is_and_stale_notes_retire() {
     harness.turn(1, "carry on");
     let laid = harness.layout(0);
     harness.answer(&laid["jobs"], "extract", learned());
-    harness.turn(2, "actually poetry now");
+    harness.turn(2, "Package manager: Use poetry; uv was dropped.");
     let later = harness.layout(0);
     harness.answer(
         &later["jobs"],
@@ -573,14 +598,14 @@ fn a_rule_with_words_added_in_the_middle_is_not_kept_twice() {
     let mut harness = Harness::new();
     harness.turn(
         0,
-        "a firm rule: every section in docs/ ends with a Sources line",
+        "a firm rule: every section in docs/ ends with a Sources line listing the files read for it",
     );
     let laid = harness.layout(0);
     harness.answer(
         &laid["jobs"],
         "extract",
         json!({ "ops": [{ "op": "add", "title": "Docs end with Sources",
-                          "text": "Every section in docs/ ends with a line 'Sources:' listing the files read for it.",
+                          "text": "Every section in docs/ ends with a Sources line listing the files read for it.",
                           "pinned": true }] }),
     );
     harness.turn(1, "write the glossary");
@@ -590,7 +615,7 @@ fn a_rule_with_words_added_in_the_middle_is_not_kept_twice() {
         "extract",
         json!({ "ops": [
             { "op": "add", "title": "One rule per section",
-              "text": "Every section you write in docs/ ends with a line 'Sources:' listing the files read for it." },
+              "text": "Every section you write in docs/ ends with a Sources line listing the files read for it." },
             { "op": "add", "title": "Test runner", "text": "Tests run with cargo nextest." }
         ] }),
     );

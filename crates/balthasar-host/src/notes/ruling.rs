@@ -1,82 +1,27 @@
-//! What an extraction may keep: a pinned note only where a person laid a rule down, and never a
-//! note that only restates one already kept.
+//! Literal rule evidence and duplicate-note matching.
 
 use serde_json::Value;
 
-/// Words a person lays a rule down with, rather than asking for one piece of work.
-const RULE_WORDS: &[&str] = &[
-    "always", "never", "must", "prefer", "not", "avoid", "remember", "dont",
+const STANDING: &[&str] = &[
+    "always ",
+    "never ",
+    "must ",
+    "prefer ",
+    "avoid ",
+    "remember ",
+    "don't ",
+    "dont ",
+    "do not ",
+    "from now on ",
 ];
-
-/// Phrases that lay one down. "Rule" alone is not one: a request can be about the rules.
-const RULE_PHRASES: &[&str] = &[
-    "from now on",
-    "we use",
-    "a rule",
-    "firm rule",
-    "hard rule",
-    "house rule",
-    "golden rule",
+const MARKERS: &[&str] = &[
+    "a firm rule:",
+    "firm rule:",
+    "hard rule:",
+    "house rule:",
     "rule:",
     "rules:",
-    "rule is",
-    "rules are",
-    "as a rule",
 ];
-
-/// Whether the person said anything rule-shaped in what an extraction read fresh: only then may it pin.
-pub(super) fn laid_down(input: &str) -> bool {
-    let fresh = input
-        .split_once("New since then")
-        .map_or(input, |(_, after)| after);
-    fresh
-        .lines()
-        .filter(|line| line.contains("] person: "))
-        .any(|line| {
-            let line = line.to_lowercase().replace('\'', "");
-            RULE_PHRASES.iter().any(|phrase| line.contains(phrase))
-                || line
-                    .split(|c: char| !c.is_alphanumeric())
-                    .any(|word| RULE_WORDS.contains(&word))
-        })
-}
-
-/// What an extraction or a tidy may keep, by whether a person laid a rule down in what it read.
-pub(super) fn allowed(
-    ops: Vec<Value>,
-    kept: &[balthasar_store::Note],
-    ruled: bool,
-    kind: &str,
-) -> Vec<Value> {
-    let ops = if ruled {
-        ops
-    } else {
-        factual(unpinned(ops), kept)
-    };
-    if kind == "tidy" || !ruled {
-        kept_wording(ops, kept)
-    } else {
-        ops
-    }
-}
-
-/// The same ops with no say over pinning: a new note is unpinned, one on a kept note left as it was.
-fn unpinned(ops: Vec<Value>) -> Vec<Value> {
-    ops.into_iter()
-        .map(|mut op| {
-            if let Some(fields) = op.as_object_mut() {
-                fields.remove("pinned");
-            }
-            op
-        })
-        .collect()
-}
-
-/// Words a note uses to say how to work, rather than how things are.
-const DEONTIC: &[&str] = &["must", "should", "shall"];
-
-/// Verbs a note opens with when it is telling the assistant what to do: a fact opens with its
-/// subject instead.
 const TOLD: &[&str] = &[
     "read", "write", "use", "run", "keep", "make", "add", "fix", "check", "ensure", "follow",
     "include", "name", "list", "put", "start", "end", "do", "ask", "tell", "verify", "report",
@@ -84,29 +29,132 @@ const TOLD: &[&str] = &[
     "explain", "prefer", "avoid",
 ];
 
-/// The ops a span with no rule in it may keep: a new note saying how the work must be done, or
-/// opening by telling the assistant to do it, is a rule no person stated. One that lands on a note
-/// already kept is an update to it, and goes through.
-fn factual(ops: Vec<Value>, kept: &[balthasar_store::Note]) -> Vec<Value> {
-    ops.into_iter()
-        .filter(|op| {
-            let known = kept.iter().any(|n| {
-                op["id"].as_str() == Some(n.id.as_str())
-                    || op["title"]
-                        .as_str()
-                        .is_some_and(|t| n.title.eq_ignore_ascii_case(t.trim()))
-            });
-            op["op"] != "add"
-                || known
-                || !op["text"].as_str().is_some_and(|text| {
-                    let said = words(text);
-                    said.iter().any(|word| DEONTIC.contains(&word.as_str()))
-                        || said
-                            .first()
-                            .is_some_and(|word| TOLD.contains(&word.as_str()))
-                })
-        })
-        .collect()
+pub(super) fn canonical(text: &str) -> String {
+    text.trim()
+        .trim_end_matches('.')
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+pub(super) fn same_rule(a: &str, b: &str) -> bool {
+    let wording = |text: &str| {
+        let text = text.trim();
+        let text = text
+            .strip_suffix('.')
+            .unwrap_or(text)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut letters = text.chars();
+        let first = letters
+            .next()
+            .map(|c| c.to_lowercase().to_string())
+            .unwrap_or_default();
+        first + letters.as_str()
+    };
+    wording(a) == wording(b)
+}
+
+pub(super) fn unquoted(input: &str) -> Vec<&str> {
+    let mut fence = None;
+    let mut quoted = false;
+    let mut out = Vec::new();
+    for raw in input.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let start = raw.trim_start_matches(' ');
+        let marker = start
+            .chars()
+            .next()
+            .filter(|c| raw.len() - start.len() <= 3 && (*c == '`' || *c == '~'));
+        if let Some(marker) = marker {
+            let size = start.chars().take_while(|c| *c == marker).count();
+            if size >= 3 {
+                match fence {
+                    None => fence = Some((marker, size)),
+                    Some((opened, count))
+                        if opened == marker
+                            && size >= count
+                            && start[size..].trim_matches([' ', '\t']).is_empty() =>
+                    {
+                        fence = None;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+        }
+        if fence.is_some() {
+            continue;
+        }
+        let markup = line.split('<').skip(1).any(|part| {
+            part.chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '/' | '!' | '?'))
+        });
+        if line.starts_with('>')
+            || line.ends_with(':')
+            || line.starts_with('\'')
+            || line.contains([
+                '"', '“', '”', '‘', '’', '`', '«', '»', '‹', '›', '„', '‟', '‚', '‛',
+            ])
+            || line.contains(" '")
+            || markup
+        {
+            quoted = true;
+        }
+        if quoted || raw.starts_with("    ") || raw.starts_with('\t') {
+            continue;
+        }
+        out.push(line.strip_prefix("- ").unwrap_or(line));
+    }
+    out
+}
+
+pub(super) fn rule_text(line: &str) -> Option<&str> {
+    let lower = line.to_lowercase();
+    for prefix in MARKERS {
+        if lower.starts_with(prefix) {
+            return Some(
+                line[prefix.len()..]
+                    .trim()
+                    .strip_prefix("we ")
+                    .unwrap_or(line[prefix.len()..].trim()),
+            );
+        }
+    }
+    let body = line
+        .strip_prefix("we ")
+        .or_else(|| line.strip_prefix("We "))
+        .unwrap_or(line);
+    let lower = body.to_lowercase();
+    let words = words(body);
+    let standing = STANDING.iter().any(|prefix| lower.starts_with(prefix))
+        || (TOLD.contains(&words.first()?.as_str())
+            && words
+                .iter()
+                .any(|w| w == "not" || w == "never" || w == "always"))
+        || line.to_lowercase().starts_with("we use ");
+    standing.then_some(body)
+}
+
+pub(super) fn laid_down(input: &str) -> bool {
+    unquoted(input)
+        .into_iter()
+        .any(|line| rule_text(line).is_some())
+}
+
+pub(super) fn instruction(text: &str) -> bool {
+    let said = words(text);
+    laid_down(text)
+        || said
+            .iter()
+            .any(|w| ["must", "should", "shall"].contains(&w.as_str()))
+        || said.first().is_some_and(|w| TOLD.contains(&w.as_str()))
 }
 
 /// Whether an added note only restates one already kept: nearly every word of the shorter text
@@ -122,37 +170,6 @@ pub(super) fn echoes(op: &Value, kept: &[balthasar_store::Note]) -> bool {
         let shared = in_order(&new, &old);
         short >= 4 && shared * 10 >= short * 9 && (shared == short || shared * 10 >= long * 6)
     })
-}
-
-/// Ops with each pinned rule left in its own words, by id or by title, unless something is retired
-/// into it or it comes out much shorter: new words for the same rule only make every request miss
-/// the cache.
-fn kept_wording(ops: Vec<Value>, kept: &[balthasar_store::Note]) -> Vec<Value> {
-    if ops.iter().any(|op| op["op"] == "retire") {
-        return ops;
-    }
-    ops.into_iter()
-        .map(|mut op| {
-            let rule = kept.iter().find(|n| {
-                n.pinned
-                    && (op["id"].as_str() == Some(n.id.as_str())
-                        || op["title"]
-                            .as_str()
-                            .is_some_and(|t| n.title.eq_ignore_ascii_case(t.trim())))
-            });
-            let shorter = rule.is_some_and(|n| {
-                op["text"]
-                    .as_str()
-                    .is_some_and(|text| words(text).len() * 3 <= words(&n.text).len() * 2)
-            });
-            if let (Some(_), false, Some(fields)) = (rule, shorter, op.as_object_mut()) {
-                for field in ["title", "text", "description"] {
-                    fields.remove(field);
-                }
-            }
-            op
-        })
-        .collect()
 }
 
 fn words(text: &str) -> Vec<String> {

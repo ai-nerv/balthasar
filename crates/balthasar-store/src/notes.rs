@@ -17,6 +17,7 @@ pub struct Note {
     pub pinned: bool,
     pub retired: Option<Timestamp>,
     pub updated: Timestamp,
+    pub evidence: Value,
 }
 
 impl Note {
@@ -24,7 +25,7 @@ impl Note {
     #[must_use]
     pub fn fields(&self) -> Value {
         json!({ "title": self.title, "text": self.text, "description": self.description,
-                "pinned": self.pinned })
+                "pinned": self.pinned, "evidence": self.evidence })
     }
 }
 
@@ -42,6 +43,8 @@ pub struct Change {
     /// The job that proposed it, or who did.
     pub by: String,
     pub at: Timestamp,
+    pub evidence: Value,
+    pub reason: Option<String>,
 }
 
 impl Change {
@@ -49,7 +52,8 @@ impl Change {
     #[must_use]
     pub fn as_json(&self) -> Value {
         json!({ "id": self.id, "note": self.note, "op": self.op, "before": self.before,
-                "after": self.after, "at": self.at, "by": self.by, "state": self.state })
+                "after": self.after, "at": self.at, "by": self.by, "state": self.state,
+                "evidence": self.evidence, "reason": self.reason })
     }
 }
 
@@ -92,6 +96,9 @@ impl Transcript {
                 .to_owned()
         };
         let pinned = i64::from(after.and_then(|a| a["pinned"].as_bool()).unwrap_or(false));
+        let evidence = after
+            .map_or(Value::Null, |a| a["evidence"].clone())
+            .to_string();
         match (id, after) {
             (None, None) => Ok(None),
             (Some(id), None) => {
@@ -103,14 +110,15 @@ impl Transcript {
             }
             (None, Some(_)) => {
                 self.db().execute(
-                    "INSERT INTO note (title, text, description, pinned, created, updated) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                    "INSERT INTO note (title, text, description, pinned, created, updated, evidence) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
                     params![
                         field("title"),
                         field("text"),
                         field("description"),
                         pinned,
-                        at
+                        at,
+                        evidence
                     ],
                 )?;
                 Ok(Some(format!("N-{}", self.db().last_insert_rowid())))
@@ -118,14 +126,15 @@ impl Transcript {
             (Some(id), Some(_)) => {
                 self.db().execute(
                     "UPDATE note SET title = ?2, text = ?3, description = ?4, pinned = ?5, \
-                     retired = NULL, updated = ?6 WHERE n = ?1",
+                     retired = NULL, updated = ?6, evidence = ?7 WHERE n = ?1",
                     params![
                         number(id, "N-"),
                         field("title"),
                         field("text"),
                         field("description"),
                         pinned,
-                        at
+                        at,
+                        evidence
                     ],
                 )?;
                 Ok(Some(id.to_owned()))
@@ -141,8 +150,8 @@ impl Transcript {
     ) -> Result<String, StoreError> {
         let text = |held: &Option<Value>| held.as_ref().map(ToString::to_string);
         self.db().execute(
-            "INSERT INTO note_change (note, op, before, after, state, by, session, at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO note_change (note, op, before, after, state, by, session, at, evidence, reason) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 change.note,
                 change.op,
@@ -151,7 +160,9 @@ impl Transcript {
                 change.state,
                 change.by,
                 session.map(SessionId::as_str),
-                change.at
+                change.at,
+                change.evidence.to_string(),
+                change.reason
             ],
         )?;
         Ok(format!("C-{}", self.db().last_insert_rowid()))
@@ -190,6 +201,15 @@ impl Transcript {
         Ok(())
     }
 
+    /// Reject a change and retain its validation failure.
+    pub fn reject_change(&self, id: &str, reason: &str) -> Result<(), StoreError> {
+        self.db().execute(
+            "UPDATE note_change SET state = 'rejected', reason = ?2 WHERE n = ?1",
+            params![number(id, "C-"), reason],
+        )?;
+        Ok(())
+    }
+
     /// A count or cursor kept for a run, or for the project under the empty session.
     pub fn counter(&self, session: &SessionId, name: &str) -> Result<Option<u64>, StoreError> {
         Ok(self
@@ -222,7 +242,7 @@ impl Transcript {
     }
 }
 
-const NOTE: &str = "n, title, text, description, pinned, retired, updated";
+const NOTE: &str = "n, title, text, description, pinned, retired, updated, evidence";
 
 fn note_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
     Ok(Note {
@@ -233,10 +253,11 @@ fn note_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
         pinned: r.get::<_, i64>(4)? != 0,
         retired: r.get(5)?,
         updated: r.get(6)?,
+        evidence: json_of(r, 7)?,
     })
 }
 
-const CHANGE: &str = "n, note, op, before, after, state, by, at";
+const CHANGE: &str = "n, note, op, before, after, state, by, at, evidence, reason";
 
 fn change_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Change, StoreError>> {
     let parse = |held: Option<String>| {
@@ -252,6 +273,8 @@ fn change_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Change, StoreErro
         state: r.get(5)?,
         by: r.get(6)?,
         at: r.get(7)?,
+        evidence: json_of(r, 8)?,
+        reason: r.get(9)?,
         ..Change::default()
     };
     Ok(parse(before).and_then(|before| {
@@ -269,8 +292,39 @@ fn number(id: &str, prefix: &str) -> i64 {
         .unwrap_or(-1)
 }
 
+fn json_of(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Value> {
+    let text: String = row.get(index)?;
+    serde_json::from_str(&text).map_err(|why| {
+        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(why))
+    })
+}
+
+pub(crate) fn prepare(connection: &rusqlite::Connection) -> Result<(), StoreError> {
+    let transaction =
+        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)?;
+    transaction.execute_batch(SCHEMA)?;
+    for (table, name, declaration) in [
+        ("note", "evidence", "TEXT NOT NULL DEFAULT 'null'"),
+        ("note_change", "evidence", "TEXT NOT NULL DEFAULT 'null'"),
+        ("note_change", "reason", "TEXT"),
+    ] {
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+            params![table, name],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            transaction.execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN {name} {declaration}"
+            ))?;
+        }
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
 /// The notes, their change log, and the counts that pace the jobs keeping them.
-pub(crate) const SCHEMA: &str = r"
+const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS note (
   n            INTEGER PRIMARY KEY AUTOINCREMENT,
   title        TEXT NOT NULL,

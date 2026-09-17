@@ -1,5 +1,7 @@
 //! What another program may ask balthasar, and what it may not.
 
+mod applying;
+mod calendar;
 mod ceiling;
 mod dispatch;
 mod hooks;

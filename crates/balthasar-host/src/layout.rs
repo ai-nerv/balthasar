@@ -20,9 +20,6 @@ const UNNAMED: &str = "default";
 /// What a reply is assumed to need when the harness does not say.
 const REPLY: u32 = 8_192;
 
-/// How far a provider's count may sit from the estimate and still teach the factor anything.
-const PLAUSIBLE: std::ops::RangeInclusive<f64> = 0.25..=3.0;
-
 /// `layout(session, request)`: what the next request should hold.
 pub fn layout(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
     let Some(session) = session_of(request) else {
@@ -44,9 +41,9 @@ pub fn applied(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(id) = said.and_then(|s| s.as_str().or_else(|| s.get("id")?.as_str())) else {
         return Reply::refused("applied needs the layout's id");
     };
-    match confirm(at, &session, id, said.and_then(|s| s.get("usage"))) {
+    match crate::applying::confirm(at, &session, id, said.and_then(|s| s.get("usage"))) {
         Ok(()) => Reply::none(),
-        Err(why) => Reply::refused(why),
+        Err(why) => Reply::refused(why.to_string()),
     }
 }
 
@@ -80,6 +77,7 @@ fn lay_out(
     asked: &Value,
     hooks: &mut dyn Hooks,
 ) -> Result<Value, String> {
+    crate::applying::replay(at, session).map_err(|why| why.to_string())?;
     let rules = hooks.window();
     let query = asked["query"].as_str().unwrap_or_default().to_owned();
     let (model, factor, turns, summary, mut prompt) = gather(at, session, asked, &query)?;
@@ -94,7 +92,7 @@ fn lay_out(
         tight: prompt.overflows,
     };
     let caps = balthasar_buffer::budget(&rules, &ask, factor);
-    let (pinned, pinned_tokens) = crate::notes::pinned_slot(
+    let project_notes = crate::notes::projection::project(
         at,
         &mut prompt,
         (f64::from(caps.pinned) / factor) as u32,
@@ -127,7 +125,7 @@ fn lay_out(
             to: s.to,
             tokens: rules.estimate(&s.text),
         }),
-        pinned: pinned_tokens,
+        pinned: project_notes.tokens(),
         memory: if memory.ids.is_empty() {
             0
         } else {
@@ -198,21 +196,24 @@ fn lay_out(
     let slots: Vec<Value> = laid
         .slots
         .iter()
-        .map(|slot| match slot {
-            Slot::Pinned => {
-                json!({ "kind": "pinned", "text": pinned, "tokens": fix(pinned_tokens) })
+        .flat_map(|slot| {
+            if *slot == Slot::Pinned {
+                return project_notes.slots(factor);
             }
-            Slot::Summary => {
-                let s = summary.as_ref().expect("a summary slot has a summary");
-                json!({ "kind": "summary", "text": s.text, "covers": [s.from, s.to],
+            vec![match slot {
+                Slot::Pinned => unreachable!("project notes are expanded above"),
+                Slot::Summary => {
+                    let s = summary.as_ref().expect("a summary slot has a summary");
+                    json!({ "kind": "summary", "text": s.text, "covers": [s.from, s.to],
                         "tokens": fix(rules.estimate(&s.text)) })
-            }
-            Slot::Item(cursor) => json!({ "kind": "item", "cursor": cursor }),
-            Slot::Stub(cursor) => json!({ "kind": "stub", "cursor": cursor,
+                }
+                Slot::Item(cursor) => json!({ "kind": "item", "cursor": cursor }),
+                Slot::Stub(cursor) => json!({ "kind": "stub", "cursor": cursor,
                                           "text": stubs.get(cursor).cloned().unwrap_or_default() }),
-            Slot::Note => json!({ "kind": "note", "text": note }),
-            Slot::Memory => json!({ "kind": "memory", "text": memory.text,
+                Slot::Note => json!({ "kind": "note", "text": note }),
+                Slot::Memory => json!({ "kind": "memory", "text": memory.text,
                                     "tokens": fix(memory.tokens), "ids": memory.ids }),
+            }]
         })
         .collect();
     let b = laid.budget;
@@ -493,91 +494,6 @@ fn policy_slots(
     Some(out)
 }
 
-/// Record what a confirmed layout sent: its stubs stay stubs and its summary stands in for the
-/// span it covers. The provider's count corrects the model's factor.
-fn confirm(
-    at: &mut Answering<'_>,
-    session: &SessionId,
-    id: &str,
-    usage: Option<&Value>,
-) -> Result<(), String> {
-    let scrollback = at.scrollback.as_ref().ok_or("applied needs a scrollback")?;
-    let e = |e: StoreError| e.to_string();
-    let Some(proposal) = scrollback.proposal(id).map_err(e)? else {
-        return Err(format!("no layout called '{id}'"));
-    };
-    if &proposal.session != session {
-        return Err(format!("layout '{id}' was not laid out for '{session}'"));
-    }
-    let real = usage
-        .map(|u| {
-            ["input", "cache_read", "cache_write"]
-                .iter()
-                .filter_map(|k| u.get(*k).and_then(Value::as_u64))
-                .sum::<u64>()
-        })
-        .filter(|n| *n > 0);
-    if !scrollback.confirm(id, real, at.now).map_err(e)? {
-        return Ok(());
-    }
-
-    let slots = proposal.body["slots"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    let mut summarised = Vec::new();
-    let outline = scrollback.outline(session).map_err(e)?;
-    for slot in &slots {
-        match slot["kind"].as_str() {
-            Some("stub") => {
-                if let Some(cursor) = slot["cursor"].as_u64() {
-                    scrollback.mark(session, cursor, State::Masked).map_err(e)?;
-                }
-            }
-            Some("summary") => {
-                let (Some(from), Some(to)) =
-                    (slot["covers"][0].as_u64(), slot["covers"][1].as_u64())
-                else {
-                    continue;
-                };
-                for turn in &outline {
-                    if (from..=to).contains(&turn.cursor) && turn.state != State::Summarised {
-                        scrollback
-                            .mark(session, turn.cursor, State::Summarised)
-                            .map_err(e)?;
-                        summarised.push(turn.cursor);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if let Some(real) = real
-        && proposal.estimated > 0
-    {
-        let ratio = real as f64 / proposal.estimated as f64;
-        // This far off is an estimate that missed what was sent, not a model counting differently:
-        // a resumed run nobody had observed taught every later layout to count four times over.
-        if PLAUSIBLE.contains(&ratio) {
-            let next = match scrollback.measured(&proposal.model).map_err(e)? {
-                Some((old, _)) => old * 0.7 + ratio * 0.3,
-                None => ratio,
-            };
-            scrollback
-                .set_factor(&proposal.model, next.clamp(0.5, 4.0))
-                .map_err(e)?;
-        } else {
-            balthasar_model::noted!(
-                "layout: {id} came to {ratio:.1}x its estimate; not learned from"
-            );
-        }
-    }
-    // TIDE. What a summary now stands in for becomes a candidate, never a fact.
-    distil(at, session, &summarised).map_err(e)?;
-    Ok(())
-}
-
 /// Raise the factor by what the provider said, count the overflow, and hand back what the
 /// refused layout was asked with.
 fn tighten(
@@ -626,42 +542,6 @@ fn counted_in(message: &str, known: &[u64]) -> Option<u64> {
         .filter_map(|n| n.parse::<u64>().ok())
         .filter(|n| *n >= 1_000 && !known.contains(n))
         .max()
-}
-
-/// Attach a distillation witness to each turn a summary now stands in for, below the promotion
-/// floor.
-fn distil(
-    at: &mut Answering<'_>,
-    session: &SessionId,
-    cursors: &[u64],
-) -> Result<usize, StoreError> {
-    let Some(scrollback) = at.scrollback.as_ref() else {
-        return Ok(0);
-    };
-    let turns: Vec<Turn> = cursors
-        .iter()
-        .filter_map(|c| scrollback.at(session, *c).ok().flatten())
-        .collect();
-    let mut carried = 0;
-    for entry in &turns {
-        let scope = at.scope.clone();
-        let Some(id) = at.run(session)?.scratch_for(&scope, session, &entry.text)? else {
-            continue;
-        };
-        let witness = balthasar_model::Witness::new(
-            balthasar_model::WitnessId::new(format!("tide-{}-{}", session, entry.cursor)),
-            balthasar_model::WitnessKind::Distillation,
-            session.clone(),
-            at.scope.clone(),
-            entry.at,
-        )
-        .at_cursor(entry.cursor)
-        .noted("left the context window (rules, not a model)");
-        let now = at.now;
-        at.run(session)?.attach(&id, witness, now)?;
-        carried += 1;
-    }
-    Ok(carried)
 }
 
 fn session_of(request: &Request) -> Option<SessionId> {

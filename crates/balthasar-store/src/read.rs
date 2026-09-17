@@ -5,7 +5,7 @@
 
 use crate::score::{Scored, Weights, cosine, coverage, frecency, fts_query, relative, terms_of};
 use crate::{Store, StoreError, row};
-use balthasar_model::{Link, Memory, MemoryId, Privacy, Tier, Timestamp, Witness};
+use balthasar_model::{Link, Memory, MemoryId, Privacy, Tier, Timestamp, Witness, WitnessId};
 use rusqlite::{OptionalExtension, params};
 
 /// What a recall was asked for.
@@ -96,6 +96,19 @@ const CANDIDATES: usize = 500;
 const THIN: usize = 8;
 
 impl Store {
+    /// The memory already carrying this witness, regardless of its current tier.
+    pub fn witnessed_memory(&self, witness: &WitnessId) -> Result<Option<MemoryId>, StoreError> {
+        let id: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT memory FROM witness WHERE id = ?1",
+                [witness.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(id.map(MemoryId::new))
+    }
+
     /// One memory, with its witnesses and links.
     pub fn get(&self, id: &MemoryId) -> Result<Option<Memory>, StoreError> {
         let found = self

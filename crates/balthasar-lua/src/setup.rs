@@ -151,7 +151,8 @@ pub fn needs() -> Vec<Need> {
         Need {
             name: "memory".to_owned(),
             kind: Kind::Table,
-            about: "how notes improve: review, extract_every, tidy_every, checklist".to_owned(),
+            about: "how notes improve: review, extract_every, extract_bytes, tidy_every, checklist"
+                .to_owned(),
             required: false,
             default: None,
         },
@@ -296,18 +297,18 @@ mod tests {
 
     #[test]
     fn a_session_that_names_a_directory_keeps_its_own_configuration() {
+        let dir = Scratch::new("balthasar-setup", "session-directory");
+        let runtime = dir.join("run");
+        let configured = runtime.join("coordinator/given/42");
         let own = given_from(
-            Some("/run/coordinator/given/42".into()),
-            Some("/run".into()),
+            Some(configured.clone().into_os_string()),
+            Some(runtime.clone().into_os_string()),
         );
-        assert_eq!(
-            own,
-            std::path::PathBuf::from("/run/coordinator/given/42/balthasar.lua")
-        );
+        assert_eq!(own, configured.join("balthasar.lua"));
         for unnamed in [None, Some(std::ffi::OsString::new())] {
             assert_eq!(
-                given_from(unnamed, Some("/run".into())),
-                std::path::PathBuf::from("/run/balthasar/given.lua")
+                given_from(unnamed, Some(runtime.clone().into_os_string())),
+                runtime.join("balthasar/given.lua")
             );
         }
     }
