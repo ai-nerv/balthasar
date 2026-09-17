@@ -98,7 +98,7 @@ fn end(pid: u32) {
 
 #[test]
 fn a_tied_balthasar_goes_when_its_caller_is_killed() {
-    let dir = Scratch::new("balthasar-tied", "killed");
+    let dir = Scratch::new("bt", "killed");
     std::fs::create_dir_all(dir.join("run")).expect("mkdir");
     let mut caller = Caller::starting(&dir, "tied-killed", "--tied $$");
     let served = caller.served();
@@ -117,7 +117,7 @@ fn a_tied_balthasar_goes_when_its_caller_is_killed() {
 #[test]
 fn an_untied_balthasar_stays_up() {
     // The flag is opt-in: a balthasar started at a terminal is meant to outlive the command.
-    let dir = Scratch::new("balthasar-tied", "untied");
+    let dir = Scratch::new("bt", "untied");
     std::fs::create_dir_all(dir.join("run")).expect("mkdir");
     let mut caller = Caller::starting(&dir, "untied", "");
     let served = caller.served();
@@ -139,7 +139,7 @@ fn an_untied_balthasar_stays_up() {
 fn a_tie_asked_for_after_the_caller_is_already_gone_is_not_missed() {
     // `PR_SET_PDEATHSIG` watches from the moment it is set, so a caller that died between the
     // spawn and that call is a death no signal was ever sent for.
-    let dir = Scratch::new("balthasar-tied", "raced");
+    let dir = Scratch::new("bt", "raced");
     std::fs::create_dir_all(dir.join("run")).expect("mkdir");
 
     // A caller that is gone before its balthasar has finished starting.

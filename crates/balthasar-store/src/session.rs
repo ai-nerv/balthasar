@@ -141,7 +141,7 @@ impl Store {
     pub fn sessions(&self, limit: usize) -> Result<Vec<Session>, StoreError> {
         let mut statement = self.db().prepare(
             "SELECT id, name, scope, cwd, harness, opened, closed, title \
-             FROM session ORDER BY opened DESC LIMIT ?1",
+             FROM session ORDER BY opened DESC, rowid DESC LIMIT ?1",
         )?;
         let found = statement
             .query_map(params![limit as i64], |r| Ok(read(r)))?

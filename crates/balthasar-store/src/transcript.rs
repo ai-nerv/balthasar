@@ -367,7 +367,7 @@ impl Transcript {
         let mut statement = self.connection.prepare(
             "SELECT r.session, r.scope, r.cwd, r.harness, r.opened, r.closed, \
                     (SELECT count(*) FROM turn t WHERE t.session = r.session) \
-             FROM run r ORDER BY r.opened DESC LIMIT ?1",
+             FROM run r ORDER BY r.opened DESC, r.rowid DESC LIMIT ?1",
         )?;
         let found = statement
             .query_map(params![limit as i64], |r| {
@@ -531,13 +531,20 @@ fn prepare(connection: &Connection) -> Result<(), StoreError> {
     }
     connection.execute_batch(crate::laying::SCHEMA)?;
     connection.execute_batch(crate::jobs::SCHEMA)?;
-    connection.execute_batch(crate::notes::SCHEMA)?;
+    crate::effects::prepare(connection)?;
+    connection.execute_batch(crate::extraction::SCHEMA)?;
+    crate::notes::prepare(connection)?;
     Ok(())
 }
 
 /// The scrollback, as first written. Columns added later are in [`ADDED`] as well, so a file
 /// from before them is brought forward on open.
 const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS transcript_run (
+  session TEXT PRIMARY KEY,
+  run     TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS run (
   session  TEXT PRIMARY KEY,
   scope    TEXT NOT NULL,
