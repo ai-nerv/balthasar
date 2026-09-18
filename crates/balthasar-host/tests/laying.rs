@@ -452,3 +452,43 @@ fn a_rule_a_session_proposed_to_itself_is_not_laid_into_the_next_prompt() {
     );
     assert!(!jobs.contains("must start"), "and not the rule: {jobs}");
 }
+
+#[test]
+fn a_helper_rewriting_a_doubted_memory_does_not_rewrite_the_doubt_away() {
+    let session = Door::Socket(balthasar_ipc::Peer {
+        pid: 4021,
+        uid: 1000,
+        program: Some("harness".to_owned()),
+    });
+    let mut harness = Harness::new();
+    let fact = "The zq_ storage module keeps its index in index.db.";
+    let kept = harness.ask_through(&session, &mut Plain, "remember", vec![json!(fact)]);
+    assert!(kept.ok, "{:?}", kept.error);
+    harness.turn(0, 100);
+    let asked = || small_with(json!({ "query": "the storage index", "helpers": ["memory"] }));
+    let first = harness.one("layout", asked());
+    let job = first["jobs"]
+        .as_array()
+        .expect("jobs")
+        .iter()
+        .find(|j| j["kind"] == "curate")
+        .expect("a curate job")
+        .clone();
+    let id = kept.result[0]["id"].clone();
+    let said = json!({ "chosen": [id], "notes": ["REWRITTEN: the index is index.db."] });
+    harness.one(
+        "job_done",
+        json!({ "id": job["id"], "text": said.to_string() }),
+    );
+    let again = harness.one("layout", asked());
+    let memory = again["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .find(|s| s["kind"] == "memory")
+        .map(|s| s["text"].as_str().unwrap_or_default().to_owned())
+        .expect("a memory slot");
+    assert!(memory.contains("Also on record"), "{memory}");
+    assert!(memory.contains(fact), "{memory}");
+    assert!(!memory.contains("REWRITTEN"), "{memory}");
+}

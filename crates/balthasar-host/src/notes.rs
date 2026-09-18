@@ -122,9 +122,33 @@ fn ops_schema() -> Value {
                 } } } } } } } })
 }
 
-/// Whether `text` tells somebody what to do, as opposed to saying what is so.
+/// Whether `text` tells somebody what to do, as opposed to saying what is so. Wider than what may
+/// be pinned as a rule: this decides what a session is not shown, where too much costs a doubtful
+/// fact and too little lets a rule through under another name.
 pub(crate) fn instructs(text: &str) -> bool {
+    const DIRECTS: &[&str] = &[
+        "always",
+        "never",
+        "must",
+        "should",
+        "shall",
+        "rule",
+        "rules",
+        "convention",
+        "conventions",
+        "policy",
+        "required",
+        "mandatory",
+        "forbidden",
+        "prohibited",
+    ];
+    const PHRASES: &[&str] = &["do not", "don't", "from now on", "make sure", "be sure to"];
+    let lower = text.to_lowercase();
     ruling::instruction(text)
+        || PHRASES.iter().any(|phrase| lower.contains(phrase))
+        || lower
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|word| DIRECTS.contains(&word))
 }
 
 /// Counts that belong to the project rather than to a run.
