@@ -492,3 +492,37 @@ fn a_helper_rewriting_a_doubted_memory_does_not_rewrite_the_doubt_away() {
     assert!(memory.contains(fact), "{memory}");
     assert!(!memory.contains("REWRITTEN"), "{memory}");
 }
+
+#[test]
+fn a_refusal_naming_a_smaller_window_is_believed_from_then_on() {
+    // Told 200k, the session is nowhere near full by its own lights, and the provider's upstream
+    // takes 32k: tightening for a window it does not have is the same refusal again.
+    let told = || small_with(json!({ "window": 200_000, "reply": 8_000 }));
+    let mut harness = Harness::new();
+    for n in 0..12 {
+        harness.turn(n, 3_300);
+    }
+    let first = harness.one("layout", told());
+    assert_eq!(first["budget"]["window"], 200_000);
+    assert_eq!(first["fits"], true, "by the window it was told");
+    let said = "Upstream error from DeepInfra: Requested input length 41233 exceeds maximum input \
+                length 32767";
+    let tighter = harness.one("overflowed", json!({ "id": first["id"], "said": said }));
+    assert_eq!(tighter["budget"]["window"], 32_767);
+    let sent = |laid: &Value| {
+        laid["budget"]["estimated_input"].as_u64().expect("input")
+            + laid["budget"]["reply"].as_u64().expect("reply")
+    };
+    assert!(
+        sent(&tighter) <= 32_767,
+        "{}: {}",
+        sent(&tighter),
+        tighter["why"]
+    );
+    assert!(sent(&tighter) < sent(&first));
+    // And the prompt after it does not have to be refused to find out again.
+    harness.turn(12, 3_300);
+    let next = harness.one("layout", told());
+    assert_eq!(next["budget"]["window"], 32_767);
+    assert!(sent(&next) <= 32_767, "{}", next["why"]);
+}

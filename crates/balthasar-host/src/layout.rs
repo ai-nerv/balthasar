@@ -83,9 +83,11 @@ fn lay_out(
     let (model, factor, turns, summary, mut prompt) = gather(at, session, asked, &query)?;
     let ask = Ask {
         round: number(asked, "round").unwrap_or(0),
-        window: number(asked, "window")
-            .or(model.1)
-            .unwrap_or(balthasar_buffer::Window::default().size),
+        window: learned(at, session).min(
+            number(asked, "window")
+                .or(model.1)
+                .unwrap_or(balthasar_buffer::Window::default().size),
+        ),
         reply: number(asked, "reply").unwrap_or(REPLY),
         fixed: fixed(asked),
         idle_s: asked["idle_s"].as_u64(),
@@ -526,6 +528,11 @@ fn tighten(
     scrollback
         .set_factor(&proposal.model, next.clamp(0.5, 8.0))
         .map_err(e)?;
+    // Believed from here on, for this session: laying out again for a window the provider has
+    // just said it does not have is the same refusal again.
+    if let Some(limit) = limit_in(message, window, reply) {
+        scrollback.set_counter(session, LEARNED, limit).map_err(e)?;
+    }
     if let Some(mut prompt) = scrollback.prompt(session).map_err(e)? {
         prompt.overflows += 1;
         scrollback.keep_prompt(session, &prompt).map_err(e)?;
@@ -541,6 +548,32 @@ fn counted_in(message: &str, known: &[u64]) -> Option<u64> {
         .split(|c: char| !c.is_ascii_digit())
         .filter_map(|n| n.parse::<u64>().ok())
         .filter(|n| *n >= 1_000 && !known.contains(n))
+        .max()
+}
+
+/// The window a provider's refusal taught this session, or no bound at all.
+fn learned(at: &Answering<'_>, session: &SessionId) -> u32 {
+    at.scrollback
+        .as_ref()
+        .and_then(|scrollback| scrollback.counter(session, LEARNED).ok().flatten())
+        .and_then(|limit| u32::try_from(limit).ok())
+        .unwrap_or(u32::MAX)
+}
+
+/// The name a session's learned window is kept under.
+const LEARNED: &str = "window";
+
+/// The limit a refusal names, when it names one below the window this side believed in: the
+/// largest number under the provider's own count, such as `32767` in "Requested input length 35833
+/// exceeds maximum input length 32767". A catalogue can be wrong about a model, and a router can
+/// send a request to an upstream that serves it with less.
+fn limit_in(message: &str, window: u64, reply: u64) -> Option<u64> {
+    let counted = counted_in(message, &[window, reply])?;
+    let plain: String = message.chars().filter(|c| *c != ',' && *c != '_').collect();
+    plain
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|n| n.parse::<u64>().ok())
+        .filter(|n| *n >= 1_000 && *n < counted && *n < window)
         .max()
 }
 
@@ -583,5 +616,15 @@ mod tests {
         );
         assert_eq!(counted_in("context length exceeded", &[]), None);
         assert_eq!(counted_in("max 200000", &[200_000]), None);
+    }
+
+    #[test]
+    fn a_limit_a_refusal_names_is_the_number_under_its_count() {
+        let said = "Requested input length 35833 exceeds maximum input length 32767";
+        assert_eq!(limit_in(said, 200_000, 8_192), Some(32_767));
+        // The window this side already believed in teaches nothing, and neither does no number.
+        let known = "prompt is too long: 215034 tokens > 200000 maximum";
+        assert_eq!(limit_in(known, 200_000, 32_000), None);
+        assert_eq!(limit_in("context length exceeded", 200_000, 8_192), None);
     }
 }
