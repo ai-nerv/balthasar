@@ -21,6 +21,9 @@ mod coverage;
 #[path = "notes/projection.rs"]
 mod projection;
 
+#[path = "notes/plainly.rs"]
+mod plainly;
+
 #[path = "notes/standing.rs"]
 mod standing;
 

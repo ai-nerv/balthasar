@@ -116,6 +116,10 @@ pub(super) fn unquoted(input: &str) -> Vec<&str> {
 }
 
 pub(super) fn rule_text(line: &str) -> Option<&str> {
+    // A question lays nothing down, whatever word it opens with.
+    if line.trim_end().ends_with('?') {
+        return None;
+    }
     let lower = line.to_lowercase();
     for prefix in MARKERS {
         if lower.starts_with(prefix) {
@@ -138,8 +142,20 @@ pub(super) fn rule_text(line: &str) -> Option<&str> {
             && words
                 .iter()
                 .any(|w| w == "not" || w == "never" || w == "always"))
-        || line.to_lowercase().starts_with("we use ");
+        || line.to_lowercase().starts_with("we use ")
+        || obliges(&lower, &words);
     standing.then_some(body)
+}
+
+/// Whether a line lays something down wherever in it the word comes: "In this project every
+/// function name must start with zq_" is as much a rule as "Always start …", and a person does
+/// not open every rule with the word that makes it one. The whole line is still what is kept, and
+/// whose line it is, and that it is not a quotation, are settled before this is asked.
+fn obliges(lower: &str, words: &[String]) -> bool {
+    const WORDS: &[&str] = &["must", "shall", "always", "never"];
+    const PHRASES: &[&str] = &["from now on", "do not ", "don't ", "standing rule"];
+    words.iter().any(|w| WORDS.contains(&w.as_str()))
+        || PHRASES.iter().any(|phrase| lower.contains(phrase))
 }
 
 pub(super) fn laid_down(input: &str) -> bool {
