@@ -29,7 +29,8 @@ const INPUT: usize = 200_000;
 const SUMMARISE: &str = "You keep the running summary of a coding session between a person and \
 an assistant. Fold the turns given into the previous summary, if there is one, and write the \
 whole summary again. Sections: Goal; Decisions and why; State (files touched, what works, what \
-fails); Open threads and next steps; Lookup keywords -- one line of exact file paths, \
+fails -- every call that failed, what it was for and what it said); Open threads and next steps; \
+Lookup keywords -- one line of exact file paths, \
 identifiers, commands and error names someone would search the transcript for to find the \
 details again. Quote the person's requests word for word. Write absolute dates. Answer with \
 the summary alone.";
@@ -106,6 +107,94 @@ pub(crate) fn summarise(
         at.now,
     )?;
     Ok(())
+}
+
+/// What heads the calls a summary carries as they were. Looked for, too: a helper folding the last
+/// summary into the next copies this part as readily as the rest, and it is written again whole.
+const FAILED: &str = "Calls that failed in the turns summarised above, as they were made and \
+                      answered (not the summariser's words):";
+/// The most failed calls a summary carries, newest kept, and the most of each that is shown.
+const FAILED_KEPT: usize = 20;
+const FAILED_SHOWN: usize = 300;
+
+/// A summary without a list of failed calls copied into it from the last one: the heading and the
+/// lines of the list, and nothing the helper wrote before or after them.
+fn without_failures(summary: &str) -> String {
+    let heading: String = FAILED.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut listing = false;
+    let mut out = Vec::new();
+    for line in summary.lines() {
+        let plain: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if plain == heading {
+            listing = true;
+            continue;
+        }
+        if listing && (plain.starts_with("- [") || plain.starts_with('(') || plain.is_empty()) {
+            continue;
+        }
+        listing = false;
+        out.push(line);
+    }
+    out.join("\n")
+}
+
+/// A summary with the failed calls of everything it covers set under it, word for word. A failure
+/// is what stops the same thing being tried again, and a summary is somebody's account of a span:
+/// dropping a span spares its failed calls, so summarising it must not lose them either, and a
+/// span cannot be summarised around a row in the middle of it.
+fn with_failures(
+    scrollback: &balthasar_store::Transcript,
+    session: &SessionId,
+    span: (u64, u64),
+    summary: &str,
+) -> Result<String, StoreError> {
+    let own = without_failures(summary);
+    let own = own.trim_end();
+    let everything = balthasar_store::Budget {
+        tokens: usize::MAX,
+        turns: usize::MAX,
+    };
+    let rows = scrollback.read(
+        session,
+        &Want::Span {
+            from: span.0,
+            to: span.1,
+        },
+        &everything,
+    )?;
+    let failed: Vec<_> = rows
+        .turns
+        .iter()
+        .filter(|turn| turn.is_tool() && (turn.error || turn.ok == Some(false)))
+        .collect();
+    if failed.is_empty() {
+        return Ok(own.to_owned());
+    }
+    let shown = |text: &str| -> String {
+        let one: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if one.chars().count() > FAILED_SHOWN {
+            format!("{}…", one.chars().take(FAILED_SHOWN).collect::<String>())
+        } else {
+            one
+        }
+    };
+    let mut out = format!("{own}\n\n{FAILED}\n");
+    if failed.len() > FAILED_KEPT {
+        out.push_str(&format!(
+            "({} earlier ones are not listed.)\n",
+            failed.len() - FAILED_KEPT
+        ));
+    }
+    for turn in &failed[failed.len().saturating_sub(FAILED_KEPT)..] {
+        out.push_str(&format!(
+            "- [{}] {} {} -> {}\n",
+            turn.cursor,
+            turn.tool.as_deref().unwrap_or("tool"),
+            shown(turn.args.as_deref().unwrap_or_default()),
+            shown(&turn.text)
+        ));
+    }
+    Ok(out.trim_end().to_owned())
 }
 
 /// Queue a choice among what a search found for this prompt, when there is anything to choose.
@@ -348,8 +437,9 @@ fn settle(
             if scrollback.summary(session)?.is_some_and(|s| s.to >= to) || text.trim().is_empty() {
                 return Ok(true);
             }
+            let kept = with_failures(scrollback, session, (from, to), text.trim())?;
             scrollback
-                .keep_summary(session, from, to, text.trim(), at.now)
+                .keep_summary(session, from, to, &kept, at.now)
                 .map(|()| true)
         }
         "curate" => {

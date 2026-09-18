@@ -352,3 +352,107 @@ fn a_long_answer_reaches_its_summary_whole() {
     );
     assert_eq!(job["timeout_ms"], 60_000);
 }
+
+#[test]
+fn a_summary_carries_the_calls_that_failed_in_what_it_covers() {
+    let mut harness = Harness::new();
+    // A call that failed, early enough to be summarised away.
+    harness.observe(
+        json!({ "cursor": 0, "role": "user", "kind": "user", "tokens": 40,
+                            "text": "read the parser" }),
+    );
+    harness.observe(
+        json!({ "cursor": 1, "role": "assistant", "kind": "assistant",
+                            "tokens": 20, "group": 1, "text": "" }),
+    );
+    harness.observe(
+        json!({ "cursor": 2, "role": "tool", "kind": "tool_result", "tool": "read",
+                            "tokens": 20, "group": 1, "error": true,
+                            "args": "{\"path\":\"missing.rs\"}",
+                            "text": "no such file: missing.rs" }),
+    );
+    for n in 2..10 {
+        harness.talk(n, "carry on");
+    }
+    let laid = harness.one("layout", small(0, json!([])));
+    let job = laid["jobs"]
+        .as_array()
+        .expect("jobs")
+        .iter()
+        .find(|j| j["kind"] == "summarise")
+        .expect("a summarise job")
+        .clone();
+    assert!(
+        job["covers"][0].as_u64().expect("from") <= 2,
+        "{}",
+        job["covers"]
+    );
+    assert!(
+        job["covers"][1].as_u64().expect("to") >= 2,
+        "{}",
+        job["covers"]
+    );
+
+    // A helper that says nothing of it, as one is free to.
+    harness.one(
+        "job_done",
+        json!({ "id": job["id"], "text": "Goal: carry on. State: the parser is in src/parse.rs." }),
+    );
+    let kept = harness
+        .scrollback
+        .summary(&balthasar_model::SessionId::new(SESSION))
+        .expect("read")
+        .expect("a summary");
+    assert!(kept.text.starts_with("Goal: carry on."), "{}", kept.text);
+    for part in [
+        "Calls that failed",
+        "[2] read",
+        "missing.rs",
+        "no such file",
+    ] {
+        assert!(kept.text.contains(part), "{part}: {}", kept.text);
+    }
+    // Once, however often the helper copies the last summary into the next.
+    assert_eq!(kept.text.matches("Calls that failed").count(), 1);
+    let sent = harness.one("layout", small(1, json!([])));
+    let summary = slot(&sent, "summary").expect("a summary slot");
+    assert!(
+        summary["text"]
+            .as_str()
+            .expect("text")
+            .contains("missing.rs")
+    );
+
+    // Rolled forward by a helper that copies the last summary whole, failures and all.
+    for n in 10..18 {
+        harness.talk(n, "carry on");
+    }
+    let later = harness.one("layout", small(0, json!([])));
+    let next = later["jobs"]
+        .as_array()
+        .expect("jobs")
+        .iter()
+        .find(|j| j["kind"] == "summarise")
+        .expect("a second summarise job")
+        .clone();
+    let copied = format!("{}\n\nAnd then more was carried on.", kept.text);
+    harness.one("job_done", json!({ "id": next["id"], "text": copied }));
+    let rolled = harness
+        .scrollback
+        .summary(&balthasar_model::SessionId::new(SESSION))
+        .expect("read")
+        .expect("a summary");
+    assert!(rolled.to > kept.to, "{} then {}", kept.to, rolled.to);
+    assert_eq!(
+        rolled.text.matches("Calls that failed").count(),
+        1,
+        "{}",
+        rolled.text
+    );
+    assert!(rolled.text.contains("[2] read"), "{}", rolled.text);
+    assert!(
+        rolled.text.contains("And then more was carried on."),
+        "{}",
+        rolled.text
+    );
+}
