@@ -26,7 +26,13 @@ pub(super) fn selected(op: &Value, sources: &[Value]) -> Result<Vec<Value>, &'st
                 .iter()
                 .find(|s| s["cursor"] == cursor)
                 .ok_or("evidence source is missing, changed, or outside this extraction")?;
-            if !source["text"].as_str().unwrap_or_default().contains(quote) {
+            let text = source["text"].as_str().unwrap_or_default();
+            let quote = if text.contains(quote) {
+                quote
+            } else {
+                unlabelled(quote, cursor)
+            };
+            if !text.contains(quote) {
                 return Err("evidence quote is not in the original source");
             }
             let mut source = source.clone();
@@ -34,6 +40,14 @@ pub(super) fn selected(op: &Value, sources: &[Value]) -> Result<Vec<Value>, &'st
             Ok(source)
         })
         .collect()
+}
+
+/// A quote without the label the row was shown under, which is this program's and not the
+/// source's: a model copies `[4] person: ` along with the words as readily as the words alone.
+fn unlabelled(quote: &str, cursor: u64) -> &str {
+    let bare = quote.trim_start();
+    let bare = bare.strip_prefix(&format!("[{cursor}] ")).unwrap_or(bare);
+    bare.strip_prefix("person: ").unwrap_or(bare)
 }
 
 fn matching(sources: &[Value], accepts: impl Fn(&str) -> bool) -> Option<Value> {

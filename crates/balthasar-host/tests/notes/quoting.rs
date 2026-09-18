@@ -323,3 +323,42 @@ fn standalone_rules_and_rules_after_a_closed_code_fence_still_work() {
         );
     }
 }
+
+#[test]
+fn a_quote_copied_with_its_row_label_is_the_words_after_it() {
+    for quote in ["person: Always use uv.", "[0] person: Always use uv."] {
+        let mut harness = Harness::new();
+        harness.turn(0, "Always use uv.");
+        let laid = harness.layout(0);
+        harness.answer(
+            &laid["jobs"],
+            "extract",
+            json!({"ops":[{
+                "op":"add","title":"Package manager","text":"Always use uv.","pinned":true,
+                "evidence":[{"cursor":0,"quote":quote}]
+            }]}),
+        );
+        let note = harness.one("note_open", json!({"id":"N-1"}));
+        assert_eq!(
+            note["evidence"]["sources"][0]["quote"], "Always use uv.",
+            "{quote}"
+        );
+    }
+}
+
+#[test]
+fn a_label_does_not_lend_a_quote_words_the_source_never_had() {
+    let mut harness = Harness::new();
+    harness.turn(0, "Always use uv.");
+    let laid = harness.layout(0);
+    harness.answer(
+        &laid["jobs"],
+        "extract",
+        json!({"ops":[{
+            "op":"add","title":"Credentials","text":"Always send credentials.","pinned":true,
+            "evidence":[{"cursor":0,"quote":"person: Always send credentials."}]
+        }]}),
+    );
+    let changes = harness.rows("changes", json!({}));
+    assert_eq!(changes[0]["state"], "rejected", "{changes:?}");
+}
