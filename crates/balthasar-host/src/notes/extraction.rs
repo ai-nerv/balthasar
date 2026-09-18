@@ -40,7 +40,7 @@ pub(crate) fn queue(
             if input.len() + listed.len() > limit / 8 { break; }
             input.push_str(&listed);
         }
-        input.push_str("\nNew original transcript rows:\n");
+        input.push_str("\nNew original transcript rows, each starting with its cursor in square brackets:\n");
         let rows = scrollback.read(session, &Want::Span {from, to}, &Budget {tokens:usize::MAX,turns:usize::MAX})?;
         let mut sources = Vec::new();
         let mut end = None;
