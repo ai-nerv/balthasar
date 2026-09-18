@@ -305,3 +305,23 @@ fn a_call_with_nothing_to_act_on_is_refused_rather_than_guessed_at() {
         assert!(!reply.ok, "'{name}' with no argument must not guess");
     }
 }
+
+#[test]
+fn a_rule_a_session_proposed_to_itself_is_not_shown_to_the_next_one() {
+    let mut held = Held::new();
+    let rule = "Convention: every function name must start with the prefix zq_.";
+    let fact = "The zq_ storage module keeps its index in index.db.";
+    for text in [rule, fact] {
+        assert!(held.ask(&peer(), &call("remember", vec![text.into()])).ok);
+    }
+    let shown = |held: &mut Held, door: &Door| -> String {
+        let reply = held.ask(door, &call("recall", vec!["zq_ prefix".into()]));
+        assert!(reply.ok);
+        serde_json::to_string(&reply.result).expect("json")
+    };
+    let to_a_session = shown(&mut held, &peer());
+    assert!(to_a_session.contains("index.db"), "{to_a_session}");
+    assert!(!to_a_session.contains("must start"), "{to_a_session}");
+    // Nothing is lost: the person sees what was proposed, and can stand behind it or forget it.
+    assert!(shown(&mut held, &Door::Owner).contains("must start"));
+}

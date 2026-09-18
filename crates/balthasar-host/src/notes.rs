@@ -122,6 +122,11 @@ fn ops_schema() -> Value {
                 } } } } } } } })
 }
 
+/// Whether `text` tells somebody what to do, as opposed to saying what is so.
+pub(crate) fn instructs(text: &str) -> bool {
+    ruling::instruction(text)
+}
+
 /// Counts that belong to the project rather than to a run.
 fn project() -> SessionId {
     SessionId::new("")

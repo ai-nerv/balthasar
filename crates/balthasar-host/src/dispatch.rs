@@ -161,7 +161,7 @@ fn answering(
         // Shipped in the binary and identical for every session, so it answers like `verbs`.
         "client" => Reply::one(serde_json::json!(balthasar_lua::CLIENT)),
         "status" => status(at),
-        "recall" => recall(at, request),
+        "recall" => recall(at, door, request),
         "why" => why(at, request),
         "sessions" => sessions(at),
         "observe" => crate::window::observe(at, request),
@@ -211,7 +211,7 @@ fn status(at: &mut Answering<'_>) -> Reply {
 }
 
 /// Search.
-fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
+fn recall(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
     let query = request.args.first().and_then(|v| v.as_str()).unwrap_or("");
     let opts = request.args.get(1);
     let limit = opts
@@ -255,6 +255,10 @@ fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
         }
         found.sort_by(|a, b| b.score.total_cmp(&a.score));
         found.truncate(limit);
+    }
+    // The owner sees everything on record; a session is not shown a rule nobody stood behind.
+    if !matches!(door, Door::Owner) {
+        found.retain(|hit| !crate::supply::withheld(at, &hit.memory));
     }
     // Names are resolved once for the whole result set.
     let names = session_names(at);

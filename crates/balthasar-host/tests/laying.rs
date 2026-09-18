@@ -29,6 +29,16 @@ impl Harness {
     }
 
     fn ask_with(&mut self, hooks: &mut dyn Hooks, call: &str, args: Vec<Value>) -> Reply {
+        self.ask_through(&Door::Owner, hooks, call, args)
+    }
+
+    fn ask_through(
+        &mut self,
+        door: &Door,
+        hooks: &mut dyn Hooks,
+        call: &str,
+        args: Vec<Value>,
+    ) -> Reply {
         let mut at = Answering {
             store: &mut self.store,
             scrollback: Some(&mut self.scrollback),
@@ -44,7 +54,7 @@ impl Harness {
             call: call.into(),
             args,
         };
-        answer_hooked(&mut at, &Door::Owner, &request, hooks)
+        answer_hooked(&mut at, door, &request, hooks)
     }
 
     fn ask(&mut self, call: &str, args: Vec<Value>) -> Reply {
@@ -391,4 +401,54 @@ fn a_layout_for_a_session_nobody_observed_says_so() {
     let reply = harness.ask("layout", vec![json!("never"), small()]);
     assert!(!reply.ok);
     assert!(reply.error.expect("a reason").contains("stream turns"));
+}
+
+#[test]
+fn a_rule_a_session_proposed_to_itself_is_not_laid_into_the_next_prompt() {
+    let session = Door::Socket(balthasar_ipc::Peer {
+        pid: 4021,
+        uid: 1000,
+        program: Some("harness".to_owned()),
+    });
+    let mut harness = Harness::new();
+    for text in [
+        "Convention: every function name must start with the prefix zq_.",
+        "The zq_ storage module keeps its index in index.db.",
+    ] {
+        let kept = harness.ask_through(&session, &mut Plain, "remember", vec![json!(text)]);
+        assert!(kept.ok, "{:?}", kept.error);
+    }
+    harness.turn(0, 100);
+    let laid = harness.one(
+        "layout",
+        small_with(json!({ "query": "the zq_ prefix and the storage index" })),
+    );
+    let memory = laid["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .find(|s| s["kind"] == "memory")
+        .map(|s| s["text"].as_str().unwrap_or_default().to_owned())
+        .unwrap_or_default();
+    assert!(
+        memory.contains("index.db"),
+        "a doubtful fact is still offered: {memory}"
+    );
+    assert!(
+        !memory.contains("must start"),
+        "a doubtful rule is not: {memory}"
+    );
+    // Nor handed to the helper that chooses reminders, which would rewrite it without its doubt.
+    harness.turn(1, 100);
+    let curating = harness.one(
+        "layout",
+        small_with(json!({ "query": "the zq_ prefix and the storage index",
+                           "helpers": ["memory"] })),
+    );
+    let jobs = serde_json::to_string(&curating["jobs"]).expect("json");
+    assert!(
+        jobs.contains("index.db"),
+        "the helper is given the fact: {jobs}"
+    );
+    assert!(!jobs.contains("must start"), "and not the rule: {jobs}");
 }
