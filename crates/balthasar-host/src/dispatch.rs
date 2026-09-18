@@ -258,7 +258,8 @@ fn recall(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
     }
     // The owner sees everything on record; a session is not shown a rule nobody stood behind.
     if !matches!(door, Door::Owner) {
-        found.retain(|hit| !crate::supply::withheld(at, &hit.memory));
+        let standing = crate::supply::Standing::of(at);
+        found.retain(|hit| !standing.withholds(at, &hit.memory));
     }
     // Names are resolved once for the whole result set.
     let names = session_names(at);

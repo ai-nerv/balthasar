@@ -6,6 +6,9 @@ use crate::{Answering, Hooks};
 use balthasar_store::{Recall, Scored};
 use serde_json::{Value, json};
 
+mod standing;
+pub(crate) use standing::Standing;
+
 /// Told before the block, so the model can tell offered context from the conversation.
 const PREFACE: &str = "What this project knows. This is not part of the conversation:";
 
@@ -88,17 +91,9 @@ pub(crate) fn candidates(at: &mut Answering<'_>, query: &str, limit: usize) -> V
     let mut found = at.store.recall(&ask).unwrap_or_default();
     // Before anything is packed or handed to a helper to choose from: a helper rewrites what it
     // is given, and what it writes is offered without the doubt its source was kept with.
-    found.retain(|hit| !withheld(at, &hit.memory));
+    let standing = Standing::of(at);
+    found.retain(|hit| !standing.withholds(at, &hit.memory));
     found
-}
-
-/// Whether a memory is kept from a session for being a rule nobody has stood behind. A doubtful
-/// fact can be offered with a warning to check it; a doubtful rule is simply followed, so what a
-/// session proposed to itself would bind the next one past the person's review and undo.
-pub(crate) fn withheld(at: &Answering<'_>, memory: &balthasar_model::Memory) -> bool {
-    memory.tier != balthasar_model::Tier::Scratch
-        && !memory.is_assertable(at.inject_floor, at.now, true)
-        && crate::notes::instructs(&memory.text())
 }
 
 /// Pack `found` into `tokens` of room, `per_token` characters to the token.
