@@ -467,13 +467,29 @@ pub fn scroll(at: &mut Answering<'_>, request: &Request) -> Reply {
 
     match scrollback.read(&session, &want, &budget) {
         Err(why) => Reply::refused(why.to_string()),
-        Ok(held) => Reply::one(serde_json::json!({
-            "turns": held.turns,
-            "tokens": held.tokens,
-            "omitted": held.omitted,
-            "next": held.next,
-            "complete": held.is_complete(),
-        })),
+        Ok(held) => {
+            // What a model reads back, inside a window it is trying to save: what was said,
+            // and never the harness's own record of it, which is several times the size and
+            // is `replay`'s to give.
+            let turns: Vec<serde_json::Value> = held
+                .turns
+                .iter()
+                .filter_map(|turn| serde_json::to_value(turn).ok())
+                .map(|mut turn| {
+                    if let Some(fields) = turn.as_object_mut() {
+                        fields.remove("raw");
+                    }
+                    turn
+                })
+                .collect();
+            Reply::one(serde_json::json!({
+                "turns": turns,
+                "tokens": held.tokens,
+                "omitted": held.omitted,
+                "next": held.next,
+                "complete": held.is_complete(),
+            }))
+        }
     }
 }
 

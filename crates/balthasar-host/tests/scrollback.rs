@@ -498,3 +498,29 @@ fn a_replay_comes_a_page_at_a_time_when_asked() {
         "unpaged is the whole run"
     );
 }
+
+#[test]
+fn reading_history_back_carries_what_was_said_and_not_the_harnesses_own_record() {
+    // `scroll` is what a model reads, inside a window it is trying to save. The harness's record of
+    // a turn is for restoring a session and is several times the size of the text: a 23 KB tool
+    // result came back as 226 KB, which is how recovering one stubbed result filled the window.
+    let mut held = Held::new();
+    let raw = serde_json::json!({ "type": "tool", "bytes": "x".repeat(4000) });
+    held.ask(
+        "observe",
+        vec![serde_json::json!(S), turn(0, "tool", "what it said", raw)],
+    );
+
+    let read = Held::value(&held.ask(
+        "scroll",
+        vec![serde_json::json!(S), serde_json::json!({ "want": "tail" })],
+    ));
+    let turns = read["turns"].as_array().expect("turns");
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0]["text"], "what it said");
+    assert!(turns[0].get("raw").is_none(), "{}", turns[0]);
+
+    // And restoring a session still gets it, whole.
+    let replayed = Held::rows(&held.ask("replay", vec![serde_json::json!(S)]));
+    assert!(replayed[0]["raw"].as_str().expect("raw").len() > 4000);
+}
