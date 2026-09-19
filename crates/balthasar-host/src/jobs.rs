@@ -94,7 +94,7 @@ pub(crate) fn summarise(
         input.push_str(&format!("[{}] {who}: {text}\n", turn.cursor));
     }
     let spec = json!({
-        "kind": "summarise", "role": "memory", "fallback": "main",
+        "kind": "summarise", "role": "summary", "fallback": "main",
         "instruction": SUMMARISE, "input": input, "schema": null,
         "max_tokens": max_tokens.clamp(256, 8_000), "blocking": false, "timeout_ms": 60_000,
         "covers": [span.0, span.1],
@@ -220,7 +220,7 @@ pub(crate) fn curate(
         return Ok(());
     }
     let spec = json!({
-        "kind": "curate", "role": "memory", "fallback": "skip",
+        "kind": "curate", "role": "curate", "fallback": "skip",
         "instruction": CURATE,
         "input": format!("The prompt:\n{query}\n\nThe memories:\n{listed}"),
         "schema": {

@@ -146,7 +146,7 @@ fn a_finished_turn_is_read_for_notes_by_the_checklist() {
         json!([0, 2]),
         "this prompt and the turns before it"
     );
-    assert_eq!(job["role"], "memory");
+    assert_eq!(job["role"], "notes");
     assert_eq!(job["fallback"], "skip");
     assert_eq!(job["schema"]["required"], json!(["ops"]));
     let instruction = job["instruction"].as_str().expect("text");

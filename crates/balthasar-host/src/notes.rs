@@ -230,7 +230,7 @@ fn tidy(at: &Answering<'_>, session: &SessionId) -> Result<(), StoreError> {
         ));
     }
     let spec = json!({
-        "kind": "tidy", "role": "memory", "fallback": "skip", "instruction": TIDY,
+        "kind": "tidy", "role": "notes", "fallback": "skip", "instruction": TIDY,
         "input": input, "schema": ops_schema(), "max_tokens": 2_000, "blocking": false,
         "timeout_ms": 60_000,
     });

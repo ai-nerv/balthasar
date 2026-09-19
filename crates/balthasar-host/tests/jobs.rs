@@ -100,7 +100,7 @@ fn a_summary_is_asked_for_once_and_its_answer_stands_in_for_the_span() {
     assert_eq!(jobs.len(), 1, "{}", laid["why"]);
     let job = &jobs[0];
     assert_eq!(job["kind"], "summarise");
-    assert_eq!(job["role"], "memory");
+    assert_eq!(job["role"], "summary");
     assert_eq!(job["fallback"], "main");
     assert_eq!(job["blocking"], false);
     assert!(
