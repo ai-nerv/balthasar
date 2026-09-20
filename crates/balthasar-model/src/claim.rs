@@ -235,6 +235,16 @@ mod tests {
         ));
     }
 
+    /// What the rule costs, pinned so it cannot change unnoticed. Not the wanted answer: two
+    /// additive facts share enough of an opening run to read as one claim revised.
+    #[test]
+    fn two_steps_of_one_process_are_read_as_a_revision() {
+        assert!(same_claim_different_value(
+            "The build runs the linter first.",
+            "The build runs the tests after the linter."
+        ));
+    }
+
     #[test]
     fn a_correction_that_opens_with_no_still_revises() {
         assert!(same_claim_different_value(
