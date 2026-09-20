@@ -164,7 +164,7 @@ fn answering(
         "status" => status(at),
         "recall" => recall(at, door, request),
         "why" => why(at, request),
-        "sessions" => sessions(at),
+        "sessions" => sessions(at, request),
         "observe" => crate::window::observe(at, request),
         "amend" => crate::window::amend(at, request),
         "replay" => crate::window::replay(at, request),
@@ -459,9 +459,21 @@ fn disagreeing(at: &Answering<'_>, memory: &Memory) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// The runs this project has had.
-fn sessions(at: &mut Answering<'_>) -> Reply {
-    match at.store.sessions(50) {
+/// The runs this project has had. `{archived: true}` asks for the ones put away instead, which
+/// is the only way to see them: they are deliberately not in the ordinary listing.
+fn sessions(at: &mut Answering<'_>, request: &Request) -> Reply {
+    let archived = request
+        .args
+        .first()
+        .and_then(|said| said.get("archived"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let found = if archived {
+        at.store.archived_sessions(50)
+    } else {
+        at.store.sessions(50)
+    };
+    match found {
         Ok(found) => Reply::rows(
             found
                 .into_iter()
@@ -709,9 +721,14 @@ fn archive_run(
         }
     }
 
+    // And the run itself goes away, which any door may do: putting something out of reach is not
+    // removing it, and a harness that archived a run and still saw it offered would ask again.
+    let put_away = at.store.archive_session(session, Some(now)).is_ok();
+
     Reply::one(serde_json::json!({
         "archived": archived,
         "session": session.to_string(),
+        "put_away": put_away,
         // Named rather than silent, so a peer is not told something untrue by omission.
         "left_to_the_owner": left,
     }))

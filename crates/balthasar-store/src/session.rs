@@ -137,16 +137,38 @@ impl Store {
         Ok(())
     }
 
-    /// Every session in this store, newest first.
+    /// Every session still offered, newest first. An archived one is on record and not here.
     pub fn sessions(&self, limit: usize) -> Result<Vec<Session>, StoreError> {
-        let mut statement = self.db().prepare(
+        self.sessions_where("archived IS NULL", limit)
+    }
+
+    /// Every session that has been put away, newest first. What `:archives` reads.
+    pub fn archived_sessions(&self, limit: usize) -> Result<Vec<Session>, StoreError> {
+        self.sessions_where("archived IS NOT NULL", limit)
+    }
+
+    fn sessions_where(&self, held: &str, limit: usize) -> Result<Vec<Session>, StoreError> {
+        let mut statement = self.db().prepare(&format!(
             "SELECT id, name, scope, cwd, harness, opened, closed, title \
-             FROM session ORDER BY opened DESC, rowid DESC LIMIT ?1",
-        )?;
+             FROM session WHERE {held} ORDER BY opened DESC, rowid DESC LIMIT ?1"
+        ))?;
         let found = statement
             .query_map(params![limit as i64], |r| Ok(read(r)))?
             .collect::<Result<Vec<_>, _>>()?;
         found.into_iter().collect()
+    }
+
+    /// Put a run away, or bring it back: it stops being offered, and nothing of it is removed.
+    pub fn archive_session(
+        &mut self,
+        id: &SessionId,
+        at: Option<Timestamp>,
+    ) -> Result<(), StoreError> {
+        self.db().execute(
+            "UPDATE session SET archived = ?2 WHERE id = ?1",
+            params![id.as_str(), at],
+        )?;
+        Ok(())
     }
 
     /// One session by its id.

@@ -9,7 +9,7 @@
 use rusqlite::Connection;
 
 /// Every migration, in order. The index is the version it produces.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7];
 
 /// What schema a store this build writes is at.
 ///
@@ -394,6 +394,16 @@ CREATE INDEX witness_domain ON witness(domain) WHERE domain IS NOT NULL;
 const V6: &str = r#"
 CREATE INDEX relation_walk ON relation_view(from_memory, weight DESC, to_memory)
   WHERE stale_at IS NULL;
+"#;
+
+/// When a run was put away: still on record, no longer offered to be resumed.
+///
+/// A column rather than a deletion, because putting a run away and removing it are two different
+/// acts, and only the second is irreversible. Listing asks for one or the other.
+const V7: &str = r#"
+ALTER TABLE session ADD COLUMN archived INTEGER;
+
+CREATE INDEX session_archived ON session(scope, archived, opened DESC);
 "#;
 #[cfg(test)]
 mod tests {
