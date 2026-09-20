@@ -163,6 +163,7 @@ fn relation(text: &str) -> Result<LinkRelation, StoreError> {
         "supports" => Ok(LinkRelation::Supports),
         "derived_from" => Ok(LinkRelation::DerivedFrom),
         "about" => Ok(LinkRelation::About),
+        "reconciled" => Ok(LinkRelation::Reconciled),
         other => Err(StoreError::Foreign(other.to_owned())),
     }
 }

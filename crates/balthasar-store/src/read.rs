@@ -150,6 +150,38 @@ impl Store {
         found.into_iter().collect()
     }
 
+    /// Pairs of current claims that disagree, each pair once.
+    ///
+    /// Only what is still open: a claim that was superseded stopped weighing against anything
+    /// the moment its interval closed, which is why settling one needs no edge rewritten. The
+    /// edge `supersede` draws from the old claim to the new is excluded by the same condition.
+    pub fn disagreements(&self, scope: &str) -> Result<Vec<(Memory, Memory)>, StoreError> {
+        let mut statement = self.db().prepare(
+            "SELECT l.src, l.dst FROM link l \
+               JOIN memory a ON a.id = l.src \
+               JOIN memory b ON b.id = l.dst \
+             WHERE l.rel = 'contradicts' AND l.src < l.dst \
+               AND a.scope = ?1 AND b.scope = ?1 \
+               AND a.archived_at IS NULL AND a.valid_to IS NULL \
+               AND b.archived_at IS NULL AND b.valid_to IS NULL \
+               AND NOT EXISTS (SELECT 1 FROM link r WHERE r.src = l.src \
+                                 AND r.dst = l.dst AND r.rel = 'reconciled') \
+             ORDER BY l.at DESC",
+        )?;
+        let pairs: Vec<(String, String)> = statement
+            .query_map(params![scope], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        let mut found = Vec::new();
+        for (a, b) in pairs {
+            if let (Some(a), Some(b)) = (self.get(&MemoryId::new(a))?, self.get(&MemoryId::new(b))?)
+            {
+                found.push((a, b));
+            }
+        }
+        Ok(found)
+    }
+
     /// The live answer to a slot, if the store has one.
     pub fn live_slot(
         &self,

@@ -350,6 +350,43 @@ impl Store {
         Ok(())
     }
 
+    /// A person saying which of two disagreeing claims is right. `drop` stops being current, as
+    /// a correction would leave it, and `keep` recovers on its own: the contradiction query
+    /// counts only what is current.
+    pub fn settle(
+        &mut self,
+        keep: &MemoryId,
+        drop: &MemoryId,
+        now: Timestamp,
+    ) -> Result<(), StoreError> {
+        self.db().execute(
+            "UPDATE memory SET valid_to = ?2 WHERE id = ?1 AND valid_to IS NULL",
+            params![drop.as_str(), now],
+        )?;
+        self.link(keep, drop, balthasar_model::LinkRelation::Supersedes, now)?;
+        self.rescore(drop, now)?;
+        self.rescore(keep, now)?;
+        Ok(())
+    }
+
+    /// A person saying two claims do not disagree after all.
+    ///
+    /// The `contradicts` edge stays — nothing here deletes — and `reconciled` overrides it:
+    /// every query that counts a disagreement passes over a pair carrying one.
+    pub fn reconcile(
+        &mut self,
+        a: &MemoryId,
+        b: &MemoryId,
+        now: Timestamp,
+    ) -> Result<(), StoreError> {
+        for (src, dst) in [(a, b), (b, a)] {
+            self.link(src, dst, balthasar_model::LinkRelation::Reconciled, now)?;
+        }
+        self.rescore(a, now)?;
+        self.rescore(b, now)?;
+        Ok(())
+    }
+
     /// The scratch memory a session holds for this text, if any.
     ///
     /// How a turn finds its own memory. The transcript holds no memory id — it is a separate
@@ -435,7 +472,9 @@ impl Store {
         let mut statement = self.db().prepare(
             "SELECT m.confidence FROM link l JOIN memory m ON m.id = l.src \
              WHERE l.dst = ?1 AND l.rel = 'contradicts' AND m.archived_at IS NULL \
-               AND m.valid_to IS NULL",
+               AND m.valid_to IS NULL \
+               AND NOT EXISTS (SELECT 1 FROM link r WHERE r.src = l.src \
+                                 AND r.dst = l.dst AND r.rel = 'reconciled')",
         )?;
         let found = statement
             .query_map(params![id.as_str()], |r| {

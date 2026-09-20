@@ -19,6 +19,8 @@ pub enum LinkRelation {
     DerivedFrom,
     /// This one is about that one — an episode about a fact, say.
     About,
+    /// A person said these two do not disagree. Only they write it; nothing re-raises the pair.
+    Reconciled,
 }
 
 impl LinkRelation {
@@ -31,6 +33,7 @@ impl LinkRelation {
             Self::Supports => "supports",
             Self::DerivedFrom => "derived_from",
             Self::About => "about",
+            Self::Reconciled => "reconciled",
         }
     }
 }
@@ -152,9 +155,7 @@ impl Memory {
         }
     }
 
-    /// Attach evidence and recompute what it is worth.
-    ///
-    /// The only way confidence moves.
+    /// Attach evidence and recompute what it is worth. The only way confidence moves.
     pub fn witness(&mut self, witness: Witness, now: Timestamp) {
         self.witnesses.push(witness);
         self.rescore(&[], now);

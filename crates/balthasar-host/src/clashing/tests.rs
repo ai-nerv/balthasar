@@ -156,6 +156,31 @@ fn a_guess_pulls_far_less_than_a_person_does() {
     assert!(by_a_guess > 0.0, "it is still evidence");
 }
 
+/// The person's word is the end of it. A model that goes on proposing a pair somebody has
+/// already looked at and dismissed is overruled every time, and says nothing about it.
+#[test]
+fn a_pair_a_person_has_settled_is_not_raised_again() {
+    let mut held = Held::new();
+    let (a, b) = disagreeing(&mut held);
+    let said = pairs(&[(&a, &b)]);
+    settle(&mut held.at(), &said).expect("settle");
+    held.store.reconcile(&a, &b, NOW).expect("reconcile");
+    let (was_a, was_b) = (held.confidence(&a), held.confidence(&b));
+
+    settle(&mut held.at(), &said).expect("settle again");
+
+    assert!((held.confidence(&a) - was_a).abs() < 1e-9, "a moved");
+    assert!((held.confidence(&b) - was_b).abs() < 1e-9, "b moved");
+    let held_a = held.store.get(&a).expect("read").expect("memory");
+    assert!(
+        held_a
+            .links
+            .iter()
+            .any(|link| link.rel == LinkRelation::Reconciled),
+        "the person's word was overwritten"
+    );
+}
+
 #[test]
 fn an_id_the_model_invented_is_ignored() {
     let mut held = Held::new();

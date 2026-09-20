@@ -158,6 +158,16 @@ pub const SURFACE: &[Verb] = &[
         writes: true,
         about: "stop asserting something, or a run: (id, opts) -> ok",
     },
+    Verb {
+        name: "disagreements",
+        writes: false,
+        about: "claims that cannot both be true, still open: () -> [{a, b}]",
+    },
+    Verb {
+        name: "settle",
+        writes: true,
+        about: "say which of two disagreeing claims is right: (a, b, opts) -> ok",
+    },
 ];
 
 /// One verb.

@@ -120,7 +120,7 @@ pub(crate) fn settle(at: &mut Answering<'_>, text: &str) -> Result<bool, StoreEr
         let (Some(a), Some(b)) = (named(pair, "a"), named(pair, "b")) else {
             continue;
         };
-        if a == b || !live(at, &a)? || !live(at, &b)? {
+        if a == b || !live(at, &a)? || !live(at, &b)? || reconciled(at, &a, &b)? {
             continue;
         }
         at.store.link(&a, &b, LinkRelation::Contradicts, at.now)?;
@@ -158,6 +158,17 @@ fn settled(at: &mut Answering<'_>, touched: &[MemoryId]) -> Result<usize, StoreE
         }
     }
     Ok(ROUNDS)
+}
+
+/// Whether a person has already looked at this pair and said it does not disagree. Their word
+/// stands: a model that keeps proposing it is overruled every time, silently.
+fn reconciled(at: &Answering<'_>, a: &MemoryId, b: &MemoryId) -> Result<bool, StoreError> {
+    Ok(at.store.get(a)?.is_some_and(|memory| {
+        memory
+            .links
+            .iter()
+            .any(|link| link.rel == LinkRelation::Reconciled && &link.to == b)
+    }))
 }
 
 /// A model naming something archived, superseded, another project's, or invented gets nothing.

@@ -6,6 +6,7 @@ mod consolidate;
 mod context;
 mod coordinated;
 mod decay;
+mod disagree;
 pub(crate) mod distil;
 mod eval;
 mod forget;
@@ -72,6 +73,10 @@ enum What {
     Promote(promote::Args),
     /// Move a memory out of the live set, or remove it outright.
     Forget(forget::Args),
+    /// Claims that cannot both be true, still waiting on you.
+    Disagreements(disagree::ListArgs),
+    /// Say which of two disagreeing claims is right.
+    Settle(disagree::Args),
     /// Show exactly what a model would be told.
     Context(context::Args),
     /// Read a source's existing transcripts into memory.
@@ -212,6 +217,8 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Some(What::Why(args)) => ask::run(where_, &scope, &tool, args, floors),
         Some(What::Promote(args)) => promote::run(where_, &scope, &tool, args, &mut loaded),
         Some(What::Forget(args)) => forget::run(where_, &scope, &tool, args, &mut loaded),
+        Some(What::Disagreements(args)) => disagree::list(where_, &scope, &tool, args),
+        Some(What::Settle(args)) => disagree::run(where_, &scope, &tool, args, &mut loaded),
         Some(What::Distil(args)) => distil::run(where_, &scope, &tool, args, &mut loaded),
         Some(What::Context(args)) => context::run(where_, &scope, &tool, args, &mut loaded),
         Some(What::Ingest(args)) => ingest::run(where_, &scope, &tool, args, &mut loaded),
