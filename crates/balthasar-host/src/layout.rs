@@ -182,7 +182,7 @@ fn lay_out(
     if ask.round == 0
         && !curating
         && !query.trim().is_empty()
-        && crate::queue::can_run(&prompt.helpers, "memory")
+        && crate::queue::can_run(&prompt.helpers, "curate")
     {
         let room = (f64::from(caps.memory) / factor) as u32;
         crate::jobs::curate(at, session, &query, &prompt.mark, room, hooks).map_err(e)?;

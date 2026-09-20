@@ -101,7 +101,7 @@ impl Harness {
         self.one(
             "layout",
             json!({ "round": round, "window": 200_000, "reply": 8_000, "query": "carry on",
-                    "helpers": ["memory"] }),
+                    "helpers": ["notes", "curate"] }),
         )
     }
 
@@ -377,7 +377,7 @@ fn what_a_summary_will_replace_is_read_for_notes_first() {
     let laid = harness.one(
         "layout",
         json!({ "round": 1, "window": 20_000, "reply": 2_000, "fixed": 1_000,
-                "query": "carry on", "helpers": ["memory"] }),
+                "query": "carry on", "helpers": ["notes", "curate"] }),
     );
     let jobs = laid["jobs"].as_array().expect("jobs");
     let summary = jobs
@@ -721,4 +721,41 @@ fn a_plain_request_never_unpins_a_rule_by_its_title() {
         notes["pinned"][0]["title"], "Module docstrings required",
         "a plain request unpinned the rule by its title: {notes}"
     );
+}
+
+#[test]
+fn each_job_is_gated_on_the_role_it_asks_for_and_not_on_another() {
+    // A harness says which roles it can run; every job balthasar queues names one. The two are
+    // the same words or the promise means nothing — gated on a name it no longer asks for, a
+    // harness that had named a notes model kept no notes at all.
+    let ran = |helpers: Value| {
+        let mut harness = Harness::new();
+        harness.turn(0, "Always use tabs.");
+        let laid = harness.one(
+            "layout",
+            json!({ "round": 0, "window": 200_000, "reply": 8_000, "query": "carry on",
+                    "helpers": helpers }),
+        );
+        laid["jobs"]
+            .as_array()
+            .expect("jobs")
+            .iter()
+            .map(|job| job["role"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        ran(json!(["notes"])).contains(&"notes".to_owned()),
+        "a notes model keeps notes"
+    );
+    assert!(
+        !ran(json!(["summary"])).contains(&"notes".to_owned()),
+        "and a summary model alone keeps none"
+    );
+    assert!(
+        ran(json!([])).is_empty(),
+        "nothing named, nothing asked for"
+    );
+    // Curating is its own role: named or not, it is never queued under another one. That it
+    // runs when named is jobs.rs's own, which has one.
+    assert!(!ran(json!(["notes"])).contains(&"curate".to_owned()));
 }

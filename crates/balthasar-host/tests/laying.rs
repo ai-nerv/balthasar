@@ -443,7 +443,7 @@ fn a_rule_a_session_proposed_to_itself_is_not_laid_into_the_next_prompt() {
     let curating = harness.one(
         "layout",
         small_with(json!({ "query": "the zq_ prefix and the storage index",
-                           "helpers": ["memory"] })),
+                           "helpers": ["notes", "curate"] })),
     );
     let jobs = serde_json::to_string(&curating["jobs"]).expect("json");
     assert!(
@@ -465,7 +465,8 @@ fn a_helper_rewriting_a_doubted_memory_does_not_rewrite_the_doubt_away() {
     let kept = harness.ask_through(&session, &mut Plain, "remember", vec![json!(fact)]);
     assert!(kept.ok, "{:?}", kept.error);
     harness.turn(0, 100);
-    let asked = || small_with(json!({ "query": "the storage index", "helpers": ["memory"] }));
+    let asked =
+        || small_with(json!({ "query": "the storage index", "helpers": ["notes", "curate"] }));
     let first = harness.one("layout", asked());
     let job = first["jobs"]
         .as_array()

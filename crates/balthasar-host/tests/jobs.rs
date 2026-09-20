@@ -194,7 +194,7 @@ fn a_failed_job_is_tried_once_more_and_then_left() {
         vec![json!("the deploy target is fly.io"), json!({})],
     );
     harness.talk(8, "how do we deploy?");
-    let curating = harness.one("layout", small(0, json!(["memory"])));
+    let curating = harness.one("layout", small(0, json!(["notes", "curate"])));
     let blocking = curating["jobs"]
         .as_array()
         .expect("jobs")
@@ -230,7 +230,7 @@ fn every_job_has_its_own_id() {
     for n in 0..8 {
         harness.talk(n, "carry on");
     }
-    let laid = harness.one("layout", small(0, json!(["memory"])));
+    let laid = harness.one("layout", small(0, json!(["notes", "curate"])));
     let ids: Vec<&str> = laid["jobs"]
         .as_array()
         .expect("jobs")
@@ -277,7 +277,7 @@ fn memory_is_curated_once_per_prompt_by_a_helper_that_can() {
         json!({ "cursor": 1, "role": "user", "kind": "user", "tokens": 10,
                             "text": "how do we deploy?" }),
     );
-    let first = harness.one("layout", ask(0, json!(["memory"])));
+    let first = harness.one("layout", ask(0, json!(["notes", "curate"])));
     let job = first["jobs"]
         .as_array()
         .expect("jobs")
@@ -297,7 +297,7 @@ fn memory_is_curated_once_per_prompt_by_a_helper_that_can() {
         "job_done",
         json!({ "id": job["id"], "text": said.to_string() }),
     );
-    let again = harness.one("layout", ask(0, json!(["memory"])));
+    let again = harness.one("layout", ask(0, json!(["notes", "curate"])));
     let memory = slot(&again, "memory").expect("a memory slot");
     assert!(
         memory["text"]

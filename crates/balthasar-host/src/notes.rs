@@ -168,7 +168,9 @@ pub(crate) fn background(
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Ok(());
     };
-    if !can_run(helpers, "memory") {
+    // The role the extraction itself asks for, not the one it used to be filed under: a harness
+    // says which jobs it can run, and this is the job about to be queued.
+    if !can_run(helpers, "notes") {
         return Ok(());
     }
     extraction::queue(at, session, upto, keeping, false, false)?;
@@ -192,7 +194,7 @@ pub(crate) fn before_cut(
     helpers: &[String],
     keeping: &Keeping,
 ) -> Result<(), StoreError> {
-    if can_run(helpers, "memory") {
+    if can_run(helpers, "notes") {
         extraction::queue(at, session, Some(to), keeping, true, false)?;
     }
     Ok(())
