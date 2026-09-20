@@ -7,7 +7,7 @@ use crate::calendar::day;
 use crate::queue::{can_run, json_in, pending};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::SessionId;
-use balthasar_store::{Change, Job, Note, StoreError, Transcript, Turn};
+use balthasar_store::{Change, Job, Note, StoreError, Transcript};
 use serde_json::{Value, json};
 
 mod authorization;
@@ -31,6 +31,8 @@ pub struct Keeping {
     pub tidy_every: u32,
     /// Background rounds between sweeps for claims that disagree.
     pub contradict_every: u32,
+    /// Background rounds between asking a model what a run should be called.
+    pub title_every: u32,
     /// What an extraction works through.
     pub checklist: String,
 }
@@ -43,6 +45,7 @@ impl Default for Keeping {
             extract_bytes: 100_000,
             tidy_every: 10,
             contradict_every: 20,
+            title_every: 6,
             checklist: CHECKLIST.to_owned(),
         }
     }
@@ -72,6 +75,7 @@ impl Keeping {
             extract_bytes: count("extract_bytes", base.extract_bytes).clamp(4_096, 1_000_000),
             tidy_every: count("tidy_every", base.tidy_every),
             contradict_every: count("contradict_every", base.contradict_every),
+            title_every: count("title_every", base.title_every),
             checklist: said
                 .get("checklist")
                 .and_then(Value::as_str)
@@ -175,6 +179,8 @@ pub(crate) fn background(
     // Its own role and its own cadence, and nothing to do with notes: what it reads is the
     // project's memories, not the transcript.
     crate::clashing::queue(at, session, helpers, keeping.contradict_every)?;
+    // What the run should be called, which is the summariser's job and not the notes'.
+    crate::titling::queue(at, session, helpers, keeping.title_every)?;
     // The role the extraction itself asks for, not the one it used to be filed under: a harness
     // says which jobs it can run, and this is the job about to be queued.
     if !can_run(helpers, "notes") {
@@ -205,21 +211,6 @@ pub(crate) fn before_cut(
         extraction::queue(at, session, Some(to), keeping, true, false)?;
     }
     Ok(())
-}
-
-/// One turn as a helper reads it.
-fn line(turn: &Turn, limit: usize) -> String {
-    let who = match (turn.role.as_str(), turn.kind.as_str(), turn.tool.as_deref()) {
-        (_, _, Some(tool)) => format!("tool ({tool})"),
-        ("user", "from", _) => "another agent".to_owned(),
-        ("user", _, _) => "person".to_owned(),
-        (role, _, _) => role.to_owned(),
-    };
-    let text: String = match &turn.stub {
-        Some(stub) if turn.text.len() > limit => stub.clone(),
-        _ => turn.text.chars().take(limit).collect(),
-    };
-    format!("[{}] {who}: {text}\n", turn.cursor)
 }
 
 /// Queue a tidy-up of every live note, saying what the pinned ones cost.

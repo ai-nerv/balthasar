@@ -128,6 +128,48 @@ impl Store {
         Ok(())
     }
 
+    /// Say what a session turned out to be about, over the top of whatever it said before.
+    ///
+    /// For a model, so it is refused on a run a person has named: the first thing asked is a
+    /// poor title — four runs opened with "hi" are four runs called "hi" — but a name somebody
+    /// typed is the answer, not a guess to be improved on.
+    pub fn retitle_session(&mut self, id: &SessionId, title: &str) -> Result<bool, StoreError> {
+        let trimmed: String = title.trim().chars().take(72).collect();
+        if trimmed.is_empty() {
+            return Ok(false);
+        }
+        let changed = self.db().execute(
+            "UPDATE session SET title = ?2 \
+             WHERE id = ?1 AND (title_pinned IS NULL OR title_pinned = 0)",
+            params![id.as_str(), trimmed],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Whether a person has named this run themselves.
+    pub fn is_named(&self, id: &SessionId) -> Result<bool, StoreError> {
+        let named: Option<i64> = self
+            .db()
+            .query_row(
+                "SELECT title_pinned FROM session WHERE id = ?1",
+                params![id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(named.unwrap_or(0) != 0)
+    }
+
+    /// The name a person gave this run. Nothing overwrites it afterwards.
+    pub fn rename_session(&mut self, id: &SessionId, title: &str) -> Result<(), StoreError> {
+        let trimmed: String = title.trim().chars().take(72).collect();
+        self.db().execute(
+            "UPDATE session SET title = ?2, title_pinned = 1 WHERE id = ?1",
+            params![id.as_str(), trimmed],
+        )?;
+        Ok(())
+    }
+
     /// Record that a session has ended.
     pub fn close_session(&mut self, id: &SessionId, at: Timestamp) -> Result<(), StoreError> {
         self.db().execute(

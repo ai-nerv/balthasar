@@ -14,6 +14,7 @@ mod queue;
 mod saying;
 mod settling;
 mod supply;
+mod titling;
 mod verbs;
 mod window;
 

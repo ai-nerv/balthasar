@@ -380,6 +380,19 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
         },
         _ => None,
     };
+    // For the same reason: this writes to the session table, not to the scrollback.
+    let retitled = match text {
+        Some(text) if job.kind == "retitle" => match crate::titling::settle(at, &session, text) {
+            Ok(settled) => Some(settled),
+            Err(why) => return Reply::refused(why.to_string()),
+        },
+        _ => None,
+    };
+    let already = Already {
+        curated: curated.as_ref(),
+        clashed,
+        retitled,
+    };
     let keeping = hooks.memory();
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Reply::refused("jobs need a scrollback");
@@ -403,7 +416,7 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
                     && let Err(reason) = crate::notes::extraction::validate(text) {
                     return retry_or_fail(at, &current, Some(&json!({"failed":reason,"text":text,"usage":said["usage"],"model":said["model"]})));
                 }
-                if !settle(at, &session, &current, text, &keeping, curated.as_ref(), clashed)? {
+                if !settle(at, &session, &current, text, &keeping, &already)? {
                     return retry_or_fail(at, &current, Some(&json!({"failed":"source evidence changed or note operations were rejected","text":text,"usage":said["usage"],"model":said["model"]})));
                 }
                 if current.kind == "extract" && current.context["coverage"]["version"] == 1 {
@@ -424,6 +437,13 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
     }
 }
 
+/// What was settled before the transcript was locked, for the arms that only have to report it.
+struct Already<'a> {
+    curated: Option<&'a Value>,
+    clashed: Option<bool>,
+    retitled: Option<bool>,
+}
+
 /// Put what a job wrote where it belongs.
 fn settle(
     at: &Answering<'_>,
@@ -431,12 +451,13 @@ fn settle(
     job: &Job,
     text: &str,
     keeping: &crate::Keeping,
-    curated: Option<&Value>,
-    clashed: Option<bool>,
+    already: &Already<'_>,
 ) -> Result<bool, StoreError> {
     match job.kind.as_str() {
-        // Already settled above, against the memory store.
-        "contradict" => Ok(clashed.unwrap_or(false)),
+        // Both of these were settled before the transcript was locked, because they write to
+        // the memory store rather than to it.
+        "contradict" => Ok(already.clashed.unwrap_or(false)),
+        "retitle" => Ok(already.retitled.unwrap_or(false)),
         "summarise" => {
             let (Some(from), Some(to)) = (job.context["from"].as_u64(), job.context["to"].as_u64())
             else {
@@ -461,7 +482,7 @@ fn settle(
             let Some(mut prompt) = scrollback.prompt(session)? else {
                 return Ok(true);
             };
-            if let Some(kept) = curated
+            if let Some(kept) = already.curated
                 && Some(prompt.mark.as_str()) == job.context["mark"].as_str()
             {
                 prompt.memory = Some(kept.clone());

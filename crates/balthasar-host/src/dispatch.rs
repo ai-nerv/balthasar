@@ -165,6 +165,7 @@ fn answering(
         "recall" => recall(at, door, request),
         "why" => why(at, request),
         "sessions" => sessions(at, request),
+        "rename" => rename(at, request),
         "observe" => crate::window::observe(at, request),
         "amend" => crate::window::amend(at, request),
         "replay" => crate::window::replay(at, request),
@@ -457,6 +458,25 @@ fn disagreeing(at: &Answering<'_>, memory: &Memory) -> Vec<serde_json::Value> {
             })
         })
         .collect()
+}
+
+/// Name a run. A person's name for it, so nothing after this overwrites it.
+fn rename(at: &mut Answering<'_>, request: &Request) -> Reply {
+    let said = |at: usize| request.args.get(at).and_then(|v| v.as_str());
+    let (Some(session), Some(title)) = (said(0), said(1)) else {
+        return Reply::refused("rename needs a session and a name");
+    };
+    if title.trim().is_empty() {
+        return Reply::refused("a name has to say something");
+    }
+    let session = SessionId::new(session);
+    match at.store.rename_session(&session, title) {
+        Ok(()) => Reply::one(serde_json::json!({
+            "session": session.to_string(),
+            "title": title.trim(),
+        })),
+        Err(why) => Reply::refused(why.to_string()),
+    }
 }
 
 /// The runs this project has had. `{archived: true}` asks for the ones put away instead, which

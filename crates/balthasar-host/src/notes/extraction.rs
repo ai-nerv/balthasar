@@ -1,7 +1,8 @@
 //! Bounded whole-row extraction, visible failures, and completion shape validation.
 
-use super::{EXTRACT, Keeping, day, line, ops_schema, provenance};
+use super::{EXTRACT, Keeping, day, ops_schema, provenance};
 use crate::Answering;
+use crate::queue::line;
 use balthasar_model::SessionId;
 use balthasar_store::{Budget, JobState, StoreError, Transcript, Want};
 use serde_json::{Value, json};
