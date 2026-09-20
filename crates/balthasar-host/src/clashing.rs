@@ -43,8 +43,7 @@ fn project() -> SessionId {
 }
 
 /// Queue a sweep when one is due, there is enough to sweep, and the set has changed since the
-/// last one. Nothing here is urgent: a contradiction found a few turns late was already sitting
-/// there unnoticed.
+/// last. Nothing here is urgent: one found a few turns late was already sitting there unnoticed.
 pub(crate) fn queue(
     at: &Answering<'_>,
     session: &SessionId,
@@ -73,7 +72,10 @@ pub(crate) fn queue(
     }
     let spec = json!({
         "kind": "contradict", "role": "contradict", "fallback": "skip",
-        "instruction": INSTRUCTION, "input": input, "max_tokens": 1_000,
+        "instruction": INSTRUCTION, "input": input,
+        // No reasoning: allowed to, it fills any budget — 999 of 1000, 3120 of 3000 — and
+        // answers nothing either time.
+        "max_tokens": 1_000,
         "blocking": false, "timeout_ms": 60_000,
         "schema": { "type": "object", "required": ["pairs"], "properties": {
             "pairs": { "type": "array", "items": { "type": "object",
@@ -160,8 +162,7 @@ fn settled(at: &mut Answering<'_>, touched: &[MemoryId]) -> Result<usize, StoreE
     Ok(ROUNDS)
 }
 
-/// Whether a person has already looked at this pair and said it does not disagree. Their word
-/// stands: a model that keeps proposing it is overruled every time, silently.
+/// Whether a person has settled this pair already. Their word stands, silently.
 fn reconciled(at: &Answering<'_>, a: &MemoryId, b: &MemoryId) -> Result<bool, StoreError> {
     Ok(at.store.get(a)?.is_some_and(|memory| {
         memory
