@@ -60,6 +60,9 @@ pub(crate) fn queue(
         let Some(to) = end else { return Ok(()) };
         let spec = json!({"kind":"extract","role":"notes","fallback":"skip",
             "instruction":format!("{EXTRACT}\n\n{}", keeping.checklist),"input":input,"schema":ops_schema(),
+            // Reading a whole transcript for what is worth keeping is work, not a lookup: with
+            // nothing to think with, a model answers `{"ops": []}` in six tokens every time.
+            "thinking":"low",
             "max_tokens":2_000,"blocking":false,"timeout_ms":60_000,"covers":[from,to]});
         let context = json!({"from":from,"to":to,"cut":cut,"coverage":{"version":1,"from":from,"to":to},
             "provenance":{"version":1,"sources":sources}});

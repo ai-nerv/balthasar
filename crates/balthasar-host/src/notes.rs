@@ -239,7 +239,8 @@ fn tidy(at: &Answering<'_>, session: &SessionId) -> Result<(), StoreError> {
         ));
     }
     let spec = json!({
-        "kind": "tidy", "role": "notes", "fallback": "skip", "instruction": TIDY,
+        // As extraction: judging a whole set of notes is work, not a lookup.
+        "kind": "tidy", "role": "notes", "fallback": "skip", "instruction": TIDY, "thinking": "low",
         "input": input, "schema": ops_schema(), "max_tokens": 2_000, "blocking": false,
         "timeout_ms": 60_000,
     });
