@@ -371,6 +371,15 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
         Some(text) if job.kind == "curate" => curation(at, &job, text, hooks),
         _ => None,
     };
+    // Before the transcript is locked, because this one writes to the memory store rather than
+    // to the scrollback and the atomic block holds `at` by a shared reference.
+    let clashed = match text {
+        Some(text) if job.kind == "contradict" => match crate::clashing::settle(at, text) {
+            Ok(settled) => Some(settled),
+            Err(why) => return Reply::refused(why.to_string()),
+        },
+        _ => None,
+    };
     let keeping = hooks.memory();
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Reply::refused("jobs need a scrollback");
@@ -394,7 +403,7 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
                     && let Err(reason) = crate::notes::extraction::validate(text) {
                     return retry_or_fail(at, &current, Some(&json!({"failed":reason,"text":text,"usage":said["usage"],"model":said["model"]})));
                 }
-                if !settle(at, &session, &current, text, &keeping, curated.as_ref())? {
+                if !settle(at, &session, &current, text, &keeping, curated.as_ref(), clashed)? {
                     return retry_or_fail(at, &current, Some(&json!({"failed":"source evidence changed or note operations were rejected","text":text,"usage":said["usage"],"model":said["model"]})));
                 }
                 if current.kind == "extract" && current.context["coverage"]["version"] == 1 {
@@ -423,8 +432,11 @@ fn settle(
     text: &str,
     keeping: &crate::Keeping,
     curated: Option<&Value>,
+    clashed: Option<bool>,
 ) -> Result<bool, StoreError> {
     match job.kind.as_str() {
+        // Already settled above, against the memory store.
+        "contradict" => Ok(clashed.unwrap_or(false)),
         "summarise" => {
             let (Some(from), Some(to)) = (job.context["from"].as_u64(), job.context["to"].as_u64())
             else {

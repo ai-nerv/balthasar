@@ -3,6 +3,7 @@
 mod applying;
 mod calendar;
 mod ceiling;
+mod clashing;
 mod dispatch;
 mod hooks;
 mod jobs;

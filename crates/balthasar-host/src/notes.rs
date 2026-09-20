@@ -29,6 +29,8 @@ pub struct Keeping {
     pub extract_bytes: u32,
     /// Extractions between tidy-ups.
     pub tidy_every: u32,
+    /// Background rounds between sweeps for claims that disagree.
+    pub contradict_every: u32,
     /// What an extraction works through.
     pub checklist: String,
 }
@@ -40,6 +42,7 @@ impl Default for Keeping {
             extract_every: 1,
             extract_bytes: 100_000,
             tidy_every: 10,
+            contradict_every: 20,
             checklist: CHECKLIST.to_owned(),
         }
     }
@@ -68,6 +71,7 @@ impl Keeping {
             extract_every: count("extract_every", base.extract_every),
             extract_bytes: count("extract_bytes", base.extract_bytes).clamp(4_096, 1_000_000),
             tidy_every: count("tidy_every", base.tidy_every),
+            contradict_every: count("contradict_every", base.contradict_every),
             checklist: said
                 .get("checklist")
                 .and_then(Value::as_str)
@@ -168,6 +172,9 @@ pub(crate) fn background(
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Ok(());
     };
+    // Its own role and its own cadence, and nothing to do with notes: what it reads is the
+    // project's memories, not the transcript.
+    crate::clashing::queue(at, session, helpers, keeping.contradict_every)?;
     // The role the extraction itself asks for, not the one it used to be filed under: a harness
     // says which jobs it can run, and this is the job about to be queued.
     if !can_run(helpers, "notes") {

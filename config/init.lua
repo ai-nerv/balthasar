@@ -90,8 +90,13 @@ balthasar.load("sections.lua")
 --   extract_every = 1,     -- user turns between extractions
 --   extract_bytes = 100000,-- input bytes per extraction (4096..1000000)
 --   tidy_every    = 10,    -- extractions between tidy-ups (merge duplicates, retire stale)
+--   contradict_every = 20, -- rounds between sweeps for claims that cannot both be true
 --   checklist     = nil,   -- replace the shipped reflection checklist with your own text
 -- }
+--
+-- The sweep asks the harness's `contradict` helper to name pairs of remembered claims that
+-- disagree, and links them. It writes no claim and changes none: the link's force is the
+-- contradicting claim's own confidence, so what a model believes weakly pulls weakly.
 
 -- What a masked tool result says instead of itself.
 --

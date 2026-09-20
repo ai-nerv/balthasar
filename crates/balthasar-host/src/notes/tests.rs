@@ -43,4 +43,9 @@ fn memory_settings_fall_back_to_the_shipped_ones() {
         keeping.tidy_every, 10,
         "zero would tidy after every extraction"
     );
+    assert_eq!(keeping.contradict_every, 20);
+    assert_eq!(
+        Keeping::read(Some(&json!({ "contradict_every": 3 }))).contradict_every,
+        3
+    );
 }

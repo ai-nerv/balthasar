@@ -381,6 +381,7 @@ fn why(at: &mut Answering<'_>, request: &Request) -> Reply {
     match held {
         Ok(Some(memory)) => {
             let names = session_names(at);
+            let against = disagreeing(at, &memory);
             let quoted: Vec<serde_json::Value> = memory
                 .witnesses
                 .iter()
@@ -416,11 +417,33 @@ fn why(at: &mut Answering<'_>, request: &Request) -> Reply {
                 })).collect::<Vec<_>>(),
                 // What the witnesses actually saw, when the scrollback still has it.
                 "quoted": quoted,
+                // What is pulling the number down, which is otherwise nowhere in this answer.
+                "against": against,
             }))
         }
         Ok(None) => Reply::refused(format!("no memory called '{id}'")),
         Err(why) => Reply::refused(why.to_string()),
     }
+}
+
+/// The live claims that cannot both be true with this one, and how sure each of them is.
+///
+/// Each is what took the number down, by that much of its own confidence.
+fn disagreeing(at: &Answering<'_>, memory: &Memory) -> Vec<serde_json::Value> {
+    memory
+        .links
+        .iter()
+        .filter(|link| link.rel == balthasar_model::LinkRelation::Contradicts)
+        .filter_map(|link| at.store.get(&link.to).ok().flatten())
+        .filter(|other| other.archived_at.is_none() && other.temporal.is_live())
+        .map(|other| {
+            serde_json::json!({
+                "id": other.id.to_string(),
+                "text": other.text(),
+                "confidence": other.confidence,
+            })
+        })
+        .collect()
 }
 
 /// The runs this project has had.
