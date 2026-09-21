@@ -15,9 +15,11 @@ balthasar-ipc.workspace = true
 balthasar-model.workspace = true
 balthasar-store.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 balthasar-lua.workspace = true
+rusqlite.workspace = true
 
 [lints]
 workspace = true

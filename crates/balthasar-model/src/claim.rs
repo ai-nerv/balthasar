@@ -101,10 +101,31 @@ const GRAMMAR: &[&str] = &[
 /// at 0.813 and a claim beside its own replacement at 0.801.
 #[must_use]
 pub fn same_claim(a: &str, b: &str) -> bool {
-    if same_claim_different_value(a, b) || substituted(a, b) {
+    if denies(a, b) || same_claim_different_value(a, b) || substituted(a, b) {
         return false;
     }
     claim_overlap(a, b) >= SAME_CLAIM
+}
+
+/// Words that make a claim say the opposite thing, rather than say it differently.
+///
+/// They stay in [`GRAMMAR`], because two claims that are *both* negative share them for free;
+/// what cannot be free is one claim having one and the other not.
+const NEGATORS: &[&str] = &["not", "no", "never", "none", "nor", "without", "cannot"];
+
+/// Whether one of these claims denies what the other asserts.
+///
+/// Checked before overlap, and on purpose: negation is the one word that can leave two claims
+/// reading almost identically while they cannot both be true. Dropping it as phrasing filed a
+/// person's correction as agreement with the thing they were correcting.
+#[must_use]
+fn denies(a: &str, b: &str) -> bool {
+    let negative = |text: &str| {
+        crate::normalised(text)
+            .split_whitespace()
+            .any(|word| NEGATORS.contains(&word))
+    };
+    negative(a) != negative(b)
 }
 
 /// Whether each claim says something the other does not.
@@ -172,6 +193,57 @@ fn stem(word: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The worst thing a memory can do with a correction is file it as agreement.
+    #[test]
+    fn a_claim_and_its_denial_are_not_one_claim() {
+        for (said, denied) in [
+            (
+                "Deploys go out on Fridays.",
+                "Deploys never go out on Fridays.",
+            ),
+            (
+                "The cache is cleared on deploy.",
+                "The cache is not cleared on deploy.",
+            ),
+            (
+                "We run the linter in CI.",
+                "We do not run the linter in CI.",
+            ),
+            (
+                "Migrations are reversible.",
+                "No migrations are reversible.",
+            ),
+        ] {
+            assert!(
+                !same_claim(said, denied),
+                "`{denied}` was taken as another way of saying `{said}`"
+            );
+        }
+    }
+
+    /// And the words that do that must still be free where they are not the difference.
+    #[test]
+    fn phrasing_words_are_still_shared_for_free() {
+        assert!(same_claim(
+            "we always run the linter in CI",
+            "we always run the linter in ci"
+        ));
+        assert!(same_claim(
+            "the release never ships without a changelog",
+            "a release never ships without the changelog"
+        ));
+    }
+
+    /// What the rule costs, pinned so it cannot change unnoticed. Not the wanted answer: two
+    /// additive facts share enough of an opening run to read as one claim revised.
+    #[test]
+    fn two_steps_of_one_process_are_read_as_a_revision() {
+        assert!(same_claim_different_value(
+            "The build runs the linter first.",
+            "The build runs the tests after the linter."
+        ));
+    }
 
     #[test]
     fn a_correction_that_opens_with_no_still_revises() {

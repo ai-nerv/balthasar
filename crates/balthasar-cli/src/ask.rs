@@ -192,5 +192,6 @@ fn relation(rel: LinkRelation) -> &'static str {
         LinkRelation::Supports => "supported by",
         LinkRelation::DerivedFrom => "distilled from",
         LinkRelation::About => "about",
+        LinkRelation::Reconciled => "agreed with",
     }
 }

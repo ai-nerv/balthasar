@@ -60,21 +60,62 @@ balthasar.load("sections.lua")
 
 -- ------------------------------------------------------------------ the window
 
+-- How a request is laid out (the `layout` verb). Every number is a share of the room -- the
+-- window less the fixed items (system prompt, tool schemas) and the reply -- so the same rules
+-- fit a 32k model and a 1M one. The values below are the shipped defaults.
+--
+-- balthasar.window = {
+--   shares = { memory = 0.05, pinned = 0.03, summary = 0.08 },  -- the rest is the conversation
+--   prune_at   = 0.70,   -- start stubbing old tool results
+--   compact_at = 0.85,   -- ask for a summary of the oldest turns
+--   compact_to = 0.50,   -- ...enough to bring the conversation back to half
+--   warn_at    = 0.75,   -- tell the main model it is getting full, so it can save notes
+--   keep_turns   = 2,    -- the last N user turns stay word for word
+--   keep_results = 3,    -- ...and the last N tool results
+--   stub_over    = 1500, -- only results bigger than this are worth stubbing
+--   prune_min    = 0.10, -- stub only when that frees this share: in batches, for the cache
+--   max_compactions_per_prompt = 3,
+--   estimate_chars_per_token   = 4,  -- balthasar's own estimates; corrected per model
+--   cache_ttl_s = 300,   -- past this idle, the provider's cache is gone and stubbing is free
+--   warning = "(the conversation is getting long: save anything you will need later to your notes now)",
+--   policy = nil,        -- function(budget, items) -> { slots = {...}, why = "..." }
+-- }
+
+-- How notes are kept (Letta-style). Pinned notes are in every request; the rest are listed by
+-- a one-line description until the model opens one. A helper model (the harness's `memory`
+-- helper) extracts them in the background; every change is logged and can be undone.
+--
+-- balthasar.memory = {
+--   review        = false, -- true: changes wait until the main model approves them
+--   extract_every = 1,     -- user turns between extractions
+--   extract_bytes = 100000,-- input bytes per extraction (4096..1000000)
+--   tidy_every    = 10,    -- extractions between tidy-ups (merge duplicates, retire stale)
+--   contradict_every = 20, -- rounds between sweeps for claims that cannot both be true
+--   checklist     = nil,   -- replace the shipped reflection checklist with your own text
+-- }
+--
+-- The sweep asks the harness's `contradict` helper to name pairs of remembered claims that
+-- disagree, and links them. It writes no claim and changes none: the link's force is the
+-- contradicting claim's own confidence, so what a model believes weakly pulls weakly.
+
 -- What a masked tool result says instead of itself.
 --
 -- Masking is tried before summarising, always: it is free, it is reversible because the text
--- is still in scratch, and tool output is most of a coding session's window. Only the tool's
--- author knows what a useful stub says, so a tool with no handler here is left alone -- an
--- uninformative stub is worse than the output it replaced.
+-- is still in scratch, and tool output is most of a coding session's window. A handler here
+-- overrides; returning nil hands the row to the tool's own stub (casper's `brief`, in
+-- `item.stub`), and a tool that said nothing gets "`tool` result elided (~N tokens)".
 --
+-- `item` is { cursor, tool, tokens, kind, stub, handle, error }; `tokens` is always a number.
 -- Keyed, so re-reading this file replaces rather than accumulating.
 
 balthasar.mask["shell"] = function(item)
-  return ("`shell` output elided (~%d tokens) -- run it again if you need it"):format(item.tokens)
+  if item.stub then return nil end
+  return ("`shell` output elided (~%d tokens) -- run it again if you need it"):format(item.tokens or 0)
 end
 
 balthasar.mask["read"] = function(item)
-  return ("read a file (~%d tokens) -- it is still on disk, read it again if you need it"):format(item.tokens)
+  if item.stub then return nil end
+  return ("read a file (~%d tokens) -- it is still on disk, read it again if you need it"):format(item.tokens or 0)
 end
 
 -- ------------------------------------------------------------------ gates

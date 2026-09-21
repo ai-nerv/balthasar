@@ -5,13 +5,21 @@
 //! removes a row lives in [`purge`]. The partial unique index in the schema makes two
 //! simultaneously-true answers to one slot impossible at the database level.
 
+mod atomic;
+mod binding;
 mod collide;
 mod decay;
+mod effects;
 mod entity;
 mod episode;
 mod export;
+mod extraction;
+mod jobs;
+mod laid;
+mod laying;
 mod layout;
 mod mint;
+mod notes;
 mod paths;
 mod purge;
 mod read;
@@ -28,10 +36,15 @@ mod usage;
 mod write;
 
 pub use decay::{Faded, Weakened};
+pub use effects::{LayoutEffect, LayoutTarget};
 pub use entity::{Entity, Kind as EntityKind, extract as entities_in, rarity};
 pub use episode::Episode;
 pub use export::Row as TrainingRow;
+pub use extraction::ExtractionProgress;
+pub use jobs::{Job, JobState};
+pub use laid::{Prompt, Proposal, Summary};
 pub use mint::mint;
+pub use notes::{Change, Note};
 pub use paths::{
     HOME, Tool, data_dir, home_of, make_home, project_home, run_dir_in, scope_of, scope_path,
     session_dir, session_dir_in, session_path, tools_in,

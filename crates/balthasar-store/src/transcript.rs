@@ -120,9 +120,39 @@ pub struct Turn {
     /// and revised when the result arrives.
     #[serde(default)]
     pub revisions: u32,
+    /// The cursor of the assistant entry a tool row belongs to. A group is kept, stubbed,
+    /// summarised or dropped whole; `None` makes the turn a group of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<u64>,
+    /// What the tool said to show in place of its result, when it said anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stub: Option<String>,
+    /// How to get the full result back again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+    /// Never stubbed or dropped.
+    #[serde(default)]
+    pub keep: bool,
+    /// The tool call failed.
+    #[serde(default)]
+    pub error: bool,
 }
 
 impl Turn {
+    /// Which group this turn is sent with: its own cursor when the harness named none.
+    #[must_use]
+    pub fn unit(&self) -> u64 {
+        self.group.unwrap_or(self.cursor)
+    }
+
+    /// Whether this is a tool's row rather than something a person or the model said.
+    #[must_use]
+    pub fn is_tool(&self) -> bool {
+        self.role == "tool"
+            || matches!(self.kind.as_str(), "tool" | "tool_result")
+            || (self.tool.is_some() && self.role != "assistant" && self.role != "user")
+    }
+
     /// What this turn actually costs to send, given its state. A masked turn costs what its
     /// replacement costs rather than nothing: the stub still occupies room.
     #[must_use]
@@ -191,7 +221,7 @@ impl Transcript {
         // likely place for a secret to be sitting. A freed page SQLite has not zeroed keeps it.
         connection.pragma_update(None, "secure_delete", true)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
-        connection.execute_batch(SCHEMA)?;
+        prepare(&connection)?;
         Ok(Self {
             connection,
             path: path.to_owned(),
@@ -201,7 +231,7 @@ impl Transcript {
     /// A scrollback in memory, for tests.
     pub fn ephemeral() -> Result<Self, StoreError> {
         let connection = Connection::open_in_memory()?;
-        connection.execute_batch(SCHEMA)?;
+        prepare(&connection)?;
         Ok(Self {
             connection,
             path: PathBuf::from(":memory:"),
@@ -253,11 +283,13 @@ impl Transcript {
         self.connection.execute(
             "INSERT INTO turn \
              (session, cursor, at, role, kind, text, tool, raw, entry, tokens, pinned, \
-              ok, ms, args, revisions) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0) \
+              ok, ms, args, revisions, grp, stub, handle, keep, error) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, \
+                     ?15, ?16, ?17, ?18, ?19) \
              ON CONFLICT(session, cursor) DO UPDATE SET \
                at = ?3, role = ?4, kind = ?5, text = ?6, tool = ?7, raw = ?8, entry = ?9, \
                tokens = ?10, pinned = ?11, ok = ?12, ms = ?13, args = ?14, \
+               grp = ?15, stub = ?16, handle = ?17, keep = ?18, error = ?19, \
                revisions = revisions + 1",
             params![
                 session.as_str(),
@@ -274,6 +306,11 @@ impl Transcript {
                 turn.ok,
                 turn.ms.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
                 turn.args,
+                turn.group.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
+                turn.stub,
+                turn.handle,
+                i64::from(turn.keep),
+                i64::from(turn.error),
             ],
         )?;
         self.connection.execute(
@@ -292,15 +329,13 @@ impl Transcript {
     /// Everything a run said, in order. Answers the turns as they finally stood, not as they
     /// were first written — a tool call comes back with its result.
     pub fn replay(&self, session: &SessionId) -> Result<Vec<Turn>, StoreError> {
-        let mut statement = self.connection.prepare(
-            "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, \
-                    ok, ms, args, revisions \
-             FROM turn WHERE session = ?1 ORDER BY cursor",
-        )?;
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {COLUMNS} FROM turn WHERE session = ?1 ORDER BY cursor"
+        ))?;
         let found = statement
-            .query_map(params![session.as_str()], |r| Ok(read(r)))?
+            .query_map(params![session.as_str()], read)?
             .collect::<Result<Vec<_>, _>>()?;
-        found.into_iter().collect()
+        Ok(found)
     }
 
     /// One turn, for quoting.
@@ -308,14 +343,12 @@ impl Transcript {
         let found = self
             .connection
             .query_row(
-                "SELECT cursor, at, role, kind, text, tool, raw, entry, tokens, state, pinned, \
-                    ok, ms, args, revisions \
-                 FROM turn WHERE session = ?1 AND cursor = ?2",
+                &format!("SELECT {COLUMNS} FROM turn WHERE session = ?1 AND cursor = ?2"),
                 params![session.as_str(), cursor as i64],
-                |r| Ok(read(r)),
+                read,
             )
             .optional()?;
-        found.transpose()
+        Ok(found)
     }
 
     /// The cursor a resuming harness should allocate next: one past the highest written.
@@ -334,7 +367,7 @@ impl Transcript {
         let mut statement = self.connection.prepare(
             "SELECT r.session, r.scope, r.cwd, r.harness, r.opened, r.closed, \
                     (SELECT count(*) FROM turn t WHERE t.session = r.session) \
-             FROM run r ORDER BY r.opened DESC LIMIT ?1",
+             FROM run r ORDER BY r.opened DESC, r.rowid DESC LIMIT ?1",
         )?;
         let found = statement
             .query_map(params![limit as i64], |r| {
@@ -361,6 +394,11 @@ impl Transcript {
         context: u32,
     ) -> Result<(), StoreError> {
         self.connection.execute(
+            "INSERT INTO run_model (session, model, context) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(session) DO UPDATE SET model = ?2, context = ?3",
+            params![session.as_str(), model, context],
+        )?;
+        self.connection.execute(
             "UPDATE run SET model = ?2, context = ?3 WHERE session = ?1",
             params![session.as_str(), model, context],
         )?;
@@ -369,6 +407,17 @@ impl Transcript {
 
     /// What model a run talks to, and how much it holds.
     pub fn model_of(&self, session: &SessionId) -> Result<Option<(String, u32)>, StoreError> {
+        let told = self
+            .connection
+            .query_row(
+                "SELECT model, context FROM run_model WHERE session = ?1",
+                params![session.as_str()],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        if let Some((model, context)) = told {
+            return Ok(Some((model, u32::try_from(context).unwrap_or(u32::MAX))));
+        }
         let found = self
             .connection
             .query_row(
@@ -397,13 +446,13 @@ impl Transcript {
                     CASE state WHEN 'live' THEN text ELSE '' END, \
                     tool, raw, entry, \
                     COALESCE(tokens, (LENGTH(text) + 3) / 4), \
-                    state, pinned, ok, ms, args, revisions \
+                    state, pinned, ok, ms, args, revisions, grp, stub, handle, keep, error \
              FROM turn WHERE session = ?1 AND state IN ('live', 'masked') ORDER BY cursor",
         )?;
         let found = statement
-            .query_map(params![session.as_str()], |r| Ok(read(r)))?
+            .query_map(params![session.as_str()], read)?
             .collect::<Result<Vec<_>, _>>()?;
-        found.into_iter().collect()
+        Ok(found)
     }
 
     /// Record what a plan did to a turn. The text is untouched: compaction decides what is sent,
@@ -428,8 +477,12 @@ impl Transcript {
     }
 }
 
-/// One turn from a row.
-fn read(row: &rusqlite::Row<'_>) -> Result<Turn, StoreError> {
+/// Every column a turn is read from, in the order [`read`] takes them.
+pub(crate) const COLUMNS: &str = "cursor, at, role, kind, text, tool, raw, entry, tokens, state, \
+     pinned, ok, ms, args, revisions, grp, stub, handle, keep, error";
+
+/// One turn from a row of [`COLUMNS`].
+pub(crate) fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Turn> {
     Ok(Turn {
         cursor: row.get::<_, i64>(0)?.max(0) as u64,
         at: row.get(1)?,
@@ -446,12 +499,52 @@ fn read(row: &rusqlite::Row<'_>) -> Result<Turn, StoreError> {
         ms: row.get::<_, Option<i64>>(12)?.map(|n| n.max(0) as u64),
         args: row.get(13)?,
         revisions: row.get::<_, i64>(14)?.max(0) as u32,
+        group: row.get::<_, Option<i64>>(15)?.map(|n| n.max(0) as u64),
+        stub: row.get(16)?,
+        handle: row.get(17)?,
+        keep: row.get::<_, i64>(18)? != 0,
+        error: row.get::<_, i64>(19)? != 0,
     })
 }
 
-/// The scrollback, as first written. No migration machinery: while a harness is the only writer
-/// this can be rewritten freely.
+/// Columns added after the first release, and how each is declared. A store written before
+/// them gains them on open; one that has them is left alone.
+const ADDED: &[(&str, &str)] = &[
+    ("grp", "INTEGER"),
+    ("stub", "TEXT"),
+    ("handle", "TEXT"),
+    ("keep", "INTEGER NOT NULL DEFAULT 0"),
+    ("error", "INTEGER NOT NULL DEFAULT 0"),
+];
+
+/// Create what is missing and bring an older file forward.
+fn prepare(connection: &Connection) -> Result<(), StoreError> {
+    connection.execute_batch(SCHEMA)?;
+    let mut statement = connection.prepare("SELECT name FROM pragma_table_info('turn')")?;
+    let held = statement
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (name, declared) in ADDED {
+        if !held.iter().any(|column| column == name) {
+            connection.execute_batch(&format!("ALTER TABLE turn ADD COLUMN {name} {declared}"))?;
+        }
+    }
+    connection.execute_batch(crate::laying::SCHEMA)?;
+    connection.execute_batch(crate::jobs::SCHEMA)?;
+    crate::effects::prepare(connection)?;
+    connection.execute_batch(crate::extraction::SCHEMA)?;
+    crate::notes::prepare(connection)?;
+    Ok(())
+}
+
+/// The scrollback, as first written. Columns added later are in [`ADDED`] as well, so a file
+/// from before them is brought forward on open.
 const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS transcript_run (
+  session TEXT PRIMARY KEY,
+  run     TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS run (
   session  TEXT PRIMARY KEY,
   scope    TEXT NOT NULL,
@@ -465,6 +558,13 @@ CREATE TABLE IF NOT EXISTS run (
   -- holds a million throws away context nobody needed to lose.
   model    TEXT,
   context  INTEGER
+) STRICT;
+
+-- A model named before its run was opened: a harness says it at startup, before any turn exists.
+CREATE TABLE IF NOT EXISTS run_model (
+  session  TEXT PRIMARY KEY,
+  model    TEXT NOT NULL,
+  context  INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS turn (
@@ -494,6 +594,13 @@ CREATE TABLE IF NOT EXISTS turn (
   -- never the text, which is what makes it reversible: a masked turn still has its words here.
   state      TEXT NOT NULL DEFAULT 'live',
   pinned     INTEGER NOT NULL DEFAULT 0,
+  -- What the harness says about a tool row: which group it travels with, what to show in its
+  -- place, how to get it back, and whether it may be elided at all.
+  grp        INTEGER,
+  stub       TEXT,
+  handle     TEXT,
+  keep       INTEGER NOT NULL DEFAULT 0,
+  error      INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session, cursor)
 ) STRICT;
 
@@ -659,6 +766,19 @@ mod tests {
         }
         assert_eq!(t.runs(10).expect("runs")[0].turns, 4);
         assert_eq!(t.census().expect("census"), (1, 4));
+    }
+
+    #[test]
+    fn a_model_told_before_its_run_opens_is_kept() {
+        let mut t = held();
+        let s = SessionId::new("s1");
+        t.note_model(&s, "deepseek/v3.2", 163_840).expect("told");
+        t.open_run(&s, "/w/thing", "/w/thing", "harness", 100)
+            .expect("open");
+        assert_eq!(
+            t.model_of(&s).expect("read"),
+            Some(("deepseek/v3.2".to_owned(), 163_840))
+        );
     }
 
     #[test]

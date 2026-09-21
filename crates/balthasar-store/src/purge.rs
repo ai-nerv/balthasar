@@ -98,6 +98,29 @@ pub fn purge_run(
     scrollback: &crate::Transcript,
     session: &balthasar_model::SessionId,
 ) -> Result<usize, StoreError> {
+    let tx = rusqlite::Transaction::new_unchecked(
+        scrollback.db(),
+        rusqlite::TransactionBehavior::Immediate,
+    )?;
+    let transcripts = {
+        let mut query =
+            tx.prepare("SELECT session FROM transcript_run WHERE run = ?1 UNION SELECT ?1")?;
+        query
+            .query_map([session.as_str()], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let mut gone = 0;
+    for transcript in transcripts {
+        gone += purge_transcript(scrollback, &balthasar_model::SessionId::new(transcript))?;
+    }
+    tx.commit()?;
+    Ok(gone)
+}
+
+fn purge_transcript(
+    scrollback: &crate::Transcript,
+    session: &balthasar_model::SessionId,
+) -> Result<usize, StoreError> {
     // The search index holds a second copy of every word, so it goes before the turn.
     scrollback.db().execute(
         "DELETE FROM turn_fts WHERE session = ?1",
@@ -107,10 +130,25 @@ pub fn purge_run(
         "DELETE FROM turn WHERE session = ?1",
         params![session.as_str()],
     )?;
-    scrollback.db().execute(
-        "DELETE FROM run WHERE session = ?1",
-        params![session.as_str()],
-    )?;
+    // Summaries, job inputs and proposed layouts quote the turns, so they go with them.
+    for table in [
+        "extraction_progress",
+        "extraction_ack",
+        "layout_effect",
+        "layout",
+        "summary",
+        "prompt",
+        "job",
+        "counter",
+        "run",
+        "run_model",
+        "transcript_run",
+    ] {
+        scrollback.db().execute(
+            &format!("DELETE FROM {table} WHERE session = ?1"),
+            params![session.as_str()],
+        )?;
+    }
     Ok(gone)
 }
 

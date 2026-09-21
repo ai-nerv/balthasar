@@ -9,6 +9,7 @@ description = "balthasar's ledger: what a harness should send, and what it shoul
 [dependencies]
 balthasar-store.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

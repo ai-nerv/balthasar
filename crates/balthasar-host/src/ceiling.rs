@@ -37,6 +37,15 @@ impl Door {
         matches!(self, Self::Owner)
     }
 
+    /// Whether this door may say which of two disagreeing claims is right.
+    ///
+    /// The person's, and nobody else's. A model found the disagreement; letting the same model
+    /// decide it would be the verdict this whole design keeps out of its hands.
+    #[must_use]
+    pub fn may_settle(&self) -> bool {
+        matches!(self, Self::Owner)
+    }
+
     /// The strongest kind of evidence this door may claim.
     #[must_use]
     pub fn strongest(&self) -> WitnessKind {

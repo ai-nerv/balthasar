@@ -76,6 +76,8 @@ const SETTINGS: &[&str] = &[
     "witness",
     "tool",
     "scope",
+    "window",
+    "memory",
 ];
 
 /// What balthasar wants to be told. Everything has a default.
@@ -137,6 +139,22 @@ pub fn needs() -> Vec<Need> {
             about: "which memory to work in: global, project, or a path".to_owned(),
             required: false,
             default: Some(serde_json::json!("project")),
+        },
+        Need {
+            name: "window".to_owned(),
+            kind: Kind::Table,
+            about: "how each request is laid out: shares, thresholds, what stays word for word"
+                .to_owned(),
+            required: false,
+            default: None,
+        },
+        Need {
+            name: "memory".to_owned(),
+            kind: Kind::Table,
+            about: "how notes improve: review, extract_every, extract_bytes, tidy_every, checklist"
+                .to_owned(),
+            required: false,
+            default: None,
         },
         Need {
             name: "source".to_owned(),
@@ -212,10 +230,25 @@ fn held(config: &Config) -> serde_json::Map<String, serde_json::Value> {
     config.settings.clone()
 }
 
+/// Names the directory a coordinator keeps one session's configuration in.
+pub const GIVEN: &str = "NERV_GIVEN";
+
 /// Where configuration sent by a coordinator is kept: the runtime directory, not `config/`.
 #[must_use]
 pub fn given() -> std::path::PathBuf {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
+    given_from(std::env::var_os(GIVEN), std::env::var_os("XDG_RUNTIME_DIR"))
+}
+
+/// The same, from what the environment said. One file per session when the coordinator names a
+/// directory: one per machine let a session's thresholds outlive it and govern the next.
+fn given_from(
+    session: Option<std::ffi::OsString>,
+    runtime: Option<std::ffi::OsString>,
+) -> std::path::PathBuf {
+    if let Some(dir) = session.filter(|dir| !dir.is_empty()) {
+        return std::path::PathBuf::from(dir).join("balthasar.lua");
+    }
+    let base = runtime
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     base.join("balthasar").join("given.lua")
@@ -262,6 +295,24 @@ mod tests {
     use super::*;
     use balthasar_model::scratch::{Scratch, ScratchFile};
 
+    #[test]
+    fn a_session_that_names_a_directory_keeps_its_own_configuration() {
+        let dir = Scratch::new("balthasar-setup", "session-directory");
+        let runtime = dir.join("run");
+        let configured = runtime.join("coordinator/given/42");
+        let own = given_from(
+            Some(configured.clone().into_os_string()),
+            Some(runtime.clone().into_os_string()),
+        );
+        assert_eq!(own, configured.join("balthasar.lua"));
+        for unnamed in [None, Some(std::ffi::OsString::new())] {
+            assert_eq!(
+                given_from(unnamed, Some(runtime.clone().into_os_string())),
+                runtime.join("balthasar/given.lua")
+            );
+        }
+    }
+
     /// A place of this test's own, so tests running together do not delete each other's.
     fn mine(name: &str) -> ScratchFile {
         Scratch::file("balthasar-setup", name, "given.lua")
@@ -288,6 +339,19 @@ mod tests {
         let applied = configure_into(&path, "balthasar.promote_floor = 0.8").expect("runs");
         assert_eq!(applied.set, vec!["promote_floor".to_owned()], "{applied:?}");
         assert!(applied.whole());
+    }
+
+    #[test]
+    fn how_requests_are_laid_out_can_be_said_by_whoever_coordinates() {
+        let path = mine("window");
+        let applied = configure_into(
+            &path,
+            "balthasar.window = { prune_at = 0.5 }\nbalthasar.memory = { review = true }",
+        )
+        .expect("runs");
+        assert!(applied.whole(), "{applied:?}");
+        assert!(applied.set.contains(&"window".to_owned()), "{applied:?}");
+        assert!(applied.set.contains(&"memory".to_owned()), "{applied:?}");
     }
 
     #[test]

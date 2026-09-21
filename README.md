@@ -40,8 +40,8 @@ balthasar decay                   # what today's forgetting would take, before i
               │                               │
        ┌──────┴───────┐                       │  the ladder — eight kinds of
        ▼              ▼                       │  evidence, two floors
-   turn_fts      plan · scroll                ▼
-   searchable    mask · summarise      project.db      global.db
+   turn_fts     layout · scroll               ▼
+   searchable   stub · summarise       project.db      global.db
        │              │                facts, habits   true everywhere
        │              │                       │
        │ spans        │ the window            │ memories
@@ -232,6 +232,126 @@ caller to work out from a number and a threshold it would have to be told. Above
 memory is current truth; below it, it is still there, still searchable, still explained by `why`,
 and no longer stated as fact — which is what lets a harness say "you told me this in March, it
 may be stale" instead of repeating it flatly.
+
+### The context, laid out
+
+balthasar decides what each request holds; the harness only renders it. The harness `observe`s
+every item as it is committed (with `tokens`, `group`, and a tool's `stub`, `handle`, `keep`,
+`error`), then asks `layout` before every request:
+
+```
+->  {"call":"layout","args":["<session>",{"round":0,"window":200000,"reply":32000,
+       "fixed":{"system":4100,"tools":6900},"live":[0,1,2,3],"query":"…","idle_s":12,
+       "helpers":["memory"]}]}
+<-  {"id":"L-1","budget":{…,"room":157000,"factor":1.0},
+     "slots":[{"kind":"item","cursor":0},…,{"kind":"memory","text":"…","ids":["…"]},
+              {"kind":"item","cursor":3}],"jobs":[],"fits":true,"why":"…"}
+```
+
+Slots come in the order the prompt cache wants — pinned notes, the conversation (word for word,
+stubbed, or a stored summary where its span was), then the warning note and memory just before
+the latest prompt. Nothing is recorded by answering: `applied {id, usage}` marks what was sent
+and corrects the model's token estimate from the provider's count, and `overflowed {id, said}`
+answers a tighter layout. The rules are `balthasar.window` in `init.lua`.
+
+balthasar never calls a model. When a summary is due, or memory could be curated, or notes
+extracted from a finished turn, the layout (or `jobs` between turns) hands the harness a job —
+an instruction, an input, a schema — and `job_done` brings the answer back. Notes are pinned or
+deferred, every change is in `changes` and can be `undo`ne, and with `balthasar.memory.review`
+on they wait for `approve`.
+
+Each extracted rule is checked against typed original transcript rows, not the labels printed
+in the helper's input. Helpers can provide `evidence: [{cursor, quote}]`; the store validates
+those references against the extraction's immutable source fingerprints. A new pinned rule
+must match a complete unquoted user directive, preserving negations, conditions, and names.
+Without explicit references, a rule is accepted only if this same literal match can be found.
+Quoted examples, code, other agents, helper summaries, and truncated source lines grant no rule
+authority. This deliberately rejects paraphrased rules rather than guessing at their meaning.
+An example/header ending with a colon, a block quote, a prose quotation mark, or tag-like
+markup makes the rest of that message ineligible for automatic rule adoption; blank lines
+do not end that restriction. Put an intended standing rule in a separate plain message, or
+use a same-line form such as `A firm rule: Always use uv.`. Markdown code fences have explicit
+closing boundaries, so a standalone directive after a closed fence can qualify. This is a
+conservative syntax policy, not an inference of intent from arbitrary prose.
+Literal rules retain their paths; project-root normalization applies only to unpinned
+observations. Explicit quotes keep their original spelling, including Markdown list markers.
+
+Changing a pinned rule requires a user line naming it, such as `Package manager: Always use uv.`
+Unpinning and retirement use `Unpin note N-1.` and `Retire note N-1.`. A tidy may retire an
+identical pinned duplicate with `duplicate_of: "N-retained"`, but cannot change the retained
+copy in the same batch or invent a replacement rule. Helper titles and descriptions are not
+included in pinned rule bodies. Unpinned observations remain lower-trust helper distillations,
+not verified user instructions or independently verified facts.
+
+Layouts expose verified rules in a `rules` slot and the deferred-note index in an
+`observations` slot. Both use the existing `pinned` project-note quota; rules get space first.
+Observation fields are JSON-encoded, so embedded newlines and role-looking labels remain
+inside their fields. A pinned note without current internal user-rule evidence is retained
+as an unverified observation and remains available through `note_open`, not promoted to a rule.
+Every layout rebuilds this projection from current sources and the current quota. Unchanged
+notes produce identical bytes; legacy cached mixed bodies are never reused as authority.
+The retained prompt snapshot has version 2 and is for inspection, not authorization.
+
+Magi renders `rules` on the user-instruction channel and `observations` as assistant/helper
+context. Summaries, recalled memory and old mixed `pinned` slots are also lower-trust assistant
+context; legacy journal compaction uses the same boundary even without a memory service. Older consumers
+that do not know the new slot kinds may skip them; the exact current family is the tested
+combination. This separation prevents note metadata from becoming a user instruction; it is
+not a claim that any model is immune to prompt injection or that helper observations are facts.
+
+`note_open` includes the accepted evidence; `changes` includes evidence and rejection reasons.
+Review checks source fingerprints, literal rule support and the target again before applying a
+staged change. Saved evidence is reloaded from original rows, with role/kind/tool eligibility
+recomputed rather than taken from old labels. Projection also rechecks the note's actual text
+against its standing-rule or named-change source; an unchanged fingerprint alone does not
+grant authority. Historical unsupported rules remain inspectable lower-trust observations,
+and historical unsupported staged changes are rejected without applying them. Undo
+restores the previous note and evidence. Each proposal batch, review decision batch, or undo
+checks and changes notes and their audit records inside one immediate transcript transaction.
+An error rolls back the whole batch; readers cannot see a note without its matching audit.
+Invalid explicit references are audited even on otherwise unchanged or duplicate proposals.
+Existing databases gain nullable/empty evidence
+without losing notes or history; legacy notes with no evidence are not newly verified by this
+migration.
+
+Helper completion commits its transcript effects, note audit, counters, follow-up jobs, and
+completion result together. The issued job is checked again under the writer lock; concurrent
+or repeated completions cannot apply its effects twice. Curation and configuration hooks run
+before the transaction, and curation can update only the matching current prompt.
+
+Applying a layout commits its row states, calibration, confirmation marker, and pending
+distillation intents together. Each intent captures the source at confirmation and its
+transcript/run/agent/project identities. Cross-store replay attaches a stable witness to the
+matching memory, completes rescoring, then acknowledges the intent. Before attaching, it
+durably binds the first selected memory ID or records that no target exists. Promotion keeps
+that target; purge does not redirect the effect to replacement memory with identical text.
+Competing resolutions return the same recorded target. Repeating `applied`
+or requesting the next layout resumes pending work without duplicating witnesses or calibration.
+Completed intents discard their source text; purging a run removes its intents too. This is
+replay across independent databases, not a transaction spanning both files. Legacy applied
+layouts without recorded intents are retained, but earlier partial effects cannot be recovered
+automatically. For older unbound intents, an existing witness identifies the original target;
+without one, their first new resolution cannot reconstruct previously erased target history.
+
+Extraction queues whole original transcript rows, never truncated row prefixes or helper stubs.
+`memory.extract_bytes` bounds the input string in UTF-8 bytes (default 100,000, clamped to
+4,096–1,000,000). Instructions and the output allowance are separate. Each job records only
+its represented cursor range. Queueing does not acknowledge progress: accepted completion
+commits note effects, audit, job result and acknowledgment together. Acknowledgments advance
+only through contiguous ranges; malformed answers, rejected operations and changed source
+snapshots leave coverage pending. Supported operations in a partly rejected batch remain
+audited and idempotent on retry. A valid empty result acknowledges its represented range.
+
+Automatic failure recovery retries a job once, then leaves it visibly failed. A row too large
+for the input budget stays blocked rather than skipped. `jobs(session, {inspect=true})` returns
+one status object with `extraction` progress and job states/results without issuing work.
+`extraction.blocked` includes the oversized cursor, required bytes and current limit. After
+adjusting the limit, or fixing a failed helper, `jobs(session, {retry_extraction=true})` explicitly
+queues a fresh source snapshot and returns runnable work. Increasing the limit alone does not
+retry a blocked row. Rows above the maximum remain visibly unprocessed; there is no arbitrary
+row splitting. Old counters remain an uncertain `legacy_through` baseline in this status:
+historical omissions are not silently declared recovered. Run purge removes this progress
+and its acknowledgment records, including child transcripts.
 
 The `client` verb hands over the Lua library that speaks all this, as source. A consumer keeping
 its own copy is a consumer whose copy goes stale — and one did, silently, for a whole machine.

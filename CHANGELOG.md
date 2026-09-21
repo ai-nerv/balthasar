@@ -1,5 +1,93 @@
 # Changelog
 
+## [0.3.0] - 2026-09-21
+
+### <!-- 0 -->⛰️  Features
+
+- A model may retitle, a person names
+- A run can be put away, and listed
+- Let a person settle a disagreement
+- Link claims that cannot both be true
+- A role for summaries, notes and curating
+- Provenance, coverage and configs
+- Read a prompt as it arrives
+- Every verb and step in the family log
+- Take window and memory from magi
+- Notes extracted, reviewed, undone
+- Notes and their change log
+- Summarise and curate jobs
+- Jobs handed to a helper model
+- Layout, applied and overflowed verbs
+- Keep layouts, factors, summaries
+- Layout rules for a request
+- Tool stubs, and plan records nothing
+- Turns carry group, stub, handle, keep
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Extraction needs room to think
+- A denial is not the claim it denies
+- Gate each job on the role it asks for
+- A summary carries the calls that failed
+- A rule in plain words is a rule
+- Believe the window a refusal names
+- What was taken back is not recalled
+- A rewrite does not lose the doubt
+- A session's own rule is not shown back
+- A quote may come with its row label
+- Say the cursor is the number in brackets
+- History carries what was said, not raw
+- Runs opened in one second list newest first
+- More verbs that open an instruction
+- A note is never the request said back
+- No rule from a span with none laid
+- A prompt keeps its reads until last
+- A request about rules lays none down
+- A plain request keeps a rule its words
+- A tidy leaves a pinned rule its words
+- A rule reworded in the middle is an echo
+- A replay comes a page at a time
+- A plain request has no say over pinning
+- An empty answer to a stated rule is asked again
+- A summary is told today's date
+- A plain request never unpins a rule
+- A rule restated is not kept twice
+- Pin only what a person laid down as a rule
+- Old tool results never block a summary
+- Even a long reply fits a summary
+- Pin rules, not what the task asks
+- A summary reads whole replies
+- A second pinned rule gets tidied at once
+- A model named before its run is kept
+- Learn the factor only from sane counts
+- A checkout is never taken for a store
+- A store above a repository stays out
+- A session keeps its own given config
+- A blocking job is never retried
+- An example that cannot be copied
+- Take rules only from the person
+- Log only the stubs a hook wrote
+- Record stated rules pinned and tight
+- Pin stated rules, drop run-bound detail
+
+### <!-- 2 -->🚜 Refactor
+
+- One gate for what an extraction keeps
+- Tests in their own file
+
+### <!-- 3 -->📚 Documentation
+
+- Say why the sweep gets no reasoning
+- Repair a mangled module comment
+- Plan as the layout fallback
+- Layout, jobs and notes verbs
+- Layout, jobs and notes
+
+### <!-- 6 -->🧪 Testing
+
+- Pin what the revision rule costs
+- A task detail is no note at all
+
 ## [0.2.0] - 2026-09-15
 
 ### <!-- 0 -->⛰️  Features

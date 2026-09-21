@@ -189,14 +189,26 @@ make.recipe{
     -- nothing, so this listed the files on screen and copied none of them.
     local found = oslo.run{ "find", "config", "-type", "f", "-name", "*.lua", capture = true }
     assert(found.ok, "could not list config/")
-    local copied = 0
+    local copied, back = 0, {}
     for file in (found.out or ""):gmatch("[^\n]+") do
       local into = CONFIG .. "/" .. file:gsub("^config/", "")
       assert(oslo.run{ "mkdir", "-p", (into:match("^(.*)/[^/]*$")) }.ok, "could not create " .. into)
-      assert(oslo.run{ "install", "-m", "644", file, into }.ok, "could not install " .. file)
-      copied = copied + 1
+      -- Whichever side was edited last wins, so an edit made to the installed copy comes back
+      -- here rather than being overwritten. `cp -p` keeps the time, so the two agree afterwards.
+      local differs = oslo.fs.stat(into) and not oslo.run{ "cmp", "-s", file, into }.ok
+      if differs and oslo.run{ "test", into, "-nt", file }.ok then
+        assert(oslo.run{ "cp", "-p", into, file }.ok, "could not bring back " .. into)
+        back[#back + 1] = file
+      else
+        assert(oslo.run{ "cp", "-p", file, into }.ok, "could not install " .. file)
+        assert(oslo.run{ "chmod", "644", into }.ok, "could not set the mode of " .. into)
+        copied = copied + 1
+      end
     end
     print(("%d files -> %s"):format(copied, CONFIG))
+    for _, file in ipairs(back) do
+      print(("   <- %s was newer in %s, and came back"):format(file, CONFIG))
+    end
   end,
 }
 
@@ -211,6 +223,9 @@ make.recipe{ name = "build-debug", desc = "the binary, unoptimized and quick",
                sh.cargo("build", "--workspace")
                report("target/debug/" .. NAME)
              end }
+
+make.recipe{ name = "family-path", desc = "the binary selected by build-host",
+             run = function() print("NERV_BINARY=target/release/" .. NAME) end }
 
 make.recipe{
   name = "run",
@@ -231,6 +246,33 @@ make.alias("r", "run")
 
 make.recipe{ name = "test", desc = "the suite",
              run = function() sh.cargo("test", "--workspace", "--all-targets") end }
+
+make.recipe{ name = "test-run-binding", desc = "transcript and scratch run identities",
+             run = function() sh.cargo("test", "-p", "balthasar-host", "--test", "run_binding") end }
+
+make.recipe{ name = "test-note-provenance", desc = "typed sources for automatic notes",
+             run = function()
+               sh.cargo("test", "-p", "balthasar-host", "--test", "notes", "provenance::")
+               sh.cargo("test", "-p", "balthasar-host", "--test", "notes", "projection::")
+               sh.cargo("test", "-p", "balthasar-host", "--test", "notes", "quoting::")
+             end }
+
+make.recipe{ name = "test-note-coverage", desc = "extraction coverage and acknowledgment",
+             run = function()
+               sh.cargo("test", "-p", "balthasar-host", "--test", "notes", "coverage::")
+               sh.cargo("test", "-p", "balthasar-store", "--test", "extraction")
+             end }
+
+make.recipe{ name = "test-note-atomic", desc = "note application and audit rollback",
+             run = function()
+               sh.cargo("test", "-p", "balthasar-host", "--test", "notes", "atomic::")
+               sh.cargo("test", "-p", "balthasar-store", "--test", "atomic")
+             end }
+make.recipe{ name = "test-layout-atomic", desc = "layout rollback and cross-store recovery",
+             run = function()
+               sh.cargo("test", "-p", "balthasar-host", "--test", "laying", "atomic::")
+               sh.cargo("test", "-p", "balthasar-store", "--test", "layout_effects")
+             end }
 make.alias("t", "test")
 
 make.recipe{ name = "test-all", desc = "the suite, with every feature on",

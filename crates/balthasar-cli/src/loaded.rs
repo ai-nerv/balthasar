@@ -28,6 +28,56 @@ pub struct Loaded {
     engine: Engine,
     settings: Settings,
     embedder: Option<Box<dyn balthasar_embed::Embed>>,
+    /// `balthasar.window` and `balthasar.memory`, read once.
+    window: balthasar_host::Rules,
+    keeping: balthasar_host::Keeping,
+}
+
+impl balthasar_host::Hooks for Loaded {
+    fn stub(&mut self, turn: &balthasar_store::Turn) -> Option<String> {
+        let said = self.mask(turn);
+        if let Some(stub) = &said {
+            balthasar_model::noted!(
+                "hook: stub for cursor {} in {} chars",
+                turn.cursor,
+                stub.chars().count()
+            );
+        }
+        said
+    }
+
+    fn policy(
+        &mut self,
+        budget: &serde_json::Value,
+        items: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        let said = self.engine.policy(budget, items);
+        balthasar_model::noted!(
+            "hook: policy {}",
+            if said.is_some() {
+                "changed the layout"
+            } else {
+                "left it"
+            }
+        );
+        said
+    }
+
+    fn redact(&mut self, text: &str, memory: &balthasar_model::Memory) -> Option<String> {
+        let said = Loaded::redact(self, text, memory, true, &mut Vec::new());
+        if said.is_some() {
+            balthasar_model::noted!("hook: redact rewrote a memory");
+        }
+        said
+    }
+
+    fn window(&self) -> balthasar_host::Rules {
+        self.window.clone()
+    }
+
+    fn memory(&self) -> balthasar_host::Keeping {
+        self.keeping.clone()
+    }
 }
 
 impl Loaded {
@@ -60,10 +110,14 @@ impl Loaded {
 
         let settings = Settings::from(&engine.config());
         let embedder = embedder_from(&engine.config());
+        let window = balthasar_host::Rules::read(engine.config().get("window"));
+        let keeping = balthasar_host::Keeping::read(engine.config().get("memory"));
         Ok(Self {
             engine,
             settings,
             embedder,
+            window,
+            keeping,
         })
     }
 
@@ -76,6 +130,8 @@ impl Loaded {
             engine: Engine::new(),
             settings: Settings::default(),
             embedder: balthasar_embed::open(&balthasar_embed::Spec::default()),
+            window: balthasar_host::Rules::default(),
+            keeping: balthasar_host::Keeping::default(),
         }
     }
 
@@ -205,14 +261,18 @@ impl Loaded {
 
     /// What a masked tool result should say instead.
     ///
-    /// Keyed on the tool. `None` leaves the turn alone.
+    /// Keyed on the tool. `None` hands the turn to the tool's own stub, then the generic one.
+    /// `tokens` is always a number: the row's own count, or its estimate.
     pub fn mask(&mut self, entry: &balthasar_store::Turn) -> Option<String> {
         let tool = entry.tool.as_deref()?;
         let item = serde_json::json!({
             "cursor": entry.cursor,
             "tool": tool,
-            "tokens": entry.tokens,
+            "tokens": entry.weight(),
             "kind": entry.kind,
+            "stub": entry.stub,
+            "handle": entry.handle,
+            "error": entry.error,
         });
         self.engine.mask_for(tool, &item)
     }

@@ -1,4 +1,4 @@
-//! Tie    let befo    let after = store.all().expect("all").len();e = store.all().expect("all").len();-aware lifecycle, held to §9.8 of the future plan.
+//! Tier-aware lifecycle, held to §9.8 of the future plan.
 //!
 //! The acceptance criteria are mostly negative: truth must not move because something helped,
 //! habit statistics must not move without attribution, and no lifecycle path may delete.

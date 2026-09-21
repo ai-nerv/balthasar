@@ -128,6 +128,48 @@ impl Store {
         Ok(())
     }
 
+    /// Say what a session turned out to be about, over the top of whatever it said before.
+    ///
+    /// For a model, so it is refused on a run a person has named: the first thing asked is a
+    /// poor title — four runs opened with "hi" are four runs called "hi" — but a name somebody
+    /// typed is the answer, not a guess to be improved on.
+    pub fn retitle_session(&mut self, id: &SessionId, title: &str) -> Result<bool, StoreError> {
+        let trimmed: String = title.trim().chars().take(72).collect();
+        if trimmed.is_empty() {
+            return Ok(false);
+        }
+        let changed = self.db().execute(
+            "UPDATE session SET title = ?2 \
+             WHERE id = ?1 AND (title_pinned IS NULL OR title_pinned = 0)",
+            params![id.as_str(), trimmed],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Whether a person has named this run themselves.
+    pub fn is_named(&self, id: &SessionId) -> Result<bool, StoreError> {
+        let named: Option<i64> = self
+            .db()
+            .query_row(
+                "SELECT title_pinned FROM session WHERE id = ?1",
+                params![id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(named.unwrap_or(0) != 0)
+    }
+
+    /// The name a person gave this run. Nothing overwrites it afterwards.
+    pub fn rename_session(&mut self, id: &SessionId, title: &str) -> Result<(), StoreError> {
+        let trimmed: String = title.trim().chars().take(72).collect();
+        self.db().execute(
+            "UPDATE session SET title = ?2, title_pinned = 1 WHERE id = ?1",
+            params![id.as_str(), trimmed],
+        )?;
+        Ok(())
+    }
+
     /// Record that a session has ended.
     pub fn close_session(&mut self, id: &SessionId, at: Timestamp) -> Result<(), StoreError> {
         self.db().execute(
@@ -137,16 +179,38 @@ impl Store {
         Ok(())
     }
 
-    /// Every session in this store, newest first.
+    /// Every session still offered, newest first. An archived one is on record and not here.
     pub fn sessions(&self, limit: usize) -> Result<Vec<Session>, StoreError> {
-        let mut statement = self.db().prepare(
+        self.sessions_where("archived IS NULL", limit)
+    }
+
+    /// Every session that has been put away, newest first. What `:archives` reads.
+    pub fn archived_sessions(&self, limit: usize) -> Result<Vec<Session>, StoreError> {
+        self.sessions_where("archived IS NOT NULL", limit)
+    }
+
+    fn sessions_where(&self, held: &str, limit: usize) -> Result<Vec<Session>, StoreError> {
+        let mut statement = self.db().prepare(&format!(
             "SELECT id, name, scope, cwd, harness, opened, closed, title \
-             FROM session ORDER BY opened DESC LIMIT ?1",
-        )?;
+             FROM session WHERE {held} ORDER BY opened DESC, rowid DESC LIMIT ?1"
+        ))?;
         let found = statement
             .query_map(params![limit as i64], |r| Ok(read(r)))?
             .collect::<Result<Vec<_>, _>>()?;
         found.into_iter().collect()
+    }
+
+    /// Put a run away, or bring it back: it stops being offered, and nothing of it is removed.
+    pub fn archive_session(
+        &mut self,
+        id: &SessionId,
+        at: Option<Timestamp>,
+    ) -> Result<(), StoreError> {
+        self.db().execute(
+            "UPDATE session SET archived = ?2 WHERE id = ?1",
+            params![id.as_str(), at],
+        )?;
+        Ok(())
     }
 
     /// One session by its id.

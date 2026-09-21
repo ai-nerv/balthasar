@@ -1,5 +1,6 @@
 //! Turning a request into an answer.
 
+use crate::saying::{describe, session_names};
 use crate::{Door, verbs};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{
@@ -39,6 +40,16 @@ pub struct Answering<'a> {
 }
 
 impl Answering<'_> {
+    pub(crate) fn run_id(
+        &self,
+        session: &SessionId,
+    ) -> Result<SessionId, balthasar_store::StoreError> {
+        match &self.scrollback {
+            Some(transcript) => transcript.run_of(session),
+            None => Ok(session.clone()),
+        }
+    }
+
     /// The store a run's own memories belong in.
     ///
     /// The run's own file when this host keeps one, and the project's store otherwise.
@@ -48,8 +59,9 @@ impl Answering<'_> {
     ) -> Result<&mut Store, balthasar_store::StoreError> {
         // The pinned agent, taken from this connection rather than from the call.
         let agent = self.agent.clone();
+        let session = self.run_id(session)?;
         match self.scratch.as_mut() {
-            Some(pad) => pad.of(session, &agent),
+            Some(pad) => pad.of(&session, &agent),
             None => Ok(self.store),
         }
     }
@@ -68,6 +80,61 @@ pub fn answer_with(
     door: &Door,
     request: &Request,
     describe: impl FnMut(&balthasar_store::Turn) -> Option<String>,
+) -> Reply {
+    answer_hooked(at, door, request, &mut crate::Describing(describe))
+}
+
+/// Answer one call, asking `hooks` whatever the configuration has a say in. Every call is logged
+/// with what it came to and how long it took, when a log was asked for.
+pub fn answer_hooked(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
+) -> Reply {
+    let began = std::time::Instant::now();
+    let reply = answering(at, door, request, hooks);
+    if balthasar_model::noted::enabled() {
+        balthasar_model::noted!("verb: {}", described(request, &reply, began.elapsed()));
+    }
+    reply
+}
+
+/// One call as the log shows it: the verb, the run it was for, what came of it, and how long.
+fn described(request: &Request, reply: &Reply, took: std::time::Duration) -> String {
+    let arg = |key: &str| {
+        request
+            .args
+            .get(1)
+            .map(|a| a[key].clone())
+            .unwrap_or_default()
+    };
+    let first = reply.result.first().cloned().unwrap_or_default();
+    let what = match request.call.as_str() {
+        _ if !reply.ok => format!("refused: {}", reply.error.as_deref().unwrap_or("")),
+        "observe" | "amend" => format!("cursor {} {}", arg("cursor"), arg("kind")),
+        "layout" | "overflowed" => format!(
+            "{} with {} slots, {} jobs — {}",
+            first["id"],
+            first["slots"].as_array().map_or(0, Vec::len),
+            first["jobs"].as_array().map_or(0, Vec::len),
+            first["why"].as_str().unwrap_or("")
+        ),
+        "applied" => format!("{} took {}", arg("id"), arg("usage")),
+        "jobs" => format!("handed {} jobs", reply.n),
+        "job_done" if arg("failed").is_null() => format!("{} answered", arg("id")),
+        "job_done" => format!("{} failed: {}", arg("id"), arg("failed")),
+        _ => format!("{} rows", reply.n),
+    };
+    let run = request.args.first().and_then(|a| a.as_str()).unwrap_or("-");
+    format!("{} {run} {what} in {}ms", request.call, took.as_millis())
+}
+
+fn answering(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
 ) -> Reply {
     let Some(verb) = verbs::known(&request.call) else {
         // Naming what is available beats "unknown verb".
@@ -95,22 +162,36 @@ pub fn answer_with(
         // Shipped in the binary and identical for every session, so it answers like `verbs`.
         "client" => Reply::one(serde_json::json!(balthasar_lua::CLIENT)),
         "status" => status(at),
-        "recall" => recall(at, request),
+        "recall" => recall(at, door, request),
         "why" => why(at, request),
-        "sessions" => sessions(at),
+        "sessions" => sessions(at, request),
+        "rename" => rename(at, request),
         "observe" => crate::window::observe(at, request),
         "amend" => crate::window::amend(at, request),
         "replay" => crate::window::replay(at, request),
         "scroll" => crate::window::scroll(at, request),
         "resume" => crate::window::resume(at, request),
         "model" => crate::window::model(at, request),
-        "plan" => crate::window::plan(at, request, describe),
+        "plan" => crate::window::plan(at, request, |turn| hooks.stub(turn)),
+        "layout" => crate::layout::layout(at, request, hooks),
+        "applied" => crate::layout::applied(at, request),
+        "overflowed" => crate::layout::overflowed(at, request, hooks),
+        "jobs" => crate::jobs::jobs(at, request, hooks),
+        "job_done" => crate::jobs::job_done(at, request, hooks),
+        "notes" => crate::notes::notes(at),
+        "note_open" => crate::notes::note_open(at, request),
+        "changes" => crate::notes::changes(at, request),
+        "undo" => crate::notes::undo(at, request),
+        "approve" => crate::notes::decided(at, request, true),
+        "reject" => crate::notes::decided(at, request, false),
         "used" => crate::outcome::used(at, door, request),
         "outcome" => crate::outcome::outcome(at, door, request),
         "trace" => crate::outcome::trace(at, request),
         "utility" => crate::outcome::utility(at, request),
         "remember" => remember(at, door, request),
         "forget" => forget(at, door, request),
+        "disagreements" => crate::settling::disagreements(at),
+        "settle" => crate::settling::settle(at, door, request),
         // `context` needs the configuration's sections, which the caller assembles and hands in.
         "context" => Reply::refused("context is served by the host that holds the configuration"),
         other => Reply::refused(format!("'{other}' is named but not wired")),
@@ -123,18 +204,21 @@ fn status(at: &mut Answering<'_>) -> Reply {
         Ok(census) => census,
         Err(why) => return Reply::refused(why.to_string()),
     };
+    let scope = at.scope.to_string();
     Reply::one(serde_json::json!({
-        "scope": at.scope.to_string(),
+        "scope": scope,
         "path": at.store.path().to_string_lossy(),
         "tiers": census.into_iter()
             .map(|(tier, count)| (tier, serde_json::json!(count)))
             .collect::<serde_json::Map<String, serde_json::Value>>(),
         "inject_floor": at.inject_floor,
+        // Waiting on a person, so it is said where a person looks rather than only in its own view.
+        "disagreements": at.store.disagreements(&scope).map(|open| open.len()).unwrap_or(0),
     }))
 }
 
 /// Search.
-fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
+fn recall(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
     let query = request.args.first().and_then(|v| v.as_str()).unwrap_or("");
     let opts = request.args.get(1);
     let limit = opts
@@ -178,6 +262,11 @@ fn recall(at: &mut Answering<'_>, request: &Request) -> Reply {
         }
         found.sort_by(|a, b| b.score.total_cmp(&a.score));
         found.truncate(limit);
+    }
+    // The owner sees everything on record; a session is not shown a rule nobody stood behind.
+    if !matches!(door, Door::Owner) {
+        let standing = crate::supply::Standing::of(at);
+        found.retain(|hit| !standing.withholds(at, &hit.memory));
     }
     // Names are resolved once for the whole result set.
     let names = session_names(at);
@@ -299,6 +388,7 @@ fn why(at: &mut Answering<'_>, request: &Request) -> Reply {
     match held {
         Ok(Some(memory)) => {
             let names = session_names(at);
+            let against = disagreeing(at, &memory);
             let quoted: Vec<serde_json::Value> = memory
                 .witnesses
                 .iter()
@@ -334,6 +424,8 @@ fn why(at: &mut Answering<'_>, request: &Request) -> Reply {
                 })).collect::<Vec<_>>(),
                 // What the witnesses actually saw, when the scrollback still has it.
                 "quoted": quoted,
+                // What is pulling the number down, which is otherwise nowhere in this answer.
+                "against": against,
             }))
         }
         Ok(None) => Reply::refused(format!("no memory called '{id}'")),
@@ -341,9 +433,67 @@ fn why(at: &mut Answering<'_>, request: &Request) -> Reply {
     }
 }
 
-/// The runs this project has had.
-fn sessions(at: &mut Answering<'_>) -> Reply {
-    match at.store.sessions(50) {
+/// The live claims that cannot both be true with this one, and how sure each of them is.
+///
+/// Each is what took the number down, by that much of its own confidence.
+fn disagreeing(at: &Answering<'_>, memory: &Memory) -> Vec<serde_json::Value> {
+    use balthasar_model::LinkRelation::{Contradicts, Reconciled};
+    let settled = |to: &balthasar_model::MemoryId| {
+        memory
+            .links
+            .iter()
+            .any(|link| link.rel == Reconciled && &link.to == to)
+    };
+    memory
+        .links
+        .iter()
+        .filter(|link| link.rel == Contradicts && !settled(&link.to))
+        .filter_map(|link| at.store.get(&link.to).ok().flatten())
+        .filter(|other| other.archived_at.is_none() && other.temporal.is_live())
+        .map(|other| {
+            serde_json::json!({
+                "id": other.id.to_string(),
+                "text": other.text(),
+                "confidence": other.confidence,
+            })
+        })
+        .collect()
+}
+
+/// Name a run. A person's name for it, so nothing after this overwrites it.
+fn rename(at: &mut Answering<'_>, request: &Request) -> Reply {
+    let said = |at: usize| request.args.get(at).and_then(|v| v.as_str());
+    let (Some(session), Some(title)) = (said(0), said(1)) else {
+        return Reply::refused("rename needs a session and a name");
+    };
+    if title.trim().is_empty() {
+        return Reply::refused("a name has to say something");
+    }
+    let session = SessionId::new(session);
+    match at.store.rename_session(&session, title) {
+        Ok(()) => Reply::one(serde_json::json!({
+            "session": session.to_string(),
+            "title": title.trim(),
+        })),
+        Err(why) => Reply::refused(why.to_string()),
+    }
+}
+
+/// The runs this project has had. `{archived: true}` asks for the ones put away instead, which
+/// is the only way to see them: they are deliberately not in the ordinary listing.
+fn sessions(at: &mut Answering<'_>, request: &Request) -> Reply {
+    let archived = request
+        .args
+        .first()
+        .and_then(|said| said.get("archived"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let found = if archived {
+        at.store.archived_sessions(50)
+    } else {
+        at.store.sessions(50)
+    };
+    match found {
         Ok(found) => Reply::rows(
             found
                 .into_iter()
@@ -591,45 +741,15 @@ fn archive_run(
         }
     }
 
+    // And the run itself goes away, which any door may do: putting something out of reach is not
+    // removing it, and a harness that archived a run and still saw it offered would ask again.
+    let put_away = at.store.archive_session(session, Some(now)).is_ok();
+
     Reply::one(serde_json::json!({
         "archived": archived,
         "session": session.to_string(),
+        "put_away": put_away,
         // Named rather than silent, so a peer is not told something untrue by omission.
         "left_to_the_owner": left,
     }))
-}
-
-/// One memory, as a peer receives it.
-fn describe(
-    memory: &Memory,
-    inject_floor: f64,
-    now: Timestamp,
-    names: &std::collections::HashMap<String, String>,
-) -> serde_json::Value {
-    serde_json::json!({
-        "id": memory.id.to_string(),
-        "text": memory.text(),
-        "tier": memory.tier.as_str(),
-        "project": memory.scope.to_string(),
-        // Both: the identity a caller stores, and the name it shows a person.
-        "session": memory.session.as_ref().map(ToString::to_string),
-        "session_name": memory.session.as_ref()
-            .and_then(|id| names.get(id.as_str()))
-            .cloned(),
-        "confidence": memory.confidence,
-        // Computed here rather than left to the caller to derive from a number and a threshold.
-        "asserted": memory.is_assertable(inject_floor, now, true),
-        "since": memory.temporal.valid_from,
-        "until": memory.temporal.valid_to,
-    })
-}
-
-/// Session ids and the names they are printed under.
-fn session_names(at: &mut Answering<'_>) -> std::collections::HashMap<String, String> {
-    at.store
-        .sessions(usize::MAX)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|s| (s.id.to_string(), s.name))
-        .collect()
 }
