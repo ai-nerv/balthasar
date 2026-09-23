@@ -273,6 +273,28 @@ make.recipe{ name = "test-layout-atomic", desc = "layout rollback and cross-stor
                sh.cargo("test", "-p", "balthasar-host", "--test", "laying", "atomic::")
                sh.cargo("test", "-p", "balthasar-store", "--test", "layout_effects")
              end }
+make.recipe{ name = "test-budget", desc = "the budget contract and what is planned against it",
+             run = function()
+               sh.cargo("test", "-p", "balthasar-buffer", "--test", "rules", "mem_budget")
+               sh.cargo("test", "-p", "balthasar-buffer", "--test", "rules", "mem_dispatch")
+               sh.cargo("test", "-p", "balthasar-buffer", "--lib", "policy::")
+             end }
+
+make.recipe{ name = "test-working", desc = "prepared working state, activation and projection",
+             run = function()
+               sh.cargo("test", "-p", "balthasar-host", "--lib", "working::")
+               sh.cargo("test", "-p", "balthasar-host", "--lib", "preparing::")
+               sh.cargo("test", "-p", "balthasar-store", "--lib", "generation::")
+             end }
+
+make.recipe{ name = "test-scheduling", desc = "what background work goes out, and how much at once",
+             run = function()
+               sh.cargo("test", "-p", "balthasar-host", "--lib", "scheduling::")
+               sh.cargo("test", "-p", "balthasar-host", "--lib", "cadence::")
+               sh.cargo("test", "-p", "balthasar-host", "--lib", "sizing::")
+               sh.cargo("test", "-p", "balthasar-host", "--test", "jobs")
+             end }
+
 make.alias("t", "test")
 
 make.recipe{ name = "test-all", desc = "the suite, with every feature on",

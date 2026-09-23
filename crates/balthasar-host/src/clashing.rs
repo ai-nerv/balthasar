@@ -1,9 +1,5 @@
 //! Claims that cannot both be true: found by a model, weighed by the evidence.
 //!
-//! `distil::clashes` finds the lexical half. "the tests need a GPU now" shares nothing with a
-//! held "tests run on CI", so the pressure term in [`balthasar_model::confidence`] had no
-//! producer at all.
-//!
 //! The model names pairs of memories that already exist, by id: it cannot write a claim, change
 //! one, pin one, or say how sure anything is. The force an edge carries is the contradicting
 //! memory's own confidence out of its own witnesses, so the model supplies evidence, never a
@@ -33,8 +29,8 @@ const OF_EACH: usize = 200;
 const ENOUGH: usize = 4;
 /// Edges taken from one answer. A model naming half the project has misunderstood the question.
 const AT_MOST: usize = 12;
-/// Where the count of rounds since the last sweep is kept. How many is `balthasar.memory`'s.
-const ROUNDS: &str = "clash_rounds";
+/// Where the claim count at the last sweep is kept; how many new ones are wanted is
+/// `balthasar.memory`'s.
 const OVER: &str = "clash_over";
 
 /// The project's own counters, kept under the empty session.
@@ -43,12 +39,13 @@ fn project() -> SessionId {
 }
 
 /// Queue a sweep when one is due, there is enough to sweep, and the set has changed since the
-/// last. Nothing here is urgent: one found a few turns late was already sitting there unnoticed.
+/// last.
 pub(crate) fn queue(
     at: &Answering<'_>,
     session: &SessionId,
     helpers: &[String],
     every: u32,
+    hooks: &mut dyn crate::Hooks,
 ) -> Result<(), StoreError> {
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Ok(());
@@ -56,14 +53,16 @@ pub(crate) fn queue(
     if !can_run(helpers, "contradict") {
         return Ok(());
     }
-    let rounds = scrollback.counter(&project(), ROUNDS)?.unwrap_or(0) + 1;
-    scrollback.set_counter(&project(), ROUNDS, rounds)?;
-    if rounds < u64::from(every) || pending(&scrollback.jobs_of(session)?, "contradict", at.now) {
+    if pending(&scrollback.jobs_of(session)?, "contradict", at.now) {
         return Ok(());
     }
-    let claims = claims(at);
-    let swept = scrollback.counter(&project(), OVER)?;
-    if claims.len() < ENOUGH || swept == Some(claims.len() as u64) {
+    let claims = claims(at, hooks);
+    if claims.len() < ENOUGH {
+        return Ok(());
+    }
+    let held = claims.len() as u64;
+    let since = crate::cadence::since(scrollback, &project(), OVER, held, at.now)?;
+    if since.progress == 0 || !crate::cadence::due(since, every) {
         return Ok(());
     }
     let mut input = String::from("The claims:\n");
@@ -84,12 +83,12 @@ pub(crate) fn queue(
                     "why": { "type": "string" } } } } } },
     });
     scrollback.queue_job(session, "contradict", &spec, &json!({}), at.now)?;
-    scrollback.set_counter(&project(), ROUNDS, 0)?;
-    scrollback.set_counter(&project(), OVER, claims.len() as u64)
+    crate::cadence::mark(scrollback, &project(), OVER, held, at.now)
 }
 
-/// The live claims of this project, newest first, as the model is shown them.
-fn claims(at: &Answering<'_>) -> Vec<(String, String)> {
+/// The live claims of this project, newest first, as the model is shown them. Each passes the
+/// same redaction a recall or a supply passes; one withheld is left out rather than named.
+fn claims(at: &Answering<'_>, hooks: &mut dyn crate::Hooks) -> Vec<(String, String)> {
     let mut found: Vec<Memory> = at
         .store
         .all()
@@ -100,11 +99,12 @@ fn claims(at: &Answering<'_>) -> Vec<(String, String)> {
     found.sort_by(|a, b| b.id.as_str().cmp(a.id.as_str()));
     found
         .into_iter()
-        .take(CLAIMS)
-        .map(|memory| {
-            let text: String = memory.text().chars().take(OF_EACH).collect();
-            (memory.id.to_string(), text)
+        .filter_map(|memory| {
+            let said = hooks.redact(&memory.text(), &memory)?;
+            let text: String = said.chars().take(OF_EACH).collect();
+            (!text.trim().is_empty()).then(|| (memory.id.to_string(), text))
         })
+        .take(CLAIMS)
         .collect()
 }
 

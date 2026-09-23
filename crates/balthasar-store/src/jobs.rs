@@ -54,11 +54,14 @@ pub struct Job {
 }
 
 impl Job {
-    /// The job as a harness receives it.
+    /// The job as a harness receives it, on its `attempt`th hand-out. The attempt rides with the
+    /// id so an answer names which lease it belongs to, and one from a lease since reissued is
+    /// not taken for the current attempt.
     #[must_use]
-    pub fn handed(&self) -> Value {
+    pub fn handed(&self, attempt: u32) -> Value {
         let mut out = self.spec.clone();
         out["id"] = Value::String(self.id.clone());
+        out["attempt"] = Value::from(attempt);
         out
     }
 }

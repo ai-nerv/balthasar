@@ -2,47 +2,124 @@ use super::*;
 use balthasar_model::SessionId;
 use balthasar_store::JobState;
 
-#[test]
-fn oversized_rows_remain_visible_until_an_explicit_larger_bounded_retry() {
-    let mut harness = Harness::new();
-    harness.turn(0, &format!("{}\nAlways use uv.", "界".repeat(40_000)));
-    assert!(
-        harness.layout(0)["jobs"]
+/// A row too wide for one extraction is read in pieces, and what it says at the end is reached.
+mod mem_large_row_tail_is_observed {
+    use super::*;
+
+    /// A row far wider than the input budget, with the thing that matters at the very end.
+    fn huge(harness: &mut Harness) {
+        harness.turn(0, &format!("{}\nAlways use uv.", "界".repeat(40_000)));
+    }
+
+    /// Lay out, answer whatever extraction that handed over, and return its input.
+    fn read_one(harness: &mut Harness) -> Option<String> {
+        let laid = harness.layout(0);
+        let job = laid["jobs"]
             .as_array()
             .expect("jobs")
-            .is_empty()
-    );
-    let status = harness.one("jobs", json!({"inspect":true}));
-    assert_eq!(status["extraction"]["blocked"]["cursor"], 0);
-    assert!(
-        status["extraction"]["blocked"]["required_bytes"]
-            .as_u64()
-            .expect("bytes")
-            > 120_000
-    );
-    assert_eq!(status["extraction"]["through"], Value::Null);
-    harness.hooks.0.extract_bytes = 200_000;
-    assert!(
-        harness.rows("jobs", json!({})).is_empty(),
-        "a changed limit does not retry a terminal block implicitly"
-    );
-    let jobs = harness.rows("jobs", json!({"retry_extraction":true}));
-    let job = jobs.iter().find(|j| j["kind"] == "extract").expect("retry");
-    assert!(
-        job["input"]
-            .as_str()
-            .expect("input")
-            .contains("Always use uv.")
-    );
-    assert!(job["input"].as_str().expect("input").len() <= 200_000);
-    harness.one("job_done", json!({"id":job["id"],"text":json!({"ops":[{"op":"add","title":"Rule","text":"Always use uv.","pinned":true}]}).to_string()}));
-    assert_eq!(
-        harness.one("note_open", json!({"id":"N-1"}))["text"],
-        "Always use uv."
-    );
-    let status = harness.one("jobs", json!({"inspect":true}));
-    assert_eq!(status["extraction"]["through"], job["covers"][1]);
-    assert_eq!(status["extraction"]["blocked"], Value::Null);
+            .iter()
+            .find(|j| j["kind"] == "extract")?
+            .clone();
+        let input = job["input"].as_str().expect("input").to_owned();
+        harness.one(
+            "job_done",
+            json!({"id":job["id"],"text":json!({"ops":[]}).to_string()}),
+        );
+        Some(input)
+    }
+
+    #[test]
+    fn the_tail_of_a_huge_row_is_eventually_read() {
+        // The old behaviour blocked here and waited for somebody to raise the limit, which meant
+        // `Always use uv.` sat unread until a person noticed it had. It is read in pieces now.
+        let mut harness = Harness::new();
+        huge(&mut harness);
+        let mut reached = false;
+        for _ in 0..40 {
+            let Some(input) = read_one(&mut harness) else {
+                break;
+            };
+            reached |= input.contains("Always use uv.");
+        }
+        assert!(reached, "the tail was never offered to an extraction");
+    }
+
+    #[test]
+    fn coverage_does_not_advance_over_a_row_still_part_read() {
+        let mut harness = Harness::new();
+        huge(&mut harness);
+        read_one(&mut harness).expect("a first piece");
+        let status = harness.one("jobs", json!({"inspect":true}));
+        assert_eq!(
+            status["extraction"]["through"],
+            Value::Null,
+            "a piece is not the row"
+        );
+    }
+
+    #[test]
+    fn how_far_it_has_got_is_visible_rather_than_silent() {
+        // Explicit progress in place of an explicit block: either is answerable, and silence is
+        // what the phase forbids.
+        let mut harness = Harness::new();
+        huge(&mut harness);
+        read_one(&mut harness).expect("a first piece");
+        let status = harness.one("jobs", json!({"inspect":true}));
+        let partial = &status["extraction"]["partial"];
+        assert_eq!(partial["cursor"], 0);
+        assert!(partial["read"].as_u64().expect("read") > 0, "{partial}");
+        assert!(
+            partial["read"].as_u64().expect("read") < partial["of"].as_u64().expect("of"),
+            "{partial}"
+        );
+    }
+
+    #[test]
+    fn each_piece_carries_on_where_the_last_one_stopped() {
+        // Not every pass advances: an empty answer to a row that lays down a rule is deliberately
+        // asked once more with the same input. What must never happen is going backwards.
+        let mut harness = Harness::new();
+        huge(&mut harness);
+        let mut offsets = Vec::new();
+        for _ in 0..8 {
+            let Some(input) = read_one(&mut harness) else {
+                break;
+            };
+            let at = input
+                .split("(continued at ")
+                .nth(1)
+                .and_then(|rest| rest.split(' ').next())
+                .and_then(|n| n.parse::<usize>().ok())
+                .expect("a continuation marker");
+            offsets.push(at);
+        }
+        assert_eq!(offsets.first(), Some(&0), "{offsets:?}");
+        assert!(
+            offsets.windows(2).all(|two| two[1] >= two[0]),
+            "{offsets:?}"
+        );
+        assert!(
+            offsets.last() > offsets.first(),
+            "it never got past the head: {offsets:?}"
+        );
+    }
+
+    #[test]
+    fn a_budget_too_small_for_even_one_piece_is_still_a_visible_block() {
+        let mut harness = Harness::keeping(Keeping {
+            extract_bytes: 0,
+            ..Keeping::default()
+        });
+        huge(&mut harness);
+        harness.layout(0);
+        let status = harness.one("jobs", json!({"inspect":true}));
+        // 0 clamps to the floor, which a 120,000-byte row still does not fit in one piece of.
+        assert!(
+            status["extraction"]["partial"]["cursor"] == 0
+                || status["extraction"]["blocked"]["cursor"] == 0,
+            "neither read nor reported: {status}"
+        );
+    }
 }
 
 #[test]
@@ -530,5 +607,140 @@ fn malformed_results_retry_boundedly_without_acknowledging_the_range() {
         let status = harness.one("jobs", json!({"inspect":true}));
         assert_eq!(status["jobs"][0]["state"], "failed");
         assert!(status["jobs"][0]["result"]["failed"].is_string());
+    }
+}
+
+/// A run of tool rounds under one prompt is read as it happens.
+mod mem_background_progress_during_tool_loop {
+    use super::*;
+
+    /// One tool call and its result, as a round of an agent's own loop produces them.
+    fn tools(harness: &mut Harness, from: u64, rounds: u64) {
+        for n in 0..rounds {
+            let cursor = from + n;
+            harness.one(
+                "observe",
+                json!({ "cursor": cursor, "role": "assistant", "kind": "tool",
+                        "tool": "read", "tokens": 20, "text": format!("file {n} says something") }),
+            );
+        }
+    }
+
+    #[test]
+    fn rows_written_after_the_prompt_are_offered_without_waiting_for_the_next_one() {
+        // The span used to be capped at the last user row, so a hundred tool rounds under one
+        // prompt were read only once somebody typed again.
+        let mut harness = Harness::new();
+        harness.turn(0, "find where the parser is");
+        let first = harness.layout(0);
+        harness.answer(&first["jobs"], "extract", json!({ "ops": [] }));
+        tools(&mut harness, 2, 60);
+        let later = harness.layout(3);
+        let job = later["jobs"]
+            .as_array()
+            .expect("jobs")
+            .iter()
+            .find(|j| j["kind"] == "extract")
+            .expect("an extract job in a later round");
+        assert_eq!(job["covers"], json!([1, 61]), "the rows of the tool loop");
+    }
+
+    #[test]
+    fn the_first_round_still_stops_at_the_prompt() {
+        // What it reads on round 0 is this prompt and what came before it, so a rule stated now
+        // reaches an agent started in this same prompt rather than one row of it at a time.
+        let mut harness = Harness::new();
+        harness.turn(0, "use uv, not pip");
+        tools(&mut harness, 2, 4);
+        let laid = harness.layout(0);
+        let job = laid["jobs"]
+            .as_array()
+            .expect("jobs")
+            .iter()
+            .find(|j| j["kind"] == "extract")
+            .expect("an extract job");
+        assert_eq!(
+            job["covers"],
+            json!([0, 0]),
+            "up to the prompt, not past it"
+        );
+    }
+
+    #[test]
+    fn a_loop_that_writes_nothing_new_asks_for_nothing() {
+        let mut harness = Harness::new();
+        harness.turn(0, "carry on");
+        let first = harness.layout(0);
+        harness.answer(&first["jobs"], "extract", json!({ "ops": [] }));
+        for round in 1..40 {
+            let laid = harness.layout(round);
+            assert!(
+                laid["jobs"].as_array().expect("jobs").is_empty(),
+                "round {round} asked for something out of an unchanged transcript: {laid}"
+            );
+        }
+    }
+}
+
+/// A helper that finds nothing is not a reason to stop, nor a reason to keep asking at full tilt.
+mod mem_empty_result_backoff {
+    use super::*;
+
+    #[test]
+    fn an_empty_answer_never_acknowledges_what_it_did_not_read() {
+        // Backing off must not be done by pretending the span was covered.
+        let mut harness = Harness::new();
+        harness.turn(0, "The parser is Rust.");
+        let job = extract(&mut harness);
+        harness.one("job_done", json!({"id":job["id"],"text":"{\"ops\":[]}"}));
+        let status = harness.one("jobs", json!({"inspect":true}));
+        assert_eq!(status["extraction"]["through"], job["covers"][1]);
+        assert_eq!(status["extraction"]["blocked"], Value::Null);
+    }
+
+    #[test]
+    fn the_next_eligible_span_is_asked_for_once_the_last_one_settled() {
+        // Draining: one extraction settling makes the rows written since it due, without a new
+        // prompt and without anything being asked twice.
+        let mut harness = Harness::new();
+        harness.turn(0, "The parser is Rust.");
+        let first = extract(&mut harness);
+        harness.one("job_done", json!({"id":first["id"],"text":"{\"ops\":[]}"}));
+        harness.turn(1, "And the lexer is hand-written.");
+        let next = extract(&mut harness);
+        assert_ne!(next["id"], first["id"]);
+        assert_eq!(
+            next["covers"][0].as_u64().expect("from"),
+            first["covers"][1].as_u64().expect("to") + 1,
+            "it carried on rather than starting again"
+        );
+    }
+
+    #[test]
+    fn a_failure_backs_off_instead_of_spinning() {
+        let mut harness = Harness::new();
+        harness.turn(0, "The parser is Rust.");
+        let job = extract(&mut harness);
+        harness.one(
+            "job_done",
+            json!({"id":job["id"],"failed":"provider unavailable"}),
+        );
+        harness.rows("jobs", json!({}));
+        harness.one(
+            "job_done",
+            json!({"id":job["id"],"failed":"provider unavailable"}),
+        );
+        for round in 0..10 {
+            assert!(
+                harness.rows("jobs", json!({})).is_empty(),
+                "round {round} asked again after a terminal failure"
+            );
+        }
+        let status = harness.one("jobs", json!({"inspect":true}));
+        assert_eq!(
+            status["extraction"]["through"],
+            Value::Null,
+            "nothing faked"
+        );
     }
 }

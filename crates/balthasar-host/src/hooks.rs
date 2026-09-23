@@ -23,6 +23,11 @@ pub trait Hooks {
         Some(text.to_owned())
     }
 
+    /// What of a transcript row may reach a helper, and so anything derived from it.
+    fn withhold(&mut self, turn: &Turn) -> Option<String> {
+        Some(turn.text.clone())
+    }
+
     fn window(&self) -> Rules {
         Rules::default()
     }

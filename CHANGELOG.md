@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.0] - 2026-09-23
+
+### <!-- 0 -->⛰️  Features
+
+- Budgeted layouts and prepared working state
+
 ## [0.3.0] - 2026-09-21
 
 ### <!-- 0 -->⛰️  Features

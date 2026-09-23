@@ -133,7 +133,12 @@ pub fn corrected(tokens: u32, factor: f64) -> u32 {
 #[must_use]
 pub fn budget(rules: &Rules, ask: &Ask, factor: f64) -> Budget {
     let fixed = corrected(ask.fixed, factor);
-    let room = ask.window.saturating_sub(fixed).saturating_sub(ask.reply);
+    // The whole input is held under `L` — a share of the window, not merely what is left of it
+    // after the fixed costs and the reply. Planning to the leftover puts the fixed costs outside
+    // the budget, and the boundary that counts the request counts them too.
+    let limit = crate::policy::Room::of(rules.policy, Some(ask.window), ask.reply)
+        .map_or(0, |room| room.limit);
+    let room = limit.saturating_sub(fixed);
     let part = |share: f64| (f64::from(room) * share).round() as u32;
     let (memory, pinned, summary) = (
         part(rules.shares.memory),
@@ -160,6 +165,10 @@ pub fn budget(rules: &Rules, ask: &Ask, factor: f64) -> Budget {
 pub fn lay(rules: &Rules, ask: &Ask, rows: &[Row], held: &Held, factor: f64) -> Layout {
     let mut budget = budget(rules, ask, factor);
     let fix = |tokens: u32| corrected(tokens, factor);
+    // A summary stands in for its span only while it is smaller than the span. Summarising a few
+    // short turns costs more than keeping them, and a compaction that grows the request is a
+    // compaction that should not have happened.
+    let held = &worth_it(held, rows, factor);
     let shown: Vec<&Row> = rows
         .iter()
         .filter(|r| !held.summary.is_some_and(|s| s.covers(r.cursor)))
@@ -482,5 +491,33 @@ fn thousands(tokens: u32) -> String {
         format!("{}k", (tokens + 500) / 1_000)
     } else {
         tokens.to_string()
+    }
+}
+
+/// `held` with its summary dropped when the span it covers is still whole and no larger than the
+/// summary itself.
+///
+/// Whole matters: once the oldest rows have been dropped, the summary is all that is left of them
+/// and the live remainder is cheap for that reason, not because summarising was pointless. Both
+/// ends of the span still being live is what says nothing has gone.
+fn worth_it(held: &Held, rows: &[Row], factor: f64) -> Held {
+    let Some(covered) = held.summary else {
+        return held.clone();
+    };
+    let live = |cursor: u64| rows.iter().any(|row| row.cursor == cursor);
+    if !live(covered.from) || !live(covered.to) {
+        return held.clone();
+    }
+    let span: u32 = rows
+        .iter()
+        .filter(|row| covered.covers(row.cursor))
+        .map(|row| corrected(row.tokens, factor))
+        .sum();
+    if span > corrected(covered.tokens, factor) {
+        return held.clone();
+    }
+    Held {
+        summary: None,
+        ..held.clone()
     }
 }

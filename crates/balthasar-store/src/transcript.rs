@@ -533,6 +533,7 @@ fn prepare(connection: &Connection) -> Result<(), StoreError> {
     connection.execute_batch(crate::jobs::SCHEMA)?;
     crate::effects::prepare(connection)?;
     connection.execute_batch(crate::extraction::SCHEMA)?;
+    connection.execute_batch(crate::generation::SCHEMA)?;
     crate::notes::prepare(connection)?;
     Ok(())
 }

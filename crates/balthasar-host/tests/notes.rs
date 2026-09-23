@@ -30,6 +30,10 @@ mod standing;
 #[path = "notes/quoting.rs"]
 mod quoting;
 
+/// Rows that may not state a rule.
+#[path = "notes/injection.rs"]
+mod injection;
+
 struct Keep(Keeping);
 impl Hooks for Keep {
     fn memory(&self) -> Keeping {
@@ -103,6 +107,28 @@ impl Harness {
             json!({ "round": round, "window": 200_000, "reply": 8_000, "query": "carry on",
                     "helpers": ["notes", "curate"] }),
         )
+    }
+
+    /// Lay out under hooks of the caller's own, for what a configuration's say changes.
+    fn ask_with(&mut self, asked: Value, hooks: &mut dyn Hooks) -> Value {
+        let mut at = Answering {
+            store: &mut self.store,
+            scrollback: Some(&mut self.scrollback),
+            scratch: None,
+            scope: ScopeId::new("/w/thing"),
+            agent: balthasar_model::AgentId::main(),
+            now: NOW,
+            inject_floor: floor::INJECT,
+            live_floor: floor::LIVE,
+            capture: false,
+        };
+        let request = Request {
+            call: "layout".into(),
+            args: vec![json!(SESSION), asked],
+        };
+        let reply = answer_hooked(&mut at, &Door::Owner, &request, hooks);
+        assert!(reply.ok, "layout: {:?}", reply.error);
+        reply.result.into_iter().next().unwrap_or(Value::Null)
     }
 
     /// Answer the one job of `kind` in `jobs`.

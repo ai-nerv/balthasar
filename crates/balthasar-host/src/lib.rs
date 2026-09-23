@@ -1,6 +1,7 @@
 //! What another program may ask balthasar, and what it may not.
 
 mod applying;
+mod cadence;
 mod calendar;
 mod ceiling;
 mod clashing;
@@ -10,13 +11,17 @@ mod jobs;
 mod layout;
 mod notes;
 mod outcome;
+mod preparing;
 mod queue;
 mod saying;
+mod scheduling;
 mod settling;
+mod sizing;
 mod supply;
 mod titling;
 mod verbs;
 mod window;
+pub mod working;
 
 pub use balthasar_buffer::Rules;
 pub use ceiling::Door;

@@ -144,10 +144,11 @@ fn a_layout_answers_in_the_contracts_shape() {
 
     assert!(laid["id"].as_str().expect("an id").starts_with("L-"));
     let budget = &laid["budget"];
-    assert_eq!(budget["room"], 157_000);
-    assert_eq!(budget["memory"], 7_850);
-    assert_eq!(budget["pinned"], 4_710);
-    assert_eq!(budget["summary"], 12_560);
+    // Half of 200k is the limit; 11k of it is the system prompt and the tool schemas.
+    assert_eq!(budget["room"], 89_000);
+    assert_eq!(budget["memory"], 4_450);
+    assert_eq!(budget["pinned"], 2_670);
+    assert_eq!(budget["summary"], 7_120);
     assert_eq!(budget["factor"], 1.0);
     assert_eq!(named(&laid), [0, 1, 2, 3], "ascending, from live");
     assert_eq!(kinds(&laid), ["item", "item", "item", "memory", "item"]);

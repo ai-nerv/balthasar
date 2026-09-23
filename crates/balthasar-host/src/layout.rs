@@ -93,6 +93,7 @@ fn lay_out(
         idle_s: asked["idle_s"].as_u64(),
         tight: prompt.overflows,
     };
+    let counting = balthasar_buffer::Counting::read(asked["counting"].as_str());
     let caps = balthasar_buffer::budget(&rules, &ask, factor);
     let project_notes = crate::notes::projection::project(
         at,
@@ -102,15 +103,18 @@ fn lay_out(
     )
     .map_err(|e| e.to_string())?;
 
-    // Settled once per prompt, so every round of it sends the same memory.
-    let memory = if let Some(kept) = Supplied::kept(prompt.memory.as_ref(), &query) {
+    // Settled once per prompt, so every round of it sends the same memory — unless the run has
+    // since hit an error or been spoken to, which can make something relevant that was not.
+    let through = turns.last().map_or(0, |turn| turn.cursor);
+    let moved = supply::moved(&turns, prompt.memory.as_ref());
+    let memory = if let Some(kept) = Supplied::kept(prompt.memory.as_ref(), &query, moved) {
         kept
     } else {
         let found = supply::candidates(at, &query, CANDIDATES);
         let room = (f64::from(caps.memory) / factor) as u32;
         let packed = supply::pack(at, &found, room, rules.estimate_chars_per_token, hooks)
             .unwrap_or_default();
-        prompt.memory = Some(packed.as_json(&query));
+        prompt.memory = Some(packed.as_json(&query, through));
         packed
     };
 
@@ -121,6 +125,7 @@ fn lay_out(
         .map_err(|e| e.to_string())?;
     let mut stubs: HashMap<u64, String> = HashMap::new();
     let rows = rows_of(&turns, &rules, hooks, &mut stubs);
+
     let held = Held {
         summary: summary.as_ref().map(|s| Covered {
             from: s.from,
@@ -157,24 +162,35 @@ fn lay_out(
             (span.from, span.to),
             &rules,
             laid.budget.summary,
+            hooks,
         )
         .map_err(e)?;
         prompt.compactions += 1;
         let keeping = hooks.memory();
-        crate::notes::before_cut(at, session, span.to, &prompt.helpers, &keeping).map_err(e)?;
+        crate::notes::before_cut(at, session, span.to, &prompt.helpers, &keeping, hooks)
+            .map_err(e)?;
+        // What the cut rows still mean for the task, prepared while they are still readable.
+        if crate::queue::can_run(&prompt.helpers, "working") {
+            let policy = serde_json::json!({ "limit": laid.budget.conversation });
+            crate::preparing::queue(at, session, (span.from, span.to), &policy, hooks)
+                .map_err(e)?;
+        }
     }
-    // This prompt and what came before it, read in the background while it is answered: a rule
-    // the person just stated reaches an agent started in this same prompt.
+    // On the first round, this prompt and what came before it, so a rule the person just stated
+    // reaches an agent started in this same prompt. On later rounds every row there is, so a run
+    // of hundreds of tool rounds under one prompt is read as it happens rather than at the end.
     let asked_now = turns
         .iter()
         .rev()
         .find(|t| t.role == "user")
         .map(|t| t.cursor);
-    if ask.round == 0
-        && let Some(upto) = asked_now
-    {
+    if ask.round > 0 || asked_now.is_some() {
         let keeping = hooks.memory();
-        crate::notes::background(at, session, &prompt.helpers, Some(upto), &keeping).map_err(e)?;
+        let upto = (ask.round == 0).then_some(asked_now).flatten();
+        crate::notes::background(at, session, &prompt.helpers, upto, &keeping, hooks).map_err(e)?;
+        // What was prepared earlier takes effect here, between turns, with no request of its own.
+        crate::preparing::at_boundary(at, session, Some(u64::from(laid.budget.conversation)))
+            .map_err(e)?;
     }
     let curating = known
         .iter()
@@ -185,7 +201,7 @@ fn lay_out(
         && crate::queue::can_run(&prompt.helpers, "curate")
     {
         let room = (f64::from(caps.memory) / factor) as u32;
-        crate::jobs::curate(at, session, &query, &prompt.mark, room, hooks).map_err(e)?;
+        crate::jobs::curate(at, session, &query, &prompt.mark, room, through, hooks).map_err(e)?;
     }
     let jobs = crate::jobs::hand_out(
         at,
@@ -225,6 +241,9 @@ fn lay_out(
             "conversation": b.conversation, "memory": b.memory, "pinned": b.pinned,
             "summary": b.summary, "used": b.used, "estimated_input": b.estimated_input,
             "factor": (b.factor * 1000.0).round() / 1000.0,
+            // What the sizes above are worth: the weaker of what the caller can count and what
+            // this layer can, so neither side reads an estimate as a certified ceiling.
+            "counting": counting.as_str(),
         },
         "slots": slots,
         "jobs": jobs,
@@ -291,7 +310,9 @@ fn gather(
             "nothing has been observed for '{session}' — stream turns before asking for a layout"
         ));
     }
-    let summary = scrollback.summary(session).map_err(e)?;
+    let summary =
+        crate::preparing::projection(scrollback, session, scrollback.summary(session).map_err(e)?)
+            .map_err(e)?;
     let mark = turns
         .iter()
         .rev()

@@ -28,14 +28,19 @@ pub(crate) struct Supplied {
 }
 
 impl Supplied {
-    /// As kept for the rest of a prompt, with what it answered.
-    pub(crate) fn as_json(&self, query: &str) -> Value {
-        json!({ "query": query, "text": self.text, "ids": self.ids, "tokens": self.tokens })
+    /// As kept for the rest of a prompt, with what it answered and how far the run had got.
+    pub(crate) fn as_json(&self, query: &str, through: u64) -> Value {
+        json!({ "query": query, "text": self.text, "ids": self.ids, "tokens": self.tokens,
+                "through": through })
     }
 
-    /// What a prompt kept, if it answered `query`.
-    pub(crate) fn kept(held: Option<&Value>, query: &str) -> Option<Self> {
+    /// What a prompt kept, if it answered `query` and nothing has happened since to change what
+    /// is worth offering.
+    pub(crate) fn kept(held: Option<&Value>, query: &str, moved: bool) -> Option<Self> {
         let held = held?;
+        if moved {
+            return None;
+        }
         (held.get("query")?.as_str()? == query).then(|| Self {
             text: held["text"].as_str().unwrap_or_default().to_owned(),
             ids: held["ids"]
@@ -112,10 +117,18 @@ pub(crate) fn pack(
     let mut ids = Vec::new();
     let mut hedged = Vec::new();
     let mut headed = false;
+    let mut said: Vec<String> = Vec::new();
     for hit in found {
         let Some(text) = hooks.redact(&hit.memory.text(), &hit.memory) else {
             continue;
         };
+        // The same claim remembered twice is one line of room, not two. Best first, so the copy
+        // that is dropped is the worse-scoring one.
+        let same = alike(&text);
+        if said.contains(&same) {
+            continue;
+        }
+        said.push(same);
         let line = format!("- {}\n", text.trim());
         let id = hit.memory.id.to_string();
         if !hit.memory.is_assertable(at.inject_floor, at.now, true) {
@@ -155,3 +168,32 @@ pub(crate) fn pack(
     let tokens = u32::try_from(text.len().div_ceil(per_token as usize)).unwrap_or(u32::MAX);
     Some(Supplied { text, ids, tokens })
 }
+
+/// One claim's text as deduplication compares it: case, spacing and trailing punctuation are not
+/// what makes two claims different.
+fn alike(text: &str) -> String {
+    text.to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches(['.', '!', ';', ','])
+        .to_owned()
+}
+
+/// Whether anything written since a kept selection changes what is worth offering.
+///
+/// A tool call that failed, or a turn from a person or another agent: each can make a memory
+/// relevant that was not, and none of them needs a new prompt to arrive. An ordinary successful
+/// tool row does not, so a long clean run keeps one selection and one stable prefix.
+pub(crate) fn moved(rows: &[balthasar_store::Turn], held: Option<&Value>) -> bool {
+    let Some(through) = held.and_then(|held| held["through"].as_u64()) else {
+        return held.is_some();
+    };
+    rows.iter()
+        .filter(|turn| turn.cursor > through)
+        .any(|turn| turn.error || turn.role == "user")
+}
+
+#[cfg(test)]
+#[path = "supply/tests.rs"]
+mod tests;
