@@ -11,6 +11,13 @@
 # to clear the old rows or a better extractor leaves its predecessor's names behind and the
 # rarity counts go quietly wrong.
 #
+# `generation` is derived in the same sense and bounded for the same reason, with one difference
+# stated rather than glossed: a generation is not byte-recomputable, because a helper asked twice
+# writes a different summary. It is still evidence of nothing. Every row it describes is in `turn`
+# where it always was, so dropping a superseded one loses no claim, no witness and no confidence -
+# which is what this gate protects. Only the retained-count trim may remove one, and never the
+# active one.
+#
 # THE LEDGER IS A THIRD KIND. `recall_run` and the tables under it are bounded telemetry with a
 # retention policy the user sets: they record that a search happened and how the acting went,
 # never what a memory is. A store whose entire ledger has aged out still believes exactly what
@@ -21,7 +28,7 @@ set -eu
 
 PURGE='crates/balthasar-store/src/purge.rs'
 LEDGER='crates/balthasar-store/src/usage.rs'
-DERIVED='entity memory_fts turn_fts'
+DERIVED='entity memory_fts turn_fts generation'
 TELEMETRY='recall_run recall_candidate injection injection_memory action_use action_memory outcome'
 
 fail=0

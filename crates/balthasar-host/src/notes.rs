@@ -25,13 +25,16 @@ pub struct Keeping {
     pub review: bool,
     /// User turns between extractions.
     pub extract_every: u32,
+    /// Rows of any kind between extractions, so a run that produces no user turns still has
+    /// what it did read. Zero waits for user turns alone.
+    pub extract_rows: u32,
     /// Maximum bytes of original transcript rows and context in one extraction input.
     pub extract_bytes: u32,
     /// Extractions between tidy-ups.
     pub tidy_every: u32,
-    /// Background rounds between sweeps for claims that disagree.
+    /// New claims between sweeps for claims that disagree.
     pub contradict_every: u32,
-    /// Background rounds between asking a model what a run should be called.
+    /// New turns between asking a model what a run should be called.
     pub title_every: u32,
     /// What an extraction works through.
     pub checklist: String,
@@ -42,9 +45,10 @@ impl Default for Keeping {
         Self {
             review: false,
             extract_every: 1,
+            extract_rows: 40,
             extract_bytes: 100_000,
             tidy_every: 10,
-            contradict_every: 20,
+            contradict_every: 8,
             title_every: 6,
             checklist: CHECKLIST.to_owned(),
         }
@@ -72,6 +76,11 @@ impl Keeping {
                 .and_then(Value::as_bool)
                 .unwrap_or(base.review),
             extract_every: count("extract_every", base.extract_every),
+            extract_rows: said
+                .get("extract_rows")
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(base.extract_rows),
             extract_bytes: count("extract_bytes", base.extract_bytes).clamp(4_096, 1_000_000),
             tidy_every: count("tidy_every", base.tidy_every),
             contradict_every: count("contradict_every", base.contradict_every),
@@ -172,13 +181,14 @@ pub(crate) fn background(
     helpers: &[String],
     upto: Option<u64>,
     keeping: &Keeping,
+    hooks: &mut dyn crate::Hooks,
 ) -> Result<(), StoreError> {
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Ok(());
     };
     // Its own role and its own cadence, and nothing to do with notes: what it reads is the
     // project's memories, not the transcript.
-    crate::clashing::queue(at, session, helpers, keeping.contradict_every)?;
+    crate::clashing::queue(at, session, helpers, keeping.contradict_every, hooks)?;
     // What the run should be called, which is the summariser's job and not the notes'.
     crate::titling::queue(at, session, helpers, keeping.title_every)?;
     // The role the extraction itself asks for, not the one it used to be filed under: a harness
@@ -186,7 +196,7 @@ pub(crate) fn background(
     if !can_run(helpers, "notes") {
         return Ok(());
     }
-    extraction::queue(at, session, upto, keeping, false, false)?;
+    extraction::queue(at, session, upto, keeping, false, false, hooks)?;
     let jobs = scrollback.jobs_of(session)?;
     let since = scrollback.counter(&project(), "extracts")?.unwrap_or(0);
     if since >= u64::from(keeping.tidy_every)
@@ -206,9 +216,10 @@ pub(crate) fn before_cut(
     to: u64,
     helpers: &[String],
     keeping: &Keeping,
+    hooks: &mut dyn crate::Hooks,
 ) -> Result<(), StoreError> {
     if can_run(helpers, "notes") {
-        extraction::queue(at, session, Some(to), keeping, true, false)?;
+        extraction::queue(at, session, Some(to), keeping, true, false, hooks)?;
     }
     Ok(())
 }

@@ -556,6 +556,21 @@ mod crowd {
         }
     }
 
+    /// Ask, taking a closed connection for an answer: over the ceiling, `connect` still succeeds
+    /// and the write races the server's close.
+    fn try_say(stream: &mut UnixStream, call: &str) -> Option<serde_json::Value> {
+        let body =
+            serde_json::to_vec(&serde_json::json!({ "call": call, "args": [] })).expect("encode");
+        let mut framed = (body.len() as u32).to_be_bytes().to_vec();
+        framed.extend_from_slice(&body);
+        stream.write_all(&framed).ok()?;
+        let mut header = [0_u8; 4];
+        stream.read_exact(&mut header).ok()?;
+        let mut answer = vec![0_u8; u32::from_be_bytes(header) as usize];
+        stream.read_exact(&mut answer).ok()?;
+        serde_json::from_slice(&answer).ok()
+    }
+
     fn say(stream: &mut UnixStream, call: &str) -> serde_json::Value {
         let body =
             serde_json::to_vec(&serde_json::json!({ "call": call, "args": [] })).expect("encode");
@@ -632,7 +647,8 @@ mod crowd {
             let mut next = UnixStream::connect(path).expect("connect");
             next.set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .expect("a deadline");
-            if say(&mut next, "verbs")["ok"] == serde_json::json!(true) {
+            if try_say(&mut next, "verbs").is_some_and(|said| said["ok"] == serde_json::json!(true))
+            {
                 taken = Some(next);
                 break;
             }

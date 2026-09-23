@@ -60,16 +60,25 @@ balthasar.load("sections.lua")
 
 -- ------------------------------------------------------------------ the window
 
--- How a request is laid out (the `layout` verb). Every number is a share of the room -- the
--- window less the fixed items (system prompt, tool schemas) and the reply -- so the same rules
--- fit a 32k model and a 1M one. The values below are the shipped defaults.
+-- How a request is laid out (the `layout` verb).
+--
+-- One request may occupy a *share* of the model's window -- half of it by default -- and that
+-- share covers the whole request: the system prompt, the tool schemas and every message. The
+-- reply is reserved separately, out of what is left. `room` is that share less the fixed items,
+-- and every number below is a share of `room`, so the same rules fit a 32k model and a 1M one.
+--
+-- The harness counts the request it is about to send against the same limit and refuses one that
+-- is over it, so raising `budget.share` past what a harness allows does not buy a larger request:
+-- it buys a refusal. The values below are the shipped defaults.
 --
 -- balthasar.window = {
+--   budget = { share = 0.50, margin = 0 },  -- of the window, and what is held back against a
+--                                           -- provider counting differently from this estimate
 --   shares = { memory = 0.05, pinned = 0.03, summary = 0.08 },  -- the rest is the conversation
 --   prune_at   = 0.70,   -- start stubbing old tool results
 --   compact_at = 0.85,   -- ask for a summary of the oldest turns
 --   compact_to = 0.50,   -- ...enough to bring the conversation back to half
---   warn_at    = 0.75,   -- tell the main model it is getting full, so it can save notes
+--   warn_at    = 0.75,   -- say so in the request; keeping what matters is this layer's job
 --   keep_turns   = 2,    -- the last N user turns stay word for word
 --   keep_results = 3,    -- ...and the last N tool results
 --   stub_over    = 1500, -- only results bigger than this are worth stubbing
@@ -77,9 +86,16 @@ balthasar.load("sections.lua")
 --   max_compactions_per_prompt = 3,
 --   estimate_chars_per_token   = 4,  -- balthasar's own estimates; corrected per model
 --   cache_ttl_s = 300,   -- past this idle, the provider's cache is gone and stubbing is free
---   warning = "(the conversation is getting long: save anything you will need later to your notes now)",
+--   warning = "(this conversation is long enough that earlier turns are being summarised rather than sent word for word)",
 --   policy = nil,        -- function(budget, items) -> { slots = {...}, why = "..." }
 -- }
+--
+-- With no helper models available (`helpers` empty in a `layout` call), nothing paid runs in the
+-- background: no summaries, no notes, no working state. The layout is still deterministic and
+-- still bounded -- old tool results are stubbed and the oldest whole groups are dropped -- so a
+-- session works, with less carried forward. A model whose window nobody reported is refused
+-- explicitly rather than assumed roomy.
+
 
 -- How notes are kept (Letta-style). Pinned notes are in every request; the rest are listed by
 -- a one-line description until the model opens one. A helper model (the harness's `memory`
@@ -90,7 +106,8 @@ balthasar.load("sections.lua")
 --   extract_every = 1,     -- user turns between extractions
 --   extract_bytes = 100000,-- input bytes per extraction (4096..1000000)
 --   tidy_every    = 10,    -- extractions between tidy-ups (merge duplicates, retire stale)
---   contradict_every = 20, -- rounds between sweeps for claims that cannot both be true
+--   contradict_every = 8,  -- new claims between sweeps for ones that cannot both be true
+--   title_every   = 6,     -- new turns between asking a model what a run should be called
 --   checklist     = nil,   -- replace the shipped reflection checklist with your own text
 -- }
 --

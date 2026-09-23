@@ -638,3 +638,101 @@ fn review_does_not_overwrite_a_target_that_changed_after_staging() {
         "Always use Rust."
     );
 }
+
+/// What a configuration keeps from helpers stays kept from everything derived out of it.
+mod mem_reflection_inherits_restrictions {
+    use super::*;
+    use balthasar_model::SessionId;
+
+    const SENTINEL: &str = "SENTINEL-LOCAL-ONLY";
+
+    /// Withholds any row holding the sentinel, as a configuration restricting a tier would.
+    struct Guarding(Keeping);
+
+    impl Hooks for Guarding {
+        fn memory(&self) -> Keeping {
+            self.0.clone()
+        }
+
+        fn withhold(&mut self, turn: &balthasar_store::Turn) -> Option<String> {
+            (!turn.text.contains(SENTINEL)).then(|| turn.text.clone())
+        }
+    }
+
+    fn guarded() -> Harness {
+        let mut harness = Harness::new();
+        harness.hooks = Keep(Keeping::default());
+        harness
+    }
+
+    /// The input of the one job of `kind` a layout handed over.
+    fn asked(laid: &Value, kind: &str) -> Option<String> {
+        laid["jobs"]
+            .as_array()
+            .expect("jobs")
+            .iter()
+            .find(|j| j["kind"] == kind)
+            .map(|j| j["input"].as_str().unwrap_or_default().to_owned())
+    }
+
+    #[test]
+    fn a_withheld_row_does_not_reach_an_extraction() {
+        let mut harness = guarded();
+        harness.turn(0, "the deploy key is SENTINEL-LOCAL-ONLY");
+        harness.turn(1, "and the parser is in src/parse.rs");
+        let laid = harness.ask_with(
+            json!({ "round": 0, "window": 200_000, "reply": 8_000, "query": "carry on",
+                    "helpers": ["notes"] }),
+            &mut Guarding(Keeping::default()),
+        );
+        let input = asked(&laid, "extract").expect("an extraction");
+        assert!(!input.contains(SENTINEL), "{input}");
+        assert!(
+            input.contains("src/parse.rs"),
+            "the rest still went: {input}"
+        );
+    }
+
+    #[test]
+    fn its_place_is_kept_so_the_span_does_not_read_as_shorter_than_it_is() {
+        // Dropping the row silently would leave the span looking fully read with a hole in it.
+        let mut harness = guarded();
+        harness.turn(0, "the deploy key is SENTINEL-LOCAL-ONLY");
+        harness.turn(1, "and the parser is in src/parse.rs");
+        let laid = harness.ask_with(
+            json!({ "round": 0, "window": 200_000, "reply": 8_000, "query": "carry on",
+                    "helpers": ["notes"] }),
+            &mut Guarding(Keeping::default()),
+        );
+        let input = asked(&laid, "extract").expect("an extraction");
+        assert!(input.contains("[0] (withheld)"), "{input}");
+    }
+
+    #[test]
+    fn what_was_withheld_is_recorded_against_the_job_that_did_not_read_it() {
+        let mut harness = guarded();
+        harness.turn(0, "the deploy key is SENTINEL-LOCAL-ONLY");
+        harness.ask_with(
+            json!({ "round": 0, "window": 200_000, "reply": 8_000, "query": "carry on",
+                    "helpers": ["notes"] }),
+            &mut Guarding(Keeping::default()),
+        );
+        let job = harness
+            .scrollback
+            .jobs_of(&SessionId::new(SESSION))
+            .expect("jobs")
+            .into_iter()
+            .find(|j| j.kind == "extract")
+            .expect("an extraction");
+        assert_eq!(job.context["withheld"], json!([0]));
+    }
+
+    #[test]
+    fn nothing_is_withheld_when_a_configuration_says_nothing() {
+        let mut harness = guarded();
+        harness.turn(0, "the deploy key is SENTINEL-LOCAL-ONLY");
+        let laid = harness.layout(0);
+        let input = asked(&laid, "extract").expect("an extraction");
+        assert!(input.contains(SENTINEL), "the default withholds nothing");
+    }
+}

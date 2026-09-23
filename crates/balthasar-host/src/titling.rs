@@ -27,12 +27,8 @@ const TURNS: usize = 12;
 const OF_EACH: usize = 400;
 /// Below this many turns there is nothing a title could say that the first prompt does not.
 const ENOUGH: usize = 4;
-/// Background rounds between asking again, and where the count is kept.
-const ROUNDS: &str = "title_rounds";
-
-fn project() -> SessionId {
-    SessionId::new("")
-}
+/// Where the row count at the last retitle is kept, against this run rather than the project.
+const ASKED: &str = "title_asked";
 
 /// Queue a retitle when one is due and this run is still the model's to name.
 pub(crate) fn queue(
@@ -47,9 +43,7 @@ pub(crate) fn queue(
     if !can_run(helpers, "summary") {
         return Ok(());
     }
-    let rounds = scrollback.counter(&project(), ROUNDS)?.unwrap_or(0) + 1;
-    scrollback.set_counter(&project(), ROUNDS, rounds)?;
-    if rounds < u64::from(every) || pending(&scrollback.jobs_of(session)?, "retitle", at.now) {
+    if pending(&scrollback.jobs_of(session)?, "retitle", at.now) {
         return Ok(());
     }
     // Nothing to do for a run a person has named: asked and thrown away is worse than not asked.
@@ -58,6 +52,12 @@ pub(crate) fn queue(
     }
     let turns = scrollback.replay(session)?;
     if turns.len() < ENOUGH {
+        return Ok(());
+    }
+    // What the run has said since the last title, not how often this was offered a turn.
+    let grown = turns.len() as u64;
+    let since = crate::cadence::since(scrollback, session, ASKED, grown, at.now)?;
+    if !crate::cadence::due(since, every) {
         return Ok(());
     }
     let mut input = String::new();
@@ -72,7 +72,7 @@ pub(crate) fn queue(
             "title": { "type": "string" } } },
     });
     scrollback.queue_job(session, "retitle", &spec, &json!({}), at.now)?;
-    scrollback.set_counter(&project(), ROUNDS, 0)
+    crate::cadence::mark(scrollback, session, ASKED, grown, at.now)
 }
 
 /// Take the title the model offered, unless a person has named the run since it was asked.

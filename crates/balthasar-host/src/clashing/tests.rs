@@ -4,10 +4,14 @@ use balthasar_model::{
 };
 use balthasar_store::{Store, Transcript};
 
+/// Hooks that withhold nothing, which is what the shipped configuration does.
+struct Plain;
+impl crate::Hooks for Plain {}
+
 const NOW: Timestamp = 1_756_000_000;
 const SCOPE: &str = "/w/thing";
 /// The shipped cadence, which is what these pin.
-const EVERY: u32 = 20;
+const EVERY: u32 = 8;
 
 struct Held {
     store: Store,
@@ -23,13 +27,17 @@ impl Held {
     }
 
     fn at(&mut self) -> Answering<'_> {
+        self.at_time(NOW)
+    }
+
+    fn at_time(&mut self, now: Timestamp) -> Answering<'_> {
         Answering {
             store: &mut self.store,
             scrollback: Some(&mut self.scrollback),
             scratch: None,
             scope: ScopeId::new(SCOPE),
             agent: AgentId::main(),
-            now: NOW,
+            now,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
             capture: false,
@@ -269,13 +277,13 @@ fn chatter_without_json_is_not_an_answer() {
 #[test]
 fn a_harness_that_cannot_run_the_role_is_asked_for_nothing() {
     let mut held = Held::new();
-    for n in 0..6 {
+    for n in 0..EVERY {
         held.claim(&format!("slot{n}"), "value");
     }
     let session = SessionId::new("01RUN");
     let at = held.at();
     for _ in 0..(EVERY + 2) {
-        queue(&at, &session, &["notes".to_owned()], EVERY).expect("queue");
+        queue(&at, &session, &["notes".to_owned()], EVERY, &mut Plain).expect("queue");
     }
     assert!(
         at.scrollback
@@ -290,7 +298,7 @@ fn a_harness_that_cannot_run_the_role_is_asked_for_nothing() {
 #[test]
 fn a_sweep_waits_for_its_turn_and_then_runs_once() {
     let mut held = Held::new();
-    for n in 0..6 {
+    for n in 0..EVERY {
         held.claim(&format!("slot{n}"), "value");
     }
     let session = SessionId::new("01RUN");
@@ -304,17 +312,74 @@ fn a_sweep_waits_for_its_turn_and_then_runs_once() {
             .expect("jobs")
             .len()
     };
-    for _ in 0..(EVERY - 1) {
-        queue(&at, &session, &roles, EVERY).expect("queue");
-    }
-    assert_eq!(queued(&at), 0, "not due yet");
-    queue(&at, &session, &roles, EVERY).expect("queue");
-    assert_eq!(queued(&at), 1);
+    queue(&at, &session, &roles, EVERY, &mut Plain).expect("queue");
+    assert_eq!(queued(&at), 1, "six claims and nothing swept yet");
     // Still on its way, and then nothing new to look at.
     for _ in 0..(EVERY * 2) {
-        queue(&at, &session, &roles, EVERY).expect("queue");
+        queue(&at, &session, &roles, EVERY, &mut Plain).expect("queue");
     }
     assert_eq!(queued(&at), 1, "one sweep at a time, over a set that stood");
+}
+
+#[test]
+fn a_set_that_has_not_grown_enough_waits_however_often_it_is_asked() {
+    // What used to decide this was how many rounds had gone by, so a harness that laid out or
+    // ran helpers more often swept more often over the very same claims.
+    let mut held = Held::new();
+    for n in 0..EVERY {
+        held.claim(&format!("slot{n}"), "value");
+    }
+    let session = SessionId::new("01RUN");
+    let roles = ["contradict".to_owned()];
+    {
+        let at = held.at();
+        queue(&at, &session, &roles, EVERY, &mut Plain).expect("queue");
+    }
+    held.claim("one-more", "value");
+    let later = NOW + crate::cadence::APART;
+    let at = held.at_time(later);
+    for _ in 0..50 {
+        queue(&at, &session, &roles, EVERY, &mut Plain).expect("queue");
+    }
+    let jobs = at
+        .scrollback
+        .as_ref()
+        .expect("scrollback")
+        .jobs_of(&session)
+        .expect("jobs");
+    assert_eq!(jobs.len(), 1, "one new claim is not four");
+}
+
+#[test]
+fn enough_new_claims_bring_the_next_sweep() {
+    let mut held = Held::new();
+    for n in 0..EVERY {
+        held.claim(&format!("slot{n}"), "value");
+    }
+    let session = SessionId::new("01RUN");
+    let roles = ["contradict".to_owned()];
+    {
+        let at = held.at();
+        queue(&at, &session, &roles, EVERY, &mut Plain).expect("queue");
+        let scrollback = at.scrollback.as_ref().expect("scrollback");
+        let first = scrollback.jobs_of(&session).expect("jobs").remove(0);
+        scrollback
+            .settle_job(&first.id, balthasar_store::JobState::Done, None, NOW)
+            .expect("settle");
+    }
+    for n in 0..EVERY {
+        held.claim(&format!("later{n}"), "value");
+    }
+    let later = NOW + crate::cadence::APART;
+    let at = held.at_time(later);
+    queue(&at, &session, &roles, EVERY, &mut Plain).expect("queue");
+    let jobs = at
+        .scrollback
+        .as_ref()
+        .expect("scrollback")
+        .jobs_of(&session)
+        .expect("jobs");
+    assert_eq!(jobs.len(), 2, "four more claims is another sweep");
 }
 
 #[test]
@@ -324,7 +389,7 @@ fn too_few_claims_are_nothing_to_disagree_about() {
     let session = SessionId::new("01RUN");
     let at = held.at();
     for _ in 0..(EVERY + 1) {
-        queue(&at, &session, &["contradict".to_owned()], EVERY).expect("queue");
+        queue(&at, &session, &["contradict".to_owned()], EVERY, &mut Plain).expect("queue");
     }
     assert!(
         at.scrollback
@@ -334,4 +399,83 @@ fn too_few_claims_are_nothing_to_disagree_about() {
             .expect("jobs")
             .is_empty()
     );
+}
+
+/// Every prompt a helper is given passes the same redaction, the contradiction sweep included.
+mod mem_all_helpers_apply_privacy {
+    use super::*;
+
+    /// Withholds anything holding the sentinel, as a configuration restricting a tier would.
+    struct Withholding;
+
+    const SENTINEL: &str = "SENTINEL-LOCAL-ONLY";
+
+    impl crate::Hooks for Withholding {
+        fn redact(&mut self, text: &str, _memory: &balthasar_model::Memory) -> Option<String> {
+            (!text.contains(SENTINEL)).then(|| text.to_owned())
+        }
+    }
+
+    /// The input of the sweep queued for `session`, if one was.
+    fn swept(held: &mut Held, session: &SessionId, hooks: &mut dyn crate::Hooks) -> Option<String> {
+        let at = held.at();
+        let roles = ["contradict".to_owned()];
+        queue(&at, session, &roles, EVERY, hooks).expect("queue");
+        at.scrollback
+            .as_ref()
+            .expect("scrollback")
+            .jobs_of(session)
+            .expect("jobs")
+            .into_iter()
+            .find(|job| job.kind == "contradict")
+            .map(|job| job.spec["input"].as_str().unwrap_or_default().to_owned())
+    }
+
+    #[test]
+    fn a_withheld_claim_is_left_out_of_the_sweeps_prompt() {
+        // Every other way out of here redacts. A sweep that did not was a way round it.
+        let mut held = Held::new();
+        for n in 0..EVERY {
+            held.claim(&format!("slot{n}"), "value");
+        }
+        held.claim("secret", SENTINEL);
+        let input = swept(&mut held, &SessionId::new("01RUN"), &mut Withholding).expect("a sweep");
+        assert!(
+            !input.contains(SENTINEL),
+            "a withheld claim reached the model: {input}"
+        );
+        assert!(input.contains("slot0"), "the rest still went: {input}");
+    }
+
+    #[test]
+    fn what_is_not_withheld_still_reaches_it() {
+        let mut held = Held::new();
+        for n in 0..EVERY {
+            held.claim(&format!("slot{n}"), "value");
+        }
+        let input = swept(&mut held, &SessionId::new("01RUN"), &mut Plain).expect("a sweep");
+        for n in 0..6 {
+            assert!(input.contains(&format!("slot{n}")), "{input}");
+        }
+    }
+
+    #[test]
+    fn a_redaction_that_empties_a_claim_drops_it_rather_than_naming_it() {
+        // An id with nothing against it tells the model a claim exists and nothing more, which
+        // is a claim it cannot judge and a leak of the fact.
+        struct Emptying;
+        impl crate::Hooks for Emptying {
+            fn redact(&mut self, _text: &str, _m: &balthasar_model::Memory) -> Option<String> {
+                Some(String::new())
+            }
+        }
+        let mut held = Held::new();
+        for n in 0..EVERY {
+            held.claim(&format!("slot{n}"), "value");
+        }
+        assert!(
+            swept(&mut held, &SessionId::new("01RUN"), &mut Emptying).is_none(),
+            "nothing was left to sweep, so nothing should have been queued"
+        );
+    }
 }

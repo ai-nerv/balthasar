@@ -7,6 +7,7 @@
 
 mod atomic;
 mod binding;
+mod chunking;
 mod collide;
 mod decay;
 mod effects;
@@ -14,6 +15,7 @@ mod entity;
 mod episode;
 mod export;
 mod extraction;
+mod generation;
 mod jobs;
 mod laid;
 mod laying;
@@ -35,12 +37,14 @@ mod transcript;
 mod usage;
 mod write;
 
+pub use chunking::{Chunk, covered, cut, revision};
 pub use decay::{Faded, Weakened};
 pub use effects::{LayoutEffect, LayoutTarget};
 pub use entity::{Entity, Kind as EntityKind, extract as entities_in, rarity};
 pub use episode::Episode;
 pub use export::Row as TrainingRow;
 pub use extraction::ExtractionProgress;
+pub use generation::{Generation, Piece, Ready, Stale};
 pub use jobs::{Job, JobState};
 pub use laid::{Prompt, Proposal, Summary};
 pub use mint::mint;

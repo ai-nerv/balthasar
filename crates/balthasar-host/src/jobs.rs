@@ -16,15 +16,11 @@ const RETRIES: u32 = 1;
 /// How many search hits a curate job chooses from.
 const CURATE_FROM: usize = 50;
 
-/// What one row may bring into a summary's input, in characters: even a long reply fits, and the
-/// whole input is still held to [`INPUT`].
+/// What one row may bring into a summary's input, in characters; the whole is held by `sizing`.
 const PER_ROW: usize = 64_000;
 
 /// What a large tool output brings instead: its head, since its size is the point.
 const TOOL_HEAD: usize = 2_000;
-
-/// What a summary's whole input may be, in characters.
-const INPUT: usize = 200_000;
 
 const SUMMARISE: &str = "You keep the running summary of a coding session between a person and \
 an assistant. Fold the turns given into the previous summary, if there is one, and write the \
@@ -47,6 +43,7 @@ pub(crate) fn summarise(
     span: (u64, u64),
     rules: &Rules,
     max_tokens: u32,
+    hooks: &mut dyn Hooks,
 ) -> Result<(), StoreError> {
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Ok(());
@@ -74,12 +71,19 @@ pub(crate) fn summarise(
         ));
     }
     input.push_str(&format!("Turns {fresh}–{} to fold in:\n", span.1));
+    // What is left once the instruction and the schema are counted, since those reach the window
+    // too. A row that does not fit is stubbed, and a stub that does not fit either is left out.
+    let room = crate::sizing::room(SUMMARISE, &Value::Null, crate::sizing::WHOLE);
     for turn in &rows.turns {
         let who = turn.tool.as_deref().map_or_else(
             || turn.role.clone(),
             |tool| format!("{} ({tool})", turn.role),
         );
-        let text = if input.len() > INPUT {
+        let Some(said) = hooks.withhold(turn) else {
+            crate::sizing::add(&mut input, &format!("[{}] (withheld)\n", turn.cursor), room);
+            continue;
+        };
+        let text = if input.len() > room {
             turn.stub.clone().unwrap_or_else(|| "(elided)".to_owned())
         } else if turn.is_tool() && turn.weight() > rules.stub_over {
             let head: String = turn.text.chars().take(TOOL_HEAD).collect();
@@ -89,9 +93,13 @@ pub(crate) fn summarise(
                 turn.weight()
             )
         } else {
-            turn.text.chars().take(PER_ROW).collect()
+            said.chars().take(PER_ROW).collect::<String>()
         };
-        input.push_str(&format!("[{}] {who}: {text}\n", turn.cursor));
+        crate::sizing::add(
+            &mut input,
+            &format!("[{}] {who}: {text}\n", turn.cursor),
+            room,
+        );
     }
     let spec = json!({
         "kind": "summarise", "role": "summary", "fallback": "main",
@@ -204,6 +212,7 @@ pub(crate) fn curate(
     query: &str,
     mark: &str,
     room: u32,
+    through: u64,
     hooks: &mut dyn Hooks,
 ) -> Result<(), StoreError> {
     let found = supply::candidates(at, query, CURATE_FROM);
@@ -231,9 +240,11 @@ pub(crate) fn curate(
             },
             "required": ["chosen", "notes"],
         },
-        "max_tokens": 1_000, "blocking": true, "timeout_ms": 5_000,
+        // Off the critical path: the first request goes out with the deterministic pack, and a
+        // curated one replaces it on a later round of the same prompt.
+        "max_tokens": 1_000, "blocking": false, "timeout_ms": 20_000,
     });
-    let context = json!({ "mark": mark, "query": query, "room": room });
+    let context = json!({ "mark": mark, "query": query, "room": room, "through": through });
     scrollback.queue_job(session, "curate", &spec, &context, at.now)?;
     Ok(())
 }
@@ -254,15 +265,43 @@ pub(crate) fn hand_out(
             retry_or_fail(at, &job, Some(&json!({"failed":"helper timed out"})))?;
         }
     }
-    for job in scrollback.jobs_of(session)? {
-        if job.state != JobState::Queued {
-            continue;
-        }
+    let known = scrollback.jobs_of(session)?;
+    let mut running = known
+        .iter()
+        .filter(|job| job.state == JobState::Issued)
+        .count();
+    // Once a pass has filled the high mark, nothing more goes until the backlog drains to the low
+    // one, so a long queue leaves in batches rather than one job per pass for ever.
+    let draining = running >= crate::scheduling::HIGH;
+    let mut going: Vec<&str> = Vec::new();
+    for job in crate::scheduling::ordered(&known) {
         if job.kind == "curate" && first_of != job.context["mark"].as_str() {
             scrollback.settle_job(&job.id, JobState::Failed, None, at.now)?;
             continue;
         }
+        // The one place every job leaves through, so the bound is on the whole request rather than
+        // on whichever part its producer happened to measure. A backstop: producers size their own.
+        if !crate::sizing::fits(&job.spec, crate::sizing::WHOLE) {
+            let failed = json!({"failed":"helper request exceeds the input budget",
+                "measured": crate::sizing::measured(&job.spec), "limit": crate::sizing::WHOLE});
+            scrollback.settle_job(&job.id, JobState::Failed, Some(&failed), at.now)?;
+            balthasar_model::noted!("job: {} was too large to hand out", job.id);
+            continue;
+        }
+        // One of a kind at a time, and a bounded number altogether: a backlog that came due at
+        // once would otherwise go out at once, and every one of them costs a model call. A job a
+        // request is waiting on goes whatever the watermarks say.
+        if going.contains(&job.kind.as_str()) {
+            continue;
+        }
+        if !crate::scheduling::urgent(job)
+            && !crate::scheduling::Room::given(running, draining).any()
+        {
+            continue;
+        }
         scrollback.issue_job(&job.id, at.now)?;
+        running += 1;
+        going.push(&job.kind);
         balthasar_model::noted!(
             "job: handed {} {} for {}, attempt {}",
             job.id,
@@ -270,7 +309,7 @@ pub(crate) fn hand_out(
             job.spec["role"].as_str().unwrap_or("?"),
             job.attempts + 1
         );
-        out.push(job.handed());
+        out.push(job.handed(job.attempts + 1));
     }
     Ok(out)
 }
@@ -315,7 +354,7 @@ pub fn jobs(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) ->
         .get(1)
         .is_some_and(|opts| opts["retry_extraction"] == true)
         && let Err(why) =
-            crate::notes::extraction::queue(at, &session, None, &hooks.memory(), false, true)
+            crate::notes::extraction::queue(at, &session, None, &hooks.memory(), false, true, hooks)
     {
         return Reply::refused(why.to_string());
     }
@@ -333,7 +372,8 @@ pub fn jobs(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) ->
             .map(|p| p.helpers)
             .unwrap_or_default(),
     };
-    if let Err(why) = crate::notes::background(at, &session, &helpers, None, &hooks.memory()) {
+    let keeping = hooks.memory();
+    if let Err(why) = crate::notes::background(at, &session, &helpers, None, &keeping, hooks) {
         return Reply::refused(why.to_string());
     }
     match hand_out(at, &session, None) {
@@ -362,6 +402,18 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
     };
     // A late or repeated answer changes nothing.
     if job.state != JobState::Issued {
+        return Reply::none();
+    }
+    // Nor does one from a hand-out that has since been superseded: the work was reissued, and
+    // this is the earlier lease answering. An answer that names no attempt is an older harness,
+    // and is taken as the current one.
+    if let Some(attempt) = said["attempt"].as_u64()
+        && attempt != u64::from(job.attempts)
+    {
+        balthasar_model::noted!(
+            "job {id}: attempt {attempt} answered a lease now on {}",
+            job.attempts
+        );
         return Reply::none();
     }
     let text = said["text"]
@@ -419,12 +471,8 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
                 if !settle(at, &session, &current, text, &keeping, &already)? {
                     return retry_or_fail(at, &current, Some(&json!({"failed":"source evidence changed or note operations were rejected","text":text,"usage":said["usage"],"model":said["model"]})));
                 }
-                if current.kind == "extract" && current.context["coverage"]["version"] == 1 {
-                    let coverage = &current.context["coverage"];
-                    let (Some(from), Some(to)) = (coverage["from"].as_u64(), coverage["to"].as_u64()) else {
-                        return Err(StoreError::Foreign("extraction coverage is missing".into()));
-                    };
-                    scrollback.acknowledge_extraction(&session, id, from, to)?;
+                if current.kind == "extract" {
+                    crate::notes::extraction::acknowledge(scrollback, &session, &current, id)?;
                 }
                 let kept = json!({ "text": text, "usage": said["usage"], "model": said["model"] });
                 scrollback.settle_job(id, JobState::Done, Some(&kept), at.now)
@@ -475,6 +523,7 @@ fn settle(
                 .keep_summary(session, from, to, &kept, at.now)
                 .map(|()| true)
         }
+        "working" => crate::preparing::settle(at, session, job, text),
         "curate" => {
             let Some(scrollback) = at.scrollback.as_ref() else {
                 return Ok(false);
@@ -531,7 +580,8 @@ fn curation(at: &mut Answering<'_>, job: &Job, text: &str, hooks: &mut dyn Hooks
     } else {
         supply::from_notes(&notes, ids, room, per).unwrap_or_default()
     };
-    let mut kept = supplied.as_json(query);
+    let through = job.context["through"].as_u64().unwrap_or(0);
+    let mut kept = supplied.as_json(query, through);
     kept["curated"] = json!(true);
     Some(kept)
 }

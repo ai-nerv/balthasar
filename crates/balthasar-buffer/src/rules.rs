@@ -15,6 +15,9 @@ pub struct Shares {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rules {
     pub shares: Shares,
+    /// The share of the window one request may occupy, and what is held back against a
+    /// provider counting differently.
+    pub policy: crate::Policy,
     /// Start stubbing old tool results, as a share of the conversation's room.
     pub prune_at: f64,
     /// Ask for a summary of the oldest turns.
@@ -44,6 +47,7 @@ pub struct Rules {
 impl Default for Rules {
     fn default() -> Self {
         Self {
+            policy: crate::Policy::default(),
             shares: Shares {
                 memory: 0.05,
                 pinned: 0.03,
@@ -60,8 +64,10 @@ impl Default for Rules {
             max_compactions_per_prompt: 3,
             estimate_chars_per_token: 4,
             cache_ttl_s: 300,
-            warning: "(the conversation is getting long: save anything you will need later to \
-                      your notes now)"
+            // A statement, not a chore. Keeping what matters is this layer's work, and asking
+            // the model to do it spends a turn on infrastructure it cannot see the state of.
+            warning: "(this conversation is long enough that earlier turns are being \
+                      summarised rather than sent word for word)"
                 .to_owned(),
         }
     }
@@ -84,7 +90,23 @@ impl Rules {
         let count =
             |name: &str, fallback: u64| said.get(name).and_then(Value::as_u64).unwrap_or(fallback);
         let held = said.get("shares");
+        // A share outside (0, 1] or a non-finite one is no policy at all, and a request planned
+        // against one would be planned against nothing. The shipped value stands instead.
+        let budget = said.get("budget");
+        let policy = crate::Policy {
+            share: budget
+                .and_then(|b| b.get("share"))
+                .and_then(Value::as_f64)
+                .filter(|n| n.is_finite() && *n > 0.0 && *n <= 1.0)
+                .unwrap_or(base.policy.share),
+            margin: budget
+                .and_then(|b| b.get("margin"))
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(base.policy.margin),
+        };
         let mut rules = Self {
+            policy,
             shares: Shares {
                 memory: share(held.and_then(|s| s.get("memory")), base.shares.memory),
                 pinned: share(held.and_then(|s| s.get("pinned")), base.shares.pinned),

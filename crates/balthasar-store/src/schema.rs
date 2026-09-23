@@ -413,6 +413,7 @@ CREATE INDEX session_archived ON session(scope, archived, opened DESC);
 const V8: &str = r#"
 ALTER TABLE session ADD COLUMN title_pinned INTEGER;
 "#;
+
 #[cfg(test)]
 mod tests {
     use super::*;

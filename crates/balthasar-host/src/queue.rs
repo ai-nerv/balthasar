@@ -30,6 +30,23 @@ pub(crate) fn json_in(text: &str) -> Option<Value> {
     serde_json::from_str(text.get(start..=end)?).ok()
 }
 
+/// One turn as a helper reads it, with what a configuration withholds taken out.
+///
+/// A withheld row keeps its place and its cursor and loses its words, so a span stays contiguous
+/// and nothing downstream can mistake the gap for a row that was read.
+pub(crate) fn guarded(turn: &Turn, limit: usize, hooks: &mut dyn crate::Hooks) -> (String, bool) {
+    match hooks.withhold(turn) {
+        Some(text) if text == turn.text => (line(turn, limit), false),
+        Some(text) => {
+            let mut shown = turn.clone();
+            shown.text = text;
+            shown.stub = None;
+            (line(&shown, limit), false)
+        }
+        None => (format!("[{}] (withheld)\n", turn.cursor), true),
+    }
+}
+
 /// One turn as a helper reads it.
 pub(crate) fn line(turn: &Turn, limit: usize) -> String {
     let who = match (turn.role.as_str(), turn.kind.as_str(), turn.tool.as_deref()) {
