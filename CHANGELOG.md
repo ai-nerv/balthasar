@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.1] - 2026-10-14
+
+### <!-- 0 -->⛰️  Features
+
+- Rehearse and apply retention
+- Prune quiet sessions once a day
+- Declare retain_days, unset keeps all
+- Prune every copy of a quiet session
+
+### <!-- 3 -->📚 Documentation
+
+- The model role's spend cap
+- Retain_days in init.lua and the README
+
 ## [0.6.0] - 2026-10-14
 
 ### <!-- 0 -->⛰️  Features
