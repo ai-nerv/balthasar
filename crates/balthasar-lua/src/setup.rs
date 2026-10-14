@@ -267,19 +267,13 @@ fn given_from(session: Option<std::ffi::OsString>) -> Option<std::path::PathBuf>
 /// Keep `source` at `path`, in a directory of this uid's alone, never through a symlink.
 fn remember(path: &std::path::Path, source: &str) -> Result<(), LuaError> {
     use std::io::Write;
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    use std::os::unix::fs::OpenOptionsExt;
     let failed = |source| LuaError::Io {
         file: path.display().to_string(),
         source,
     };
     if let Some(parent) = path.parent() {
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)
-            .map_err(failed)?;
-        balthasar_model::runtime::checked_dir(parent, balthasar_model::runtime::uid())
-            .map_err(failed)?;
+        balthasar_model::runtime::private_dir(parent).map_err(failed)?;
     }
     // Written new beside it and renamed over it: neither step follows a symlink in its place.
     let mut fresh = path.as_os_str().to_owned();
