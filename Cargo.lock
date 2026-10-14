@@ -54,6 +54,7 @@ name = "balthasar"
 version = "0.5.5"
 dependencies = [
  "balthasar-cli",
+ "balthasar-ipc",
  "balthasar-model",
  "balthasar-store",
  "serde_json",

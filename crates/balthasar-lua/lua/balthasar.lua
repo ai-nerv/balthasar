@@ -309,7 +309,11 @@ function Session:call(name, ...)
   local reply_body, cut = exactly(self, length)
   if not reply_body then return nil, cut end
 
-  local reply = decode(reply_body)
+  -- A body that will not decode is a peer out of step, not an error to raise into the caller.
+  local decoded, reply = pcall(decode, reply_body)
+  if not decoded or type(reply) ~= "table" then
+    return nil, adrift(self, "balthasar sent a reply that will not decode: " .. tostring(reply))
+  end
   -- A third value, because the two failures a caller must tell apart look identical in the
   -- message. "refused" costs a feature and the caller carries on; "failed" means what it just
   -- handed over was not recorded, and the next turn would be written on top of a hole.
