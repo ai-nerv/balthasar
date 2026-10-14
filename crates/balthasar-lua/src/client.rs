@@ -99,6 +99,156 @@ mod tests {
         );
     }
 
+    /// Where the client would look for a session named `x`, with `env` as the environment and
+    /// `host` as the `hexe` global, joined by `|`.
+    fn looked_in(env: &str, host: &str) -> String {
+        probe(&format!(
+            r#"(function()
+                local said = {{ {env} }}
+                os.getenv = function(name) return said[name] end
+                hexe = {host}
+                local out = table.concat(client.sockets("x"), "|")
+                hexe = nil
+                return out
+            end)()"#
+        ))
+    }
+
+    #[test]
+    fn the_uid_is_the_hosts_and_never_the_environment() {
+        assert_eq!(looked_in(r#"UID = "4242""#, "nil"), "");
+        assert_eq!(
+            looked_in(r#"UID = "4242""#, "{ uid = 1000 }"),
+            "/tmp/memory-1000/api@x.sock|/tmp/balthasar-1000/api@x.sock"
+        );
+        assert_eq!(
+            looked_in("", "{ uid = function() return 7 end }"),
+            "/tmp/memory-7/api@x.sock|/tmp/balthasar-7/api@x.sock"
+        );
+        assert_eq!(looked_in("", r#"{ uid = "1000" }"#), "");
+        assert_eq!(looked_in("", "{ uid = 1.5 }"), "");
+    }
+
+    #[test]
+    fn the_runtime_dir_is_used_only_when_the_host_says_it_is_private() {
+        let at = |runtime: &str, stat: &str| {
+            let first = looked_in(
+                &format!("XDG_RUNTIME_DIR = {runtime:?}"),
+                &format!("{{ uid = 1000, fs = {{ stat = {stat} }} }}"),
+            );
+            first.split('|').next().unwrap_or_default().to_owned()
+        };
+        let stat = |kind: &str, uid: u32, mode: u32| {
+            format!("function() return {{ type = {kind:?}, uid = {uid}, mode = {mode} }} end")
+        };
+        assert_eq!(
+            at("/run/user/1000/", &stat("directory", 1000, 0o700)),
+            "/run/user/1000/memory/api@x.sock"
+        );
+        for (runtime, said) in [
+            ("/run/user/1000", stat("directory", 1000, 0o755)),
+            ("/run/user/1000", stat("directory", 1001, 0o700)),
+            ("/run/user/1000", stat("symlink", 1000, 0o700)),
+            ("/run/user/1000", "nil".to_owned()),
+            ("run/user", stat("directory", 1000, 0o700)),
+            ("", stat("directory", 1000, 0o700)),
+        ] {
+            assert_eq!(
+                at(runtime, &said),
+                "/tmp/memory-1000/api@x.sock",
+                "{runtime:?} trusted though stat said {said}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_fallback_is_under_an_absolute_tmpdir_only() {
+        assert_eq!(
+            looked_in(r#"TMPDIR = "/scratch/""#, "{ uid = 1000 }"),
+            "/scratch/memory-1000/api@x.sock|/scratch/balthasar-1000/api@x.sock"
+        );
+        assert_eq!(
+            looked_in(r#"TMPDIR = "scratch""#, "{ uid = 1000 }"),
+            "/tmp/memory-1000/api@x.sock|/tmp/balthasar-1000/api@x.sock"
+        );
+    }
+
+    /// What `fetch` ran for tool `x`, given the host's uid, what `fs.stat` says of the descriptor
+    /// and of its directory, and the program it names; `nothing` when it ran nothing.
+    fn ran(uid: &str, file: (&str, u32, u32), dir: (&str, u32, u32), exec: &str) -> String {
+        let (file_kind, file_uid, file_mode) = file;
+        let (dir_kind, dir_uid, dir_mode) = dir;
+        probe(&format!(
+            r#"(function()
+                os.getenv = function() return nil end
+                local ran = "nothing"
+                hexe = {{ uid = {uid},
+                  run = function(cmd) ran = cmd
+                    return {{ ok = true, stdout = '{{"ok":true,"n":1,"result":["x"]}}' }} end,
+                  fs = {{ ls = function() return {{}} end,
+                          read = function() return '{{"exec":{exec:?}}}' end,
+                          stat = function(path)
+                            if path == "/tmp/x-1000/x.tool" then
+                              return {{ type = {file_kind:?}, uid = {file_uid}, mode = {file_mode} }}
+                            elseif path == "/tmp/x-1000" then
+                              return {{ type = {dir_kind:?}, uid = {dir_uid}, mode = {dir_mode} }}
+                            end
+                          end }} }}
+                client.fetch({{ tool = "x" }}, "verbs")
+                hexe = nil
+                return ran
+            end)()"#
+        ))
+    }
+
+    #[test]
+    fn a_descriptor_somebody_else_could_write_is_never_executed() {
+        let file = ("file", 1000, 0o600);
+        let dir = ("directory", 1000, 0o700);
+        let exec = "/opt/x/tool";
+        assert_eq!(ran("1000", file, dir, exec), "'/opt/x/tool' 'verbs'");
+        assert_ne!(ran("1000", ("file", 1000, 0o644), dir, exec), "nothing");
+
+        for (uid, file, dir, exec) in [
+            ("1000", ("file", 1000, 0o620), dir, exec),
+            ("1000", ("file", 1000, 0o602), dir, exec),
+            ("1000", ("file", 1001, 0o600), dir, exec),
+            ("1000", ("symlink", 1000, 0o600), dir, exec),
+            ("1000", file, ("directory", 1000, 0o777), exec),
+            ("1000", file, ("directory", 1001, 0o700), exec),
+            ("nil", file, dir, exec),
+            ("1000", file, dir, "tool"),
+        ] {
+            assert_eq!(
+                ran(uid, file, dir, exec),
+                "nothing",
+                "ran with uid {uid}, file {file:?}, dir {dir:?}, exec {exec}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_descriptor_is_never_read_without_a_stat_to_check_it() {
+        let answer = probe(
+            r#"(function()
+                os.getenv = function() return nil end
+                local ran = "nothing"
+                hexe = { uid = 1000, run = function(cmd) ran = cmd return { ok = true } end,
+                  fs = { ls = function() return {} end,
+                         read = function() return '{"exec":"/opt/x/tool"}' end } }
+                client.fetch({ tool = "x" }, "verbs")
+                hexe = nil
+                return ran
+            end)()"#,
+        );
+        assert_eq!(answer, "nothing");
+    }
+
+    #[test]
+    fn the_client_reads_no_uid_from_the_environment() {
+        assert!(!CLIENT.contains("\"UID\""), "the client names $UID");
+    }
+
     #[test]
     fn the_surface_carries_nothing_that_causes_work() {
         for forbidden in ["\"prompt\"", "\"run\"", "\"eval\"", "\"purge\""] {
