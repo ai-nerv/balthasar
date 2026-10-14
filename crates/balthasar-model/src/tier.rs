@@ -17,7 +17,7 @@ pub enum Tier {
     Fact,
     /// How things are done here.
     Habit,
-    /// Below the floor, superseded, or forgotten on purpose. Never deleted.
+    /// Below the floor, superseded, or forgotten on purpose. Kept; only a purge deletes it.
     Archive,
 }
 

@@ -633,13 +633,11 @@ fn forget(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         Err(why) => return Reply::refused(why.to_string()),
     };
 
-    // A peer may retract what its own session put in. Anything else is the owner's to forget.
+    // A peer may retract scratch. Anything kept is the owner's to forget.
     if !matches!(door, Door::Owner) {
         let own = held.tier == Tier::Scratch;
         if !own {
-            return Reply::refused(
-                "a peer may forget only what its own session wrote — ask the owner",
-            );
+            return Reply::refused("a peer may forget only scratch — ask the owner");
         }
     }
 

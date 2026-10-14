@@ -432,8 +432,8 @@ end
 --
 -- **Mostly read.** There is no `prompt`, `run`, `eval` or `purge` here. What writes -- and only
 -- `remember` and `forget` do -- is capped at the far end by who the kernel says is calling: a
--- peer proposes at a peer's weight, cannot pin, cannot reach the global store, and cannot
--- forget what it did not write. It contributes; it does not decide.
+-- peer proposes at a peer's weight, cannot pin, cannot reach the global store, and may forget
+-- only scratch. It contributes; it does not decide.
 --
 -- `verbs` ships from the first version. One sibling having it and another not is how a family
 -- stops being one, and it cannot be retrofitted quietly.
