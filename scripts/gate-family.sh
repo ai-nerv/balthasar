@@ -132,7 +132,7 @@ for verb in $listed; do
   case "$verb" in
     # Verbs whose whole job is to hold a stream or take over the terminal cannot be probed by
     # running them; they are covered by the tests in their own repository.
-    serve|surface|ask|run|fork) continue ;;
+    serve|surface|ask|run|fork|mcp) continue ;;
   esac
   out=$("$prog" "$verb" 2>&1 </dev/null || true)
   case "$out" in
@@ -170,7 +170,7 @@ esac
 refused_flag=""
 for verb in $listed; do
   case "$verb" in
-    serve|surface|ask|run|fork) continue ;;
+    serve|surface|ask|run|fork|mcp) continue ;;
   esac
   for how in --json --cbor; do
     said=$("$prog" "$verb" "$how" 2>&1 </dev/null || true)
@@ -298,8 +298,12 @@ live() {
 
 if [ "$#" -gt 0 ]; then
   live "$@"
-else
+elif printf '%s' "$verbs" | grep -q '"door":"socket"'; then
   say "a live socket" "not probed: no serve command named"
+else
+  # A program with no socket verbs serves no family socket. magi's one socket is its host socket,
+  # its own CBOR protocol for a front end (FAMILY.md), so a family frame is not its to refuse.
+  say "a live socket" "skipped: $name serves no family socket, only its own front-end protocol"
 fi
 
 echo
