@@ -277,7 +277,7 @@ fn recall(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
 
     // Handing memories to a caller about to put them in a context is an injection.
     let injection = if at.capture {
-        match note_served(at, &found, opts) {
+        match note_served(at, query, &found, opts) {
             Ok(id) => Some(id),
             Err(why) => return Reply::refused(why.to_string()),
         }
@@ -301,6 +301,7 @@ fn recall(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
 /// After the answer is decided, never before it: the ledger is instrumentation.
 fn note_served(
     at: &mut Answering<'_>,
+    query: &str,
     found: &[balthasar_store::Scored],
     opts: Option<&serde_json::Value>,
 ) -> Result<String, balthasar_store::StoreError> {
@@ -308,13 +309,11 @@ fn note_served(
         .and_then(|o| o.get("session"))
         .and_then(serde_json::Value::as_str)
         .map(SessionId::new);
-    let query_hash = balthasar_model::content_hash(
-        opts.and_then(|o| o.get("query"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default(),
-    )[..16]
-        .to_owned();
-    let stamp = format!("{}-{}", at.now, &query_hash[..8]);
+    let query_hash = balthasar_model::content_hash(query)[..16].to_owned();
+    // Two searches in one second, even for the same words, are two records.
+    let unique =
+        balthasar_model::content_hash(&format!("{query_hash}:{}", balthasar_store::mint(at.now)));
+    let stamp = format!("{}-{}", at.now, &unique[..8]);
 
     at.store.note_recall(
         &balthasar_store::RecallRun {
@@ -651,7 +650,9 @@ fn forget_run(at: &mut Answering<'_>, door: &Door, handle: &str, purge: bool) ->
     };
 
     let turns = match at.scrollback.as_ref() {
-        Some(held) => held.replay(&session).map(|t| t.len()).unwrap_or(0),
+        Some(held) => held
+            .count(&session)
+            .map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX)),
         None => 0,
     };
     let promoted = match at.store.owned_by(&session) {
