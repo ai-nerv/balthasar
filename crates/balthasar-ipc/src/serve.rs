@@ -305,21 +305,42 @@ fn converse(stream: &mut UnixStream, peer: &Peer, answer: &impl Fn(&Peer, Reques
             // Only a wait that began at a frame boundary is resumable: one that expired mid-frame
             // has lost bytes the next read would misread as a header.
             Err(frame::WireError::Idle) => continue,
+            // One refusal, then close: a body that is not read cannot be skipped in step.
+            Err(why @ frame::WireError::TooLarge(_)) => {
+                let _ = say(stream, crate::Wire::Json, &Reply::failed(why.to_string()));
+                break;
+            }
             Err(_) => break,
         };
         // Answered in the encoding it was asked in, read from the body's first byte.
         let wire = crate::Wire::of(&body);
-        let reply = match wire.read::<Request>(&body) {
-            Ok(request) => answer(peer, request),
-            Err(why) => Reply::refused(format!("that is not a request: {why}")),
+        let reply = if body.is_empty() {
+            Reply::refused("that is not a request: a frame of zero length is malformed")
+        } else {
+            match wire.read::<Request>(&body) {
+                Ok(request) => answer(peer, request),
+                Err(why) => Reply::refused(format!("that is not a request: {why}")),
+            }
         };
-        let Ok(encoded) = wire.write(&reply) else {
-            break;
-        };
-        if frame::send(stream, &encoded).is_err() {
+        if say(stream, wire, &reply).is_err() {
             break;
         }
     }
+}
+
+/// Write one reply. One that would be over the cap is answered with a refusal naming it instead,
+/// so the caller can tell "too large" from a closed connection and stays in step.
+fn say(stream: &mut UnixStream, wire: crate::Wire, reply: &Reply) -> Result<(), frame::WireError> {
+    let mut encoded = wire.write(reply).map_err(frame::WireError::Malformed)?;
+    if encoded.len() > frame::MAX_FRAME {
+        let instead = Reply::failed(format!(
+            "the reply would be {} bytes, over the {}-byte frame cap",
+            encoded.len(),
+            frame::MAX_FRAME
+        ));
+        encoded = wire.write(&instead).map_err(frame::WireError::Malformed)?;
+    }
+    frame::send(stream, &encoded)
 }
 
 impl Drop for Listener {
@@ -660,3 +681,6 @@ mod crowd {
         drop(held);
     }
 }
+
+#[cfg(test)]
+mod framing;

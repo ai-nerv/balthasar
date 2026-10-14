@@ -524,3 +524,45 @@ fn reading_history_back_carries_what_was_said_and_not_the_harnesses_own_record()
     let replayed = Held::rows(&held.ask("replay", vec![serde_json::json!(S)]));
     assert!(replayed[0]["raw"].as_str().expect("raw").len() > 4000);
 }
+
+#[test]
+fn a_row_too_large_for_any_frame_comes_back_truncated_and_the_next_page_follows_it() {
+    let mut held = Held::new();
+    let huge = "z".repeat(balthasar_ipc::MAX_FRAME + 1024);
+    for (cursor, text) in [(0, "small"), (1, huge.as_str()), (2, "after")] {
+        let raw = serde_json::json!({ "type": "user" });
+        let said = held.ask(
+            "observe",
+            vec![serde_json::json!(S), turn(cursor, "user", text, raw)],
+        );
+        assert!(said.ok, "{:?}", said.error);
+    }
+    let page = |held: &mut Held, from: u64| {
+        Held::rows(&held.ask(
+            "replay",
+            vec![
+                serde_json::json!(S),
+                serde_json::json!({ "from": from, "bytes": 4 * 1024 * 1024 }),
+            ],
+        ))
+    };
+    assert_eq!(
+        page(&mut held, 0).len(),
+        1,
+        "the huge row is not taken after another"
+    );
+    let cut = page(&mut held, 1);
+    assert_eq!(cut.len(), 1);
+    assert_eq!(cut[0]["cursor"], 1);
+    assert_eq!(cut[0]["truncated"], true, "marked so a reader can tell");
+    assert!(cut[0].to_string().len() <= balthasar_ipc::MAX_FRAME);
+    assert_eq!(
+        page(&mut held, 2)[0]["text"],
+        "after",
+        "and the stream continues"
+    );
+
+    let whole = held.ask("replay", vec![serde_json::json!(S)]);
+    assert_eq!(whole.fault, Some(balthasar_ipc::Fault::Failed));
+    assert!(whole.error.unwrap_or_default().contains("cap"));
+}

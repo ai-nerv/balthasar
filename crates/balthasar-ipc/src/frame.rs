@@ -16,8 +16,8 @@
 
 use std::io::{Read, Write};
 
-/// The most a single frame may carry, so a claimed length cannot make us allocate ahead of it.
-pub const MAX_FRAME: usize = 8 * 1024 * 1024;
+/// The most a single frame may carry, in either direction: the family's one cap, 16 MiB.
+pub const MAX_FRAME: usize = 16 * 1024 * 1024;
 
 /// What went wrong on the wire.
 #[derive(Debug, thiserror::Error)]
@@ -26,7 +26,7 @@ pub enum WireError {
     Io(#[from] std::io::Error),
     #[error("that is not a request: {0}")]
     Malformed(String),
-    #[error("a frame of {0} bytes is over the {MAX_FRAME} limit")]
+    #[error("a frame of {0} bytes is over the {MAX_FRAME}-byte cap")]
     TooLarge(usize),
     #[error("the peer closed the connection")]
     Closed,

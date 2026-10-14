@@ -14,19 +14,6 @@ pub const REGISTRARS: &[&str] = &["source", "extractor", "section", "tool"];
 /// rather than a Rust map: a spec carries functions, and a function cannot cross the boundary.
 pub const SPECS: &str = "__balthasar_specs";
 
-/// The only settings a project's own file may assign. Anything else it sets is refused by name.
-pub const PROJECT_SETTINGS: &[&str] = &[
-    "inject_floor",
-    "live_floor",
-    "promote_floor",
-    "hold_floor",
-    "decay",
-    "witness",
-    "weights",
-    "imperatives",
-    "window",
-];
-
 /// The Lua VM, holding whatever the configuration has declared so far.
 pub struct Engine {
     lua: Lua,
@@ -74,7 +61,7 @@ impl Engine {
     }
 
     /// A VM for a file that arrived with a checkout: data only. No socket, filesystem,
-    /// environment, `load` or hook; it may set only [`PROJECT_SETTINGS`] and add sections.
+    /// environment, `load` or hook; it may set only [`crate::PROJECT_SETTINGS`] and add sections.
     #[must_use]
     pub fn project() -> Self {
         let mut engine = Self::bare_vm();

@@ -1,16 +1,28 @@
 //! The VM a project's own file runs in: data, not a program.
 //!
 //! A file that arrived with a checkout gets no socket, no filesystem, no environment, no `load`
-//! and no hook. It may assign [`crate::engine::PROJECT_SETTINGS`] and add sections. Whatever else
+//! and no hook. It may assign [`PROJECT_SETTINGS`] and add sections. Whatever else
 //! it reaches for is recorded by name as it happens, so a `pcall` cannot hide it, and the
 //! refusal is fatal once the file has run.
 
 use crate::config::Config;
-use crate::engine::PROJECT_SETTINGS;
 use crate::{convert, handler};
 use luna::{Callback, CallbackReturn, Lua, Table, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
+
+/// The only settings a project's own file may assign. Anything else it sets is refused by name.
+pub const PROJECT_SETTINGS: &[&str] = &[
+    "inject_floor",
+    "live_floor",
+    "promote_floor",
+    "hold_floor",
+    "decay",
+    "witness",
+    "weights",
+    "imperatives",
+    "window",
+];
 
 /// Names a project file reached for and was refused.
 pub type Refused = Rc<RefCell<Vec<String>>>;
