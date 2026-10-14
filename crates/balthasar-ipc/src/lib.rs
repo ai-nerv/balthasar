@@ -6,6 +6,7 @@ mod encoding;
 mod frame;
 mod peer;
 mod serve;
+mod stale;
 mod stop;
 
 pub use corpses::swept;

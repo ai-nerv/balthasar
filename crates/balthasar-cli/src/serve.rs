@@ -75,8 +75,7 @@ pub fn serve(
     if let Some(caller) = args.tied {
         tie_to_caller(caller)?;
     }
-    // Here rather than in `bind`: the sweep dials every socket in the runtime directory. Both
-    // directories, because a corpse under the old name is a name the next instance has to disprove.
+    // Corpses in both directories, the old name's included.
     for dir in balthasar_ipc::socket_dirs() {
         balthasar_ipc::swept(&dir);
     }
@@ -267,9 +266,8 @@ fn the_old_name_was_used() {
 
 /// Which agent inside a run a connection belongs to.
 ///
-/// What the peer's environment named when the connection was accepted, pinned to it and never
-/// re-read or taken from a call. A peer that named none falls back to this process's own, and
-/// only then to [`AgentId::main`]. Attribution only: nothing it decides is a permission.
+/// What the peer's environment named at accept, pinned to the connection; else this process's
+/// own, else [`AgentId::main`]. Attribution only.
 fn agent_of(peer: &Peer) -> balthasar_model::AgentId {
     match &peer.agent {
         Some((variable, named)) => {

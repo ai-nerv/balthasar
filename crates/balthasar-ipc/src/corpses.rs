@@ -3,22 +3,21 @@
 //! `$XDG_RUNTIME_DIR/balthasar` is shared by every instance on the machine, and a death with no
 //! way out leaves a socket file there that a probe reads as a live daemon.
 
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-/// Unlink every `api@*.sock` in `dir` that nothing answers on, and say how many went.
+/// Unlink every `api@*.sock` in `dir` that is a corpse, and say how many went.
 ///
-/// Only `api@*.sock`: `balthasar.tool` and `given.lua` are not corpses and do not answer.
+/// Only `api@*.sock`, only a socket of this uid's that refuses a connection outright, and only
+/// while holding its `.lock`: a name somebody is binding right now is left to them.
 pub fn swept(dir: &Path) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
+    let uid = rustix::process::getuid().as_raw();
     entries
         .flatten()
         .filter(|entry| is_socket_name(&entry.file_name().to_string_lossy()))
-        .filter(|entry| refused(&entry.path()))
-        // Already gone is another balthasar sweeping the same file, not an error, and not counted.
-        .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
+        .filter(|entry| buried(&entry.path(), uid))
         .count()
 }
 
@@ -27,15 +26,15 @@ fn is_socket_name(name: &str) -> bool {
     name.starts_with("api@") && name.ends_with(".sock")
 }
 
-/// Whether connecting is refused outright, which is the only proof that nothing is bound.
-///
-/// `ECONNREFUSED` alone, never `is_ok()`: `EMFILE` is this process out of descriptors, and
-/// deleting on it takes a live balthasar name.
-fn refused(path: &Path) -> bool {
-    match UnixStream::connect(path) {
-        Ok(_) => false,
-        Err(why) => why.kind() == std::io::ErrorKind::ConnectionRefused,
-    }
+/// Remove `path` if it is a corpse, under its lock. Already gone is somebody else's sweep.
+fn buried(path: &Path, uid: u32) -> bool {
+    let Ok(Some((held, lock))) = crate::stale::lock(path) else {
+        return false;
+    };
+    let gone = crate::stale::corpse(path, uid) && std::fs::remove_file(path).is_ok();
+    let _ = std::fs::remove_file(&lock);
+    drop(held);
+    gone
 }
 
 #[cfg(test)]
@@ -97,12 +96,23 @@ mod tests {
     }
 
     #[test]
-    fn a_regular_file_wearing_a_sockets_name_goes_too() {
+    fn a_regular_file_wearing_a_sockets_name_is_left_alone() {
         let dir = Scratch::new("balthasar-corpses", "impostor");
         let impostor = dir.join("api@impostor.sock");
         std::fs::write(&impostor, "not a socket").expect("write");
-        assert_eq!(swept(impostor.parent().expect("a parent")), 1);
-        assert!(!impostor.exists());
+        assert_eq!(swept(impostor.parent().expect("a parent")), 0);
+        assert!(impostor.exists(), "only a socket can be a corpse");
+    }
+
+    #[test]
+    fn a_corpse_whose_name_is_being_taken_is_left_to_the_taker() {
+        let dir = Scratch::new("balthasar-corpses", "taking");
+        let corpse = dir.join("api@taking.sock");
+        drop(std::os::unix::net::UnixListener::bind(&corpse).expect("bind"));
+        let held = crate::stale::lock(&corpse).expect("lock").expect("free");
+        assert_eq!(swept(&dir), 0);
+        assert!(corpse.exists());
+        drop(held);
     }
 
     #[test]

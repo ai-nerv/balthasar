@@ -130,36 +130,28 @@ enum Heard {
 
 /// The sockets one instance is bound to, all of them reaching the one store behind them.
 pub struct Listener {
-    bound: Vec<(UnixListener, PathBuf)>,
+    bound: Vec<crate::stale::Claimed>,
 }
 
 impl Listener {
-    /// Bind, replacing a socket left behind by something that is no longer running.
+    /// Bind, replacing only a socket nothing answers on.
     ///
-    /// A stale socket file looks exactly like a live one until something connects, so binding
-    /// tries a connection first: if anything answers, this instance refuses rather than
-    /// stealing the name.
-    ///
-    /// Two names for one process, so a caller looking under either finds *this* store. Both are
-    /// checked before either is taken: an instance name is one daemon across both directories, or
-    /// the compatibility window is itself a way to fork the store. The role's own name must bind;
-    /// the old one is a courtesy, and [`Listener::paths`] comes back short when it failed.
+    /// Each name is taken under its `.lock`, and an existing socket is cleared only when connecting
+    /// to it is refused outright — see [`crate::stale`]. Two names for one process, so a caller
+    /// looking under either finds *this* store: the role's own name must bind, the old one is a
+    /// courtesy, and a live program on the old one refuses the instance outright.
     pub fn bind(instance: &str) -> std::io::Result<Self> {
         let wanted = [socket_path(instance), legacy_socket_path(instance)];
-        for path in &wanted {
-            if live(path) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::AddrInUse,
-                    format!("an balthasar is already listening on {}", path.display()),
-                ));
-            }
-        }
-
         let mut bound = Vec::new();
         for path in wanted {
-            match claim(&path) {
-                Ok(listener) => bound.push((listener, path)),
-                Err(why) if bound.is_empty() => return Err(why),
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            match crate::stale::claim(&path) {
+                Ok(claimed) => bound.push(claimed),
+                Err(why) if bound.is_empty() || why.kind() == std::io::ErrorKind::AddrInUse => {
+                    return Err(why);
+                }
                 Err(_) => {}
             }
         }
@@ -169,13 +161,16 @@ impl Listener {
     /// Where it is listening: the role's own name.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.bound[0].1
+        &self.bound[0].path
     }
 
     /// Every name it is listening under, the role's own first.
     #[must_use]
     pub fn paths(&self) -> Vec<&Path> {
-        self.bound.iter().map(|(_, path)| path.as_path()).collect()
+        self.bound
+            .iter()
+            .map(|claimed| claimed.path.as_path())
+            .collect()
     }
 
     /// Serve until something stops us.
@@ -195,8 +190,8 @@ impl Listener {
     pub fn serve(&self, mut answer: impl FnMut(&Peer, Request) -> Reply) -> std::io::Result<()> {
         // Duplicates rather than borrows, so a panic out of `answer` unwinds instead of joining.
         let mut listening = Vec::with_capacity(self.bound.len());
-        for (bound, _) in &self.bound {
-            listening.push(bound.try_clone()?);
+        for claimed in &self.bound {
+            listening.push(claimed.listener.try_clone()?);
         }
         let (asked, asking) = std::sync::mpsc::channel::<Heard>();
         if stop::holding() {
@@ -343,32 +338,6 @@ fn say(stream: &mut UnixStream, wire: crate::Wire, reply: &Reply) -> Result<(), 
     frame::send(stream, &encoded)
 }
 
-impl Drop for Listener {
-    /// Take every socket file with us; one left behind is one the next instance has to disprove.
-    fn drop(&mut self) {
-        for (_, path) in &self.bound {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-}
-
-/// Whether something is listening on `path` right now.
-///
-/// A connection rather than a stat: a socket file outlives the process that bound it, and the two
-/// look identical until something dials.
-fn live(path: &Path) -> bool {
-    path.exists() && UnixStream::connect(path).is_ok()
-}
-
-/// Take one name, clearing a file left behind by something that is no longer running.
-fn claim(path: &Path) -> std::io::Result<UnixListener> {
-    std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
-    if path.exists() {
-        std::fs::remove_file(path)?;
-    }
-    UnixListener::bind(path)
-}
-
 /// Answer a refusal and close.
 fn refuse(stream: &mut UnixStream, why: &str) -> std::io::Result<()> {
     let reply = serde_json::to_vec(&Reply::refused(why)).unwrap_or_default();
@@ -457,9 +426,21 @@ mod tests {
         let instance = format!("stale-{}", std::process::id());
         let path = socket_path(&instance);
         std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
-        std::fs::write(&path, "not a socket").expect("leave something behind");
-        let listener = Listener::bind(&instance).expect("a stale file is not a live peer");
+        drop(UnixListener::bind(&path).expect("leave a corpse behind"));
+        let listener = Listener::bind(&instance).expect("a corpse is not a live peer");
         drop(listener);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_socket_is_not_cleared_to_make_room() {
+        let instance = format!("squat-{}", std::process::id());
+        let path = socket_path(&instance);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
+        std::fs::write(&path, "not a socket").expect("leave something behind");
+        assert!(Listener::bind(&instance).is_err());
+        assert!(path.exists(), "it was not ours to remove");
+        std::fs::remove_file(&path).expect("clean up");
     }
 
     #[test]
