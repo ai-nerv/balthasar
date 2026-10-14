@@ -1,8 +1,8 @@
 //! What a config cannot reach.
 //!
-//! `Lua::full()` hands the VM the whole standard library, and this is the one VM in the family
-//! that runs files it did not write — a project's own `.balthasar.lua`. [`crate::Engine::read`]
-//! runs such a file and only then calls `refuse_declarations`, so this list is the control.
+//! `Lua::full()` hands the VM the whole standard library. This takes the spawning, writing and
+//! loading parts away from every VM before anything is installed; a project's own file then runs
+//! in a VM narrowed further still, see `project`.
 
 use luna::{Lua, Value};
 

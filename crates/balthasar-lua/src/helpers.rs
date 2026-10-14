@@ -12,13 +12,34 @@ use std::rc::Rc;
 /// Anything the config passed to `balthasar.log`.
 pub type Logged = Rc<RefCell<Vec<String>>>;
 
-/// Install `balthasar.json`, `balthasar.path`, `balthasar.git`, `balthasar.text`, `balthasar.log` and the few constants.
-pub fn install<'gc>(ctx: luna::Context<'gc>, balthasar: Table<'gc>, logged: &Logged) {
+/// Install `balthasar.json`, `balthasar.path`, `balthasar.git`, `balthasar.text`, `balthasar.fs`,
+/// `balthasar.log` and the few constants. `fs.read` answers only while `lent` is set.
+pub fn install<'gc>(
+    ctx: luna::Context<'gc>,
+    balthasar: Table<'gc>,
+    logged: &Logged,
+    lent: &Rc<std::cell::Cell<bool>>,
+) {
+    install_data(ctx, balthasar, logged);
+    balthasar.set(ctx, "git", git_table(ctx)).ok();
+    balthasar.set(ctx, "fs", fs_table(ctx, lent)).ok();
+
+    for (name, value) in [
+        ("home", std::env::var("HOME").unwrap_or_default()),
+        ("data_home", data_home()),
+        ("config_home", config_home()),
+    ] {
+        let text = luna::String::from_slice(&ctx, value.as_bytes());
+        balthasar.set(ctx, name, text).ok();
+    }
+}
+
+/// What needs neither the filesystem nor the environment: `json`, `path`, `text`, `log` and
+/// `looks_like_secret`.
+pub fn install_data<'gc>(ctx: luna::Context<'gc>, balthasar: Table<'gc>, logged: &Logged) {
     balthasar.set(ctx, "json", json_table(ctx)).ok();
     balthasar.set(ctx, "path", path_table(ctx)).ok();
-    balthasar.set(ctx, "git", git_table(ctx)).ok();
     balthasar.set(ctx, "text", text_table(ctx)).ok();
-    balthasar.set(ctx, "fs", fs_table(ctx)).ok();
 
     let held = Rc::clone(logged);
     let log = Callback::from_fn(&ctx, move |ctx, _exec, mut stack| {
@@ -38,15 +59,6 @@ pub fn install<'gc>(ctx: luna::Context<'gc>, balthasar: Table<'gc>, logged: &Log
     balthasar
         .set(ctx, "looks_like_secret", secret_check(ctx))
         .ok();
-
-    for (name, value) in [
-        ("home", std::env::var("HOME").unwrap_or_default()),
-        ("data_home", data_home()),
-        ("config_home", config_home()),
-    ] {
-        let text = luna::String::from_slice(&ctx, value.as_bytes());
-        balthasar.set(ctx, name, text).ok();
-    }
 }
 
 /// `balthasar.json.encode` and `balthasar.json.decode`, so a source adapter does not carry a parser.
@@ -160,11 +172,11 @@ fn text_table<'gc>(ctx: luna::Context<'gc>) -> Table<'gc> {
     table
 }
 
-/// `balthasar.fs.glob`, `balthasar.fs.read` and `balthasar.fs.ls`.
+/// `balthasar.fs.glob` and `balthasar.fs.read`.
 ///
-/// Read-only, and deliberately so. A source adapter walks somebody else's transcripts; it has
-/// no reason to write, and a config that could would be a config that could be handed a path.
-fn fs_table<'gc>(ctx: luna::Context<'gc>) -> Table<'gc> {
+/// Read-only. `read` answers only while the person's own configuration is running; anything
+/// else gets `nil` and a reason.
+fn fs_table<'gc>(ctx: luna::Context<'gc>, lent: &Rc<std::cell::Cell<bool>>) -> Table<'gc> {
     let table = Table::new(&ctx);
 
     let glob = Callback::from_fn(&ctx, |ctx, _exec, mut stack| {
@@ -183,8 +195,19 @@ fn fs_table<'gc>(ctx: luna::Context<'gc>) -> Table<'gc> {
     });
     table.set(ctx, "glob", glob).ok();
 
-    let read = Callback::from_fn(&ctx, |ctx, _exec, mut stack| {
+    let lent = Rc::clone(lent);
+    let read = Callback::from_fn(&ctx, move |ctx, _exec, mut stack| {
         let value: Value = stack.consume(ctx)?;
+        if !lent.get() {
+            stack.replace(
+                ctx,
+                (
+                    Value::Nil,
+                    "balthasar.fs.read is lent only to your own configuration",
+                ),
+            );
+            return Ok(CallbackReturn::Return);
+        }
         let Value::String(text) = value else {
             return Err(convert::raise(ctx, "balthasar.fs.read: expects a path"));
         };

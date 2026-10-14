@@ -95,6 +95,7 @@ impl Loaded {
 
         // Trust is decided after the owner's own files have run; they set `balthasar.trusted`.
         let mut engine = Engine::new();
+        engine.own_config(roots.config.clone());
 
         let owned: Vec<(std::path::PathBuf, bool)> =
             files.iter().filter(|(_, t)| *t).cloned().collect();

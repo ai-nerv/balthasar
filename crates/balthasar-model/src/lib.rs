@@ -19,6 +19,7 @@ mod lifecycle;
 mod memory;
 pub mod noted;
 mod relation;
+pub mod runtime;
 pub mod scratch;
 mod skill;
 mod strength;

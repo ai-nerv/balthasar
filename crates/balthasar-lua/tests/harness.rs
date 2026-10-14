@@ -95,6 +95,13 @@ fn closing_when_nothing_is_open_is_harmless() {
     );
 }
 
+/// The memory role's fallback directory, which a config's stream may dial into.
+fn family_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("memory-{}", balthasar_model::runtime::uid()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    dir
+}
+
 /// A socket whose file goes when the test ends, however the test ends.
 struct Bound(PathBuf);
 
@@ -109,7 +116,7 @@ impl Drop for Bound {
 fn slow_once() -> Bound {
     use std::io::{Read, Write};
 
-    let path = std::env::temp_dir().join(format!("bh-{}.sock", std::process::id()));
+    let path = family_dir().join(format!("bh-{}.sock", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
 
@@ -169,7 +176,7 @@ fn a_call_that_timed_out_costs_a_connect_and_not_the_session() {
 fn echoing() -> Bound {
     use std::io::{Read, Write};
 
-    let path = std::env::temp_dir().join(format!("bh-echo-{}.sock", std::process::id()));
+    let path = family_dir().join(format!("bh-echo-{}.sock", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
 
@@ -233,7 +240,7 @@ fn observing_and_planning_reach_balthasar_rather_than_dying_in_the_client() {
 fn refusing() -> Bound {
     use std::io::{Read, Write};
 
-    let path = std::env::temp_dir().join(format!("bh-no-{}.sock", std::process::id()));
+    let path = family_dir().join(format!("bh-no-{}.sock", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
 

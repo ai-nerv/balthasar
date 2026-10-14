@@ -75,24 +75,67 @@ done
 
 # ---- and the socket primitive is still narrowed --------------------------------------------------
 # `__stream` is a global in this VM on purpose: the family's client stubs are plain Lua and cannot
-# open a socket. It used to dial anything this user could, which put a sibling's control socket
-# inside reach of an untrusted project file. Both ends are checked — the rule and the call — since
-# a `dialable` nobody consults is a function, not a gate.
+# open a socket. It reaches the family's own socket directories and nothing else, by name, and the
+# connect path dials only what `dialable` handed back.
 if ! bare "$STREAM" | grep -q 'fn dialable('; then
   echo "gate-sandbox: nothing decides which sockets a config may dial" >&2
   fail=1
 fi
-if ! bare "$STREAM" | grep -q 'if !dialable('; then
+if ! bare "$STREAM" | grep -q '= dialable('; then
   echo "gate-sandbox: the connect path no longer asks whether a socket is dialable" >&2
   echo "gate-sandbox: a project file could then open any socket this user can" >&2
   fail=1
 fi
+if ! bare "$STREAM" | grep -q 'runtime::family_dirs()'; then
+  echo "gate-sandbox: dialable no longer names the family's own socket directories" >&2
+  fail=1
+fi
+if bare "$STREAM" | grep -q 'temp_dir()\|XDG_RUNTIME_DIR'; then
+  echo "gate-sandbox: dialable reaches a whole directory again, not the family's sockets in it" >&2
+  fail=1
+fi
 
-# ---- an untrusted file may choose, but not declare ------------------------------------------------
-# `self.` is part of the match: `refuse_declarations(` alone also matches the `fn` that defines
-# it, so deleting the only call site left the gate green.
-if ! bare "$ENGINE" | grep -q 'self.refuse_declarations('; then
+# ---- a project's own file is data, in a VM of its own --------------------------------------------
+PROJECT="$ROOT/balthasar-lua/src/project.rs"
+HELPERS="$ROOT/balthasar-lua/src/helpers.rs"
+if ! bare "$ENGINE" | grep -q 'crate::project::install('; then
+  echo "gate-sandbox: a project's own file no longer runs in the data-only VM" >&2
+  fail=1
+fi
+if ! bare "$ENGINE" | grep -q 'refuse_declarations(path)'; then
   echo "gate-sandbox: a project's own file is no longer held to what it may declare" >&2
+  fail=1
+fi
+for lent in '"fs"' '"git"' '"stream"' 'stream::table' 'helpers::install('; do
+  if bare "$PROJECT" | grep -q "$lent"; then
+    echo "gate-sandbox: the project VM is handed $lent" >&2
+    fail=1
+  fi
+done
+for gone in '"load"' '"getenv"'; do
+  if ! bare "$PROJECT" | grep -q "$gone"; then
+    echo "gate-sandbox: the project VM no longer removes $gone" >&2
+    fail=1
+  fi
+done
+
+# ---- fs.read is lent to the person's own files only ----------------------------------------------
+if ! bare "$HELPERS" | grep -q 'lent.get()'; then
+  echo "gate-sandbox: balthasar.fs.read no longer asks whether it is lent" >&2
+  fail=1
+fi
+
+# ---- and every chunk runs under a budget ---------------------------------------------------------
+if ! bare "$ENGINE" | grep -q 'crate::fuel::drive('; then
+  echo "gate-sandbox: chunks no longer run under an instruction budget" >&2
+  fail=1
+fi
+unbudgeted=$(find "$ROOT/balthasar-lua/src" -name '*.rs' | sort | while IFS= read -r file; do
+  bare "$file" | grep -n '\.execute::<\|\.finish(' | sed "s|^|$file:|" || true
+done)
+if [ -n "$unbudgeted" ]; then
+  echo "gate-sandbox: a chunk runs without a budget:" >&2
+  printf '%s\n' "$unbudgeted" | sed 's/^/  /' >&2
   fail=1
 fi
 
