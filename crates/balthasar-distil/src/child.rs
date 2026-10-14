@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 /// How long output is waited for once the child itself has exited.
 const GRACE: Duration = Duration::from_millis(250);
 
+/// What an empty pipe always takes without blocking: one page.
+const FRESH_PIPE: usize = 4096;
+
 /// What a finished child left.
 #[derive(Debug)]
 pub struct Ran {
@@ -51,15 +54,21 @@ pub fn run(argv: &[String], input: &[u8], timeout: Duration, cap: usize) -> Resu
         .map_err(Stopped::Spawn)?;
     let group = rustix::process::Pid::from_child(&child);
 
-    let (wrote, written) = mpsc::channel();
-    let stdin = child.stdin.take();
-    let input = input.to_owned();
-    std::thread::spawn(move || {
-        let done = stdin.map_or(Ok(()), |mut pipe| pipe.write_all(&input));
-        let _ = wrote.send(done);
-    });
     let stdout = drain(child.stdout.take(), cap);
     let stderr = drain(child.stderr.take(), 4096);
+    // What fits in a fresh pipe goes in now, before the child can have exited; the rest on a
+    // thread, so a child that writes before it reads cannot wedge the two of them.
+    let (wrote, written) = mpsc::channel();
+    let mut stdin = child.stdin.take();
+    let head = input.len().min(FRESH_PIPE);
+    let first = stdin
+        .as_mut()
+        .map_or(Ok(()), |pipe| pipe.write_all(&input[..head]));
+    let rest = input[head..].to_owned();
+    std::thread::spawn(move || {
+        let done = first.and_then(|()| stdin.map_or(Ok(()), |mut pipe| pipe.write_all(&rest)));
+        let _ = wrote.send(done);
+    });
 
     let status = loop {
         match child.try_wait() {
