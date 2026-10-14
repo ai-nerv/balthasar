@@ -108,9 +108,11 @@ recurred in an unrelated run becomes a fact without anyone having said so.
 stops being *findable*. That gap is the answer to staleness: an agent that can say "you told me
 this in March, it may be stale" instead of stating it flatly.
 
-**Nothing is ever deleted.** Superseded, contradicted, decayed past the floor, forgotten on
+**No memory is ever deleted.** Superseded, contradicted, decayed past the floor, forgotten on
 purpose — every one of those is a column. `balthasar forget --purge` is the single exception, and it
-exists so that "delete the key I pasted" can be answered with yes.
+exists so that "delete the key I pasted" can be answered with yes. What is not a memory is
+bounded: derived indexes are rebuilt, the recall ledger keeps what its retention says, and an
+applied layout goes after thirty days, keeping each run's newest.
 
 **Diversity beats volume.** One session repeating something is a person being emphatic; the
 same thing surfacing in unrelated runs is a property of the world. Confidence counts sessions,
@@ -127,7 +129,7 @@ in the transcript and nowhere else. `recall` answers from it too, as evidence �
 
 Built. M0–M9, F0–F9, and the three things a survey of the field turned up afterwards —
 searching the spans, the control arm that can lose, and an erasure that reaches what was
-derived from what. 927 tests, seven gates.
+derived from what. 1579 tests, fourteen gates.
 
 ```sh
 balthasar serve                     # listen for a harness
@@ -204,7 +206,8 @@ The gates are not advisory:
 | Gate | Rule |
 |---|---|
 | `gate-file-size` | no `.rs` over 800 lines |
-| `gate-no-delete` | no `DELETE FROM` outside `purge.rs` |
+| `gate-comments` | a file's comments are at most a fifth of its code |
+| `gate-no-delete` | nothing a memory holds is deleted outside `purge.rs` |
 | `gate-independent` | no Rust file names a harness |
 | `gate-witnessed` | every asserted memory answers for itself |
 | `gate-untrusted` | untrusted content cannot become durable instruction |
@@ -212,6 +215,9 @@ The gates are not advisory:
 | `gate-cycles` | no two top-level modules depend on each other |
 | `gate-hermetic` | the suite leaves nothing behind in `$TMPDIR` |
 | `gate-wire` | one way of saying a thing crosses a boundary |
+| `gate-sandbox` | one Lua VM, built in one place, and it is sandboxed |
+| `gate-family` | the binary answers the family contract |
+| `gate-role` | the binary fills the memory role |
 | `gate-no-llm` | the suite passes with no key, no network, no embeddings |
 
 The last one is the load-bearing one. A model makes balthasar better; its absence never makes balthasar
