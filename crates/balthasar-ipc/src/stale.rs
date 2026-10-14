@@ -25,10 +25,18 @@ impl Drop for Claimed {
             let _ = std::fs::remove_file(&self.path);
         }
         if let Some((held, path)) = self.lock.take() {
-            let _ = std::fs::remove_file(&path);
-            drop(held);
+            unlock(held, &path);
         }
     }
+}
+
+/// Let go of a lock, removing its file first if the path is still the file this holds.
+pub fn unlock(held: File, path: &Path) {
+    let ours = held.metadata().ok().map(|meta| (meta.dev(), meta.ino()));
+    if ours.is_some() && inode_of(path) == ours {
+        let _ = std::fs::remove_file(path);
+    }
+    drop(held);
 }
 
 /// `<socket>.lock`, beside it.
@@ -96,18 +104,18 @@ pub fn claim(path: &Path) -> std::io::Result<Claimed> {
     let Some((held, lock)) = lock(path)? else {
         return Err(in_use(path, "another balthasar is taking this name"));
     };
-    let bound = bind_held(path);
-    if bound.is_err() {
-        // Still holding it, so nobody else can be relying on this lock file.
-        let _ = std::fs::remove_file(&lock);
+    match bind_held(path) {
+        Ok((listener, inode)) => Ok(Claimed {
+            listener,
+            path: path.to_owned(),
+            inode,
+            lock: Some((held, lock)),
+        }),
+        Err(why) => {
+            unlock(held, &lock);
+            Err(why)
+        }
     }
-    let (listener, inode) = bound?;
-    Ok(Claimed {
-        listener,
-        path: path.to_owned(),
-        inode,
-        lock: Some((held, lock)),
-    })
 }
 
 /// Clear a corpse at `path` and bind there, the lock already held.

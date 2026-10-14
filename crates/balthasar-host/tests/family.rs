@@ -14,24 +14,22 @@ use std::os::unix::net::UnixStream;
 /// Serve a store on a socket for as long as the returned handle lives.
 struct Serving {
     path: std::path::PathBuf,
-    also: Vec<std::path::PathBuf>,
+    root: std::path::PathBuf,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Serving {
     fn start(name: &str, seed: &[&str]) -> Self {
-        let instance = format!("{name}-{}", std::process::id());
-        let listener = Listener::bind(&instance).expect("bind");
+        // Directories of this test's own, so nothing it leaves reaches the shared runtime one.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir()
+            .join(format!("memory-{}", balthasar_model::runtime::uid()))
+            .join(format!("{name}-{}-{n}", std::process::id()));
+        let dirs = [root.join("m"), root.join("b")];
+        let listener = Listener::bind_in(&dirs, "f").expect("bind");
         let path = listener.path().to_owned();
-        // Every other name it bound. One instance answers under the role's name and under the
-        // program's, and a file left behind under either is one the next instance must disprove.
-        let also: Vec<std::path::PathBuf> = listener
-            .paths()
-            .into_iter()
-            .skip(1)
-            .map(std::path::Path::to_owned)
-            .collect();
 
         let mut store = Store::ephemeral().expect("store");
         for text in seed {
@@ -77,7 +75,7 @@ impl Serving {
 
         Self {
             path,
-            also,
+            root,
             stop,
             thread: Some(thread),
         }
@@ -87,16 +85,10 @@ impl Serving {
 impl Drop for Serving {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        // The listener owns the socket file and removes it; the accept loop ends when the
-        // process does. Leaking the thread here is deliberate: a test that joined it would
-        // wait on an accept that never returns.
+        // The accept loop ends when the process does. Leaking the thread here is deliberate: a
+        // test that joined it would wait on an accept that never returns.
         let _ = self.thread.take();
-        let _ = std::fs::remove_file(&self.path);
-        let _ = std::fs::remove_file(balthasar_ipc::lock_path(&self.path));
-        for path in &self.also {
-            let _ = std::fs::remove_file(path);
-            let _ = std::fs::remove_file(balthasar_ipc::lock_path(path));
-        }
+        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 

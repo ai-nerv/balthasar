@@ -18,7 +18,8 @@ fn say(stream: &mut UnixStream, call: &str) -> serde_json::Value {
 
 #[test]
 fn a_panic_while_answering_is_a_failure_and_the_next_call_is_answered() {
-    let listener = Listener::bind(&format!("panics-{}", std::process::id())).expect("bind");
+    let (_root, dirs) = super::aside("panics");
+    let listener = Listener::bind_in(&dirs, "p").expect("bind");
     let paths: Vec<std::path::PathBuf> = listener
         .paths()
         .into_iter()
@@ -38,8 +39,4 @@ fn a_panic_while_answering_is_a_failure_and_the_next_call_is_answered() {
     assert_eq!(told["fault"], "failed", "{told}");
     assert!(told["error"].as_str().unwrap_or_default().contains("boom"));
     assert_eq!(say(&mut stream, "verbs")["result"][0], "verbs");
-    for path in &paths {
-        let _ = std::fs::remove_file(path);
-        let _ = std::fs::remove_file(crate::stale::lock_path(path));
-    }
 }

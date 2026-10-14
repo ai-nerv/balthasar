@@ -180,12 +180,16 @@ impl Listener {
     /// looking under either finds *this* store: the role's own name must bind, the old one is a
     /// courtesy, and a live program on the old one refuses the instance outright.
     pub fn bind(instance: &str) -> std::io::Result<Self> {
-        let wanted = [socket_path(instance), legacy_socket_path(instance)];
+        Self::bind_in(&socket_dirs(), instance)
+    }
+
+    /// The same, in directories the caller names, the role's own first: what a test binds in, so
+    /// nothing it leaves reaches the runtime directory every balthasar on the machine shares.
+    pub fn bind_in(dirs: &[PathBuf], instance: &str) -> std::io::Result<Self> {
         let mut bound = Vec::new();
-        for path in wanted {
-            let taken = path
-                .parent()
-                .map_or(Ok(()), balthasar_model::runtime::private_dir)
+        for dir in dirs {
+            let path = dir.join(format!("api@{instance}.sock"));
+            let taken = balthasar_model::runtime::private_dir(dir)
                 .and_then(|()| crate::stale::claim(&path));
             match taken {
                 Ok(claimed) => bound.push(claimed),
@@ -416,6 +420,18 @@ fn refuse(stream: &mut UnixStream, why: &str) -> std::io::Result<()> {
     stream.flush()
 }
 
+/// Socket directories of a test's own, the role's and the old name's: private, and removed with
+/// what is left in them when the test ends, so no test binds in the shared runtime directory.
+#[cfg(test)]
+pub(crate) fn aside(name: &str) -> (balthasar_model::scratch::Scratch, [PathBuf; 2]) {
+    let root = balthasar_model::scratch::Scratch::new("bs", name);
+    let dirs = [root.join("m"), root.join("b")];
+    for dir in &dirs {
+        balthasar_model::runtime::private_dir(dir).expect("a private socket directory");
+    }
+    (root, dirs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,9 +498,9 @@ mod tests {
 
     #[test]
     fn binding_twice_refuses_rather_than_stealing_the_name() {
-        let instance = format!("test-{}", std::process::id());
-        let first = Listener::bind(&instance).expect("bind");
-        let second = Listener::bind(&instance);
+        let (_root, dirs) = aside("twice");
+        let first = Listener::bind_in(&dirs, "t").expect("bind");
+        let second = Listener::bind_in(&dirs, "t");
         assert!(
             second.is_err(),
             "the second must not steal the first's socket"
@@ -492,72 +508,99 @@ mod tests {
         drop(first);
     }
 
+    /// Every file left in a test's socket directories.
+    fn left(dirs: &[PathBuf]) -> Vec<PathBuf> {
+        dirs.iter()
+            .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
+            .map(|entry| entry.path())
+            .collect()
+    }
+
     #[test]
     fn a_socket_left_behind_by_something_dead_is_replaced() {
-        let instance = format!("stale-{}", std::process::id());
-        let path = socket_path(&instance);
-        std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
+        let (_root, dirs) = aside("stale");
+        let path = dirs[0].join("api@s.sock");
         drop(UnixListener::bind(&path).expect("leave a corpse behind"));
-        let listener = Listener::bind(&instance).expect("a corpse is not a live peer");
+        let listener = Listener::bind_in(&dirs, "s").expect("a corpse is not a live peer");
         drop(listener);
-        assert!(!path.exists());
+        assert_eq!(
+            left(&dirs),
+            Vec::<PathBuf>::new(),
+            "sockets and locks go too"
+        );
     }
 
     #[test]
     fn a_file_that_is_not_a_socket_is_not_cleared_to_make_room() {
-        let instance = format!("squat-{}", std::process::id());
-        let path = socket_path(&instance);
-        std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
+        let (_root, dirs) = aside("squat");
+        let path = dirs[0].join("api@q.sock");
         std::fs::write(&path, "not a socket").expect("leave something behind");
-        assert!(Listener::bind(&instance).is_err());
+        assert!(Listener::bind_in(&dirs, "q").is_err());
         assert!(path.exists(), "it was not ours to remove");
-        std::fs::remove_file(&path).expect("clean up");
+        assert_eq!(
+            left(&dirs),
+            vec![path],
+            "and the refusal leaves no lock behind"
+        );
     }
 
     #[test]
     fn a_listener_takes_every_socket_it_bound_with_it() {
-        let instance = format!("gone-{}", std::process::id());
-        let paths = {
-            let listener = Listener::bind(&instance).expect("bind");
+        let (_root, dirs) = aside("gone");
+        {
+            let listener = Listener::bind_in(&dirs, "g").expect("bind");
             let paths: Vec<PathBuf> = listener.paths().into_iter().map(Path::to_owned).collect();
             assert_eq!(paths.len(), 2, "{paths:?}");
             for path in &paths {
                 assert!(path.exists(), "{} was never bound", path.display());
             }
-            paths
-        };
-        for path in paths {
-            assert!(
-                !path.exists(),
-                "{} left behind is one the next instance must disprove",
-                path.display()
-            );
         }
+        assert_eq!(
+            left(&dirs),
+            Vec::<PathBuf>::new(),
+            "a socket or lock left behind is one the next instance must disprove"
+        );
+    }
+
+    #[test]
+    fn a_lock_file_that_is_no_longer_ours_is_left_alone() {
+        let (_root, dirs) = aside("relock");
+        let listener = Listener::bind_in(&dirs, "r").expect("bind");
+        let lock = crate::stale::lock_path(listener.path());
+        std::fs::remove_file(&lock).expect("taken away");
+        std::fs::write(&lock, "somebody else's").expect("replaced");
+        drop(listener);
+        assert!(
+            lock.exists(),
+            "a lock file this did not hold is not this one's to remove"
+        );
     }
 
     #[test]
     fn the_old_name_being_taken_refuses_the_instance_outright() {
         // The fork this window exists to prevent: a daemon on one name and a fresh one on the
         // other, both answering, each holding a store the other's callers never see.
-        let instance = format!("taken-{}", std::process::id());
-        let old = legacy_socket_path(&instance);
-        std::fs::create_dir_all(old.parent().expect("a parent")).expect("mkdir");
+        let (_root, dirs) = aside("taken");
+        let old = dirs[1].join("api@k.sock");
         let squatter = UnixListener::bind(&old).expect("bind the old name");
 
-        let refused = Listener::bind(&instance);
+        let refused = Listener::bind_in(&dirs, "k");
         assert!(
             refused.is_err(),
             "the new name was free and the old one was live"
         );
-
+        assert_eq!(
+            left(&dirs),
+            vec![old],
+            "nothing of the refused instance is left"
+        );
         drop(squatter);
-        std::fs::remove_file(&old).expect("clean up");
     }
 
     #[test]
     fn both_names_reach_the_same_answering_thread() {
-        let instance = format!("both-{}", std::process::id());
-        let listener = Listener::bind(&instance).expect("bind");
+        let (_root, dirs) = aside("both");
+        let listener = Listener::bind_in(&dirs, "o").expect("bind");
         let paths: Vec<PathBuf> = listener.paths().into_iter().map(Path::to_owned).collect();
         let counted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let tally = std::sync::Arc::clone(&counted);
@@ -585,10 +628,6 @@ mod tests {
 
         // One counter, so both doors were served by one thread over one state.
         assert_eq!(counted.load(std::sync::atomic::Ordering::Acquire), 2);
-        for path in &paths {
-            let _ = std::fs::remove_file(path);
-            let _ = std::fs::remove_file(crate::stale::lock_path(path));
-        }
         drop(serving);
     }
 }
@@ -599,35 +638,31 @@ mod crowd {
     use super::*;
     use std::io::{Read, Write};
 
-    /// A served socket whose file goes when the test ends, however the test ends: the accept loop
-    /// never returns, so the [`Listener`] moved into the serving thread never drops.
-    struct Bound(Vec<PathBuf>);
+    /// A served socket in directories of the test's own, removed with them however the test
+    /// ends: the accept loop never returns, so the [`Listener`] moved into the serving thread
+    /// never drops.
+    struct Bound {
+        paths: Vec<PathBuf>,
+        _root: balthasar_model::scratch::Scratch,
+    }
 
     impl Bound {
         /// Bind, and serve every call by echoing back what was asked.
-        fn serving(instance: &str) -> Self {
-            let listener = Listener::bind(instance).expect("bind");
+        fn serving(name: &str) -> Self {
+            let (root, dirs) = aside(name);
+            let listener = Listener::bind_in(&dirs, "c").expect("bind");
             let paths = listener.paths().into_iter().map(Path::to_owned).collect();
             std::thread::spawn(move || {
                 let _ = listener.serve(|_peer: &Peer, request: Request| {
                     Reply::one(serde_json::json!(format!("heard {}", request.call)))
                 });
             });
-            Self(paths)
+            Self { paths, _root: root }
         }
 
         /// The name a caller in these tests dials.
         fn path(&self) -> &Path {
-            &self.0[0]
-        }
-    }
-
-    impl Drop for Bound {
-        fn drop(&mut self) {
-            for path in &self.0 {
-                let _ = std::fs::remove_file(path);
-                let _ = std::fs::remove_file(crate::stale::lock_path(path));
-            }
+            &self.paths[0]
         }
     }
 
@@ -662,7 +697,7 @@ mod crowd {
 
     #[test]
     fn one_caller_holding_its_connection_does_not_shut_the_next_one_out() {
-        let bound = Bound::serving(&format!("crowd-{}", std::process::id()));
+        let bound = Bound::serving("crowd");
         let path = bound.path();
 
         let mut scribe = UnixStream::connect(path).expect("the scribe connects");
@@ -691,7 +726,7 @@ mod crowd {
     #[test]
     fn the_caller_over_the_ceiling_is_told_so_rather_than_left_hanging() {
         // A refusal is a frame; a dropped connection is what gets the socket unlinked.
-        let bound = Bound::serving(&format!("ceiling-{}", std::process::id()));
+        let bound = Bound::serving("ceiling");
         let path = bound.path();
 
         let mut held: Vec<UnixStream> = Vec::new();

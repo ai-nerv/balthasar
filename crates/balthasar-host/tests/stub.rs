@@ -13,37 +13,48 @@ use balthasar_store::Store;
 
 const NOW: balthasar_model::Timestamp = 1_756_000_000;
 
-/// A served socket whose file goes when the test ends, however the test ends.
+/// A served socket in directories of the test's own, under the memory role's fallback directory
+/// so the client library may dial it, and removed whole however the test ends.
 ///
 /// The accept loop never returns, so the [`Listener`] moved into the serving thread outlives the
-/// test and its `Drop` never runs. Every test here used to unlink on its last line instead, which
-/// an `assert!` unwinds straight past — so a *failing* run left `api@stub-*.sock` in the runtime
-/// directory permanently, and that directory is shared with every balthasar on the machine.
-struct Serving(Vec<std::path::PathBuf>);
+/// test and its `Drop` never runs; nothing it leaves reaches the shared runtime directory.
+struct Serving {
+    paths: Vec<std::path::PathBuf>,
+    root: std::path::PathBuf,
+}
 
 impl std::ops::Deref for Serving {
     type Target = std::path::Path;
 
     fn deref(&self) -> &std::path::Path {
-        &self.0[0]
+        &self.paths[0]
     }
 }
 
 impl Drop for Serving {
-    /// Every name it bound, not only the one a caller dials: one instance answers under the role's
-    /// name and under the program's, and the second is as much a leak as the first.
     fn drop(&mut self) {
-        for path in &self.0 {
-            let _ = std::fs::remove_file(path);
-            let _ = std::fs::remove_file(balthasar_ipc::lock_path(path));
-        }
+        let _ = std::fs::remove_dir_all(&self.root);
     }
+}
+
+/// A fresh pair of private socket directories, the role's and the old name's.
+fn aside(name: &str) -> (std::path::PathBuf, [std::path::PathBuf; 2]) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = std::env::temp_dir()
+        .join(format!("memory-{}", balthasar_model::runtime::uid()))
+        .join(format!("{name}-{}-{n}", std::process::id()));
+    let dirs = [root.join("m"), root.join("b")];
+    for dir in &dirs {
+        balthasar_model::runtime::private_dir(dir).expect("a private socket directory");
+    }
+    (root, dirs)
 }
 
 /// Serve a seeded store on a socket, for as long as the handle lives.
 fn serving(name: &str, seed: &[&str]) -> Serving {
-    let instance = format!("stub-{name}-{}", std::process::id());
-    let listener = Listener::bind(&instance).expect("bind");
+    let (root, dirs) = aside(name);
+    let listener = Listener::bind_in(&dirs, "s").expect("bind");
     let paths: Vec<std::path::PathBuf> = listener
         .paths()
         .into_iter()
@@ -89,7 +100,7 @@ fn serving(name: &str, seed: &[&str]) -> Serving {
             balthasar_host::answer(&mut at, &Door::Socket(peer.clone()), &request)
         });
     });
-    Serving(paths)
+    Serving { paths, root }
 }
 
 /// Run a script with the stub loaded and connected, and take what it left in `balthasar.answer`.
@@ -214,9 +225,8 @@ fn the_stub_gathers_a_listing_back_into_one_table() {
 fn stalling(name: &str, early: usize) -> Serving {
     use std::io::{Read, Write};
 
-    let path = balthasar_ipc::socket_path(&format!("stub-{name}-{}", std::process::id()));
-    std::fs::create_dir_all(path.parent().expect("a directory")).expect("dir");
-    let _ = std::fs::remove_file(&path);
+    let (root, dirs) = aside(name);
+    let path = dirs[0].join("api@s.sock");
     let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
 
     std::thread::spawn(move || {
@@ -255,7 +265,10 @@ fn stalling(name: &str, early: usize) -> Serving {
             let _ = socket.write_all(&framed(r#"{"ok":true,"result":["SECOND"],"n":1}"#));
         }
     });
-    Serving(vec![path])
+    Serving {
+        paths: vec![path],
+        root,
+    }
 }
 
 /// Make two calls over one held handle, having given up on the first, and say what came back.

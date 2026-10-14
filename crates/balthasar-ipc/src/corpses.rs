@@ -32,8 +32,7 @@ fn buried(path: &Path, uid: u32) -> bool {
         return false;
     };
     let gone = crate::stale::corpse(path, uid) && std::fs::remove_file(path).is_ok();
-    let _ = std::fs::remove_file(&lock);
-    drop(held);
+    crate::stale::unlock(held, &lock);
     gone
 }
 
@@ -124,16 +123,13 @@ mod tests {
     #[test]
     fn binding_does_not_sweep_the_neighbours() {
         // The sweep dials, and a dial takes one of the eight seats on whatever answers it.
-        let instance = format!("neighbour-{}", std::process::id());
-        let corpse = crate::socket_dir().join(format!("api@corpse-{}.sock", std::process::id()));
-        std::fs::create_dir_all(crate::socket_dir()).expect("mkdir");
+        let (_root, dirs) = crate::serve::aside("neighbour");
+        let corpse = dirs[0].join("api@corpse.sock");
         let bound = std::os::unix::net::UnixListener::bind(&corpse).expect("bind");
         drop(bound);
 
-        let listener = crate::Listener::bind(&instance).expect("bind");
+        let listener = crate::Listener::bind_in(&dirs, "n").expect("bind");
         assert!(corpse.exists(), "binding swept a name that was not its own");
-
         drop(listener);
-        std::fs::remove_file(&corpse).expect("clean up");
     }
 }
