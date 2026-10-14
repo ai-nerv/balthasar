@@ -74,3 +74,5 @@ thiserror = "2.0"
 codegen-units = 16
 lto = "thin"
 strip = "symbols"
+# An overflow is a panic in the shipped binary as it is in the tests, never a silent wrap.
+overflow-checks = true

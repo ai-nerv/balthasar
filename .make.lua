@@ -439,10 +439,29 @@ make.recipe{
   end,
 }
 
+-- The advisory database and the dependency policy, each run only where its tool is installed:
+-- `verify` names both, and a machine without one says so and carries on.
+local function when_installed(tool, argv, failed)
+  return function()
+    if not oslo.run{ "cargo", tool, "--version", capture = true }.ok then
+      print(("cargo %s is not installed; skipped"):format(tool))
+      return
+    end
+    assert(oslo.run(argv).ok, failed)
+  end
+end
+
+make.recipe{ name = "audit", desc = "known advisories against the lockfile, offline",
+             run = when_installed("audit", { "cargo", "audit", "--no-fetch" },
+                                  "cargo audit failed") }
+
+make.recipe{ name = "deny", desc = "the dependency policy",
+             run = when_installed("deny", { "cargo", "deny", "check" }, "cargo deny failed") }
+
 make.recipe{
   name = "verify",
   desc = "the whole local gate",
-  deps = { "fmt-check", "check", "test", "clippy", "rustdoc", "gates", "gate-hermetic", "gate-family", "gate-role", "machete", "gate-no-llm" },
+  deps = { "fmt-check", "check", "test", "clippy", "rustdoc", "gates", "gate-hermetic", "gate-family", "gate-role", "machete", "gate-no-llm", "audit", "deny" },
 }
 make.alias("v", "verify")
 
