@@ -14,14 +14,12 @@ local make = oslo.make
 -- TMPDIR that does not exist fails the build as a libsqlite3-sys error that says nothing about it.
 if not oslo.fs.exists(".tmp") then oslo.fs.mkdir(".tmp") end
 
--- Name and version live in PROJECT, one per line, so every tool reads them from one place.
+-- Version from Cargo.toml, the file a release bumps: the workspace's if it has one, else the package's.
 local function project()
-  local found = {}
-  for line in (oslo.fs.read("PROJECT") or ""):gmatch("[^\n]+") do
-    local value = line:match("^%s*([^#%[%s]%S*)%s*$")
-    if value then found[#found + 1] = value end
-  end
-  return found[1] or "balthasar", found[2] or "0.1.0"
+  local manifest = oslo.fs.read("Cargo.toml") or ""
+  local section = manifest:match("%[workspace%.package%](.-)\n%[")
+    or manifest:match("%[package%](.-)\n%[") or ""
+  return "balthasar", section:match('\nversion%s*=%s*"([^"]+)"') or "0.0.0"
 end
 
 local NAME, VERSION = project()
