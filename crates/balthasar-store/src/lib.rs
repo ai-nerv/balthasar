@@ -23,6 +23,7 @@ mod layout;
 mod mint;
 mod notes;
 mod paths;
+mod placed;
 mod private;
 mod purge;
 mod read;
@@ -55,6 +56,7 @@ pub use paths::{
     HOME, Tool, data_dir, home_of, make_home, project_home, run_dir_in, scope_of, scope_path,
     session_dir, session_dir_in, session_path, tools_in,
 };
+pub use placed::{SCOPED, SCOPED_SCROLLBACK};
 pub use purge::{
     Closure, LAYOUT_KEPT, closure_of, prune_layouts, purge, purge_domain, purge_run, purge_scratch,
     purge_session,

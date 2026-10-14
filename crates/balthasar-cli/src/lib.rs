@@ -285,7 +285,11 @@ pub(crate) fn scrollback(
             balthasar_store::transcript_path(scope, &tool.tool)
         }
     };
-    Ok(balthasar_store::Transcript::open(&path)?)
+    let held = balthasar_store::Transcript::open(&path)?;
+    if override_path.is_none() && balthasar_store::project_home(scope).is_some() {
+        held.settle_scope(scope)?;
+    }
+    Ok(held)
 }
 
 /// The retrieval weighting a configuration asked for.
@@ -350,7 +354,12 @@ pub(crate) fn open(
     if override_path.is_none() {
         home(scope)?;
     }
-    Ok(balthasar_store::Store::open(&path)?)
+    let mut store = balthasar_store::Store::open(&path)?;
+    // A store inside a project is the project's wherever the checkout has moved to.
+    if override_path.is_none() && balthasar_store::project_home(scope).is_some() {
+        store.settle_scope(scope, now())?;
+    }
+    Ok(store)
 }
 
 use std::path::Path;
