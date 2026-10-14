@@ -126,10 +126,12 @@ Plus the family floor.
 
 **A tools program may keep a socket, but the trust is never the caller's.** casper binds one with
 `serve` and answers `tools` and `run` on it, kept open across a session so a call need not spawn a
-process each time. What makes that safe is that the jail is set on `serve`'s spawn — in the
-program's environment, by the coordinator — never by the call: a socket peer runs inside the same
-walls a spawned call would, and a peer of another user is turned away. See `FAMILY.md`'s Doors
-table. The command line stays the spawn-per-call door and is always available.
+process each time. The jail is set on `serve`'s spawn — in the program's environment, by the
+coordinator — never by the call, so a socket peer runs inside the same walls a spawned call would.
+A call is answered only when it carries the key the coordinator wrote on `serve`'s standard input,
+and a peer of another user is turned away. With the jail off, `run` runs commands as the person on
+either door: the socket is then a remote shell exactly as far as the person's own shell is. See
+`FAMILY.md`'s Doors table. The command line stays the spawn-per-call door and is always available.
 
 **Its settings arrive in `MAGI_TOOLS_CONFIGURE`**, as a JSON object, on every spawn — `tools` and
 `run` alike, since there is no process alive between calls to send them to once. magi reads them
