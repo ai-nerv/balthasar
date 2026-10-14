@@ -3,6 +3,8 @@
 //! The milestone's own acceptance test. A fact remembered, corrected and asked again answers
 //! with the new one; both witnesses survive; and the old answer is still in the store.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::{
     Body, Memory, MemoryId, ScopeId, SessionId, Tier, Timestamp, Witness, WitnessId, WitnessKind,
 };
@@ -488,4 +490,50 @@ fn a_query_of_only_short_words_answers_nothing_rather_than_failing() {
         .recall(&Recall::of("is it a", MARCH))
         .expect("a query that asks nothing is not an error");
     assert!(found.is_empty(), "and it finds nothing: {}", found.len());
+}
+
+#[test]
+fn a_correction_that_fails_part_way_leaves_the_old_answer_standing() {
+    let dir = balthasar_model::scratch::Scratch::new("balthasar-remembering", "supersede");
+    let path = dir.join("memory.db");
+    let mut store = Store::open(&path).expect("a store");
+    let first = store
+        .remember(
+            fact("project", "test_command", "cargo test", MARCH),
+            saw(WitnessKind::Distillation, "s1", MARCH),
+            MARCH,
+        )
+        .expect("the first answer");
+    let faults = rusqlite::Connection::open(&path).expect("faults");
+    faults
+        .execute_batch(
+            "CREATE TRIGGER fail_link BEFORE INSERT ON link \
+             BEGIN SELECT RAISE(ABORT, 'link failed'); END;",
+        )
+        .expect("fault");
+    assert!(
+        store
+            .remember(
+                fact("project", "test_command", "make test", AUGUST),
+                saw(WitnessKind::Correction, "s2", AUGUST),
+                AUGUST,
+            )
+            .is_err()
+    );
+    let live = store
+        .live_slot("global", "project", "test_command")
+        .expect("slot")
+        .expect("the old answer still stands");
+    assert_eq!(&live.id, first.id());
+    faults
+        .execute_batch("DROP TRIGGER fail_link")
+        .expect("remove fault");
+    let again = store
+        .remember(
+            fact("project", "test_command", "make test", AUGUST),
+            saw(WitnessKind::Correction, "s2", AUGUST),
+            AUGUST,
+        )
+        .expect("the correction lands once the fault is gone");
+    assert!(matches!(again, Landing::Superseded { .. }), "{again:?}");
 }

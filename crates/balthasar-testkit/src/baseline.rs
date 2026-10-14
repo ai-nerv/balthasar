@@ -4,6 +4,7 @@
 //! hashes and stable local names, never a query, a transcript excerpt, or the text of a memory.
 
 use crate::{Scenario, Score, measure};
+use balthasar_distil::DistilError;
 
 /// The recall latency budget, declared rather than observed: five milliseconds at the tail.
 pub const RECALL_P95_BUDGET_MS: f64 = 5.0;
@@ -58,38 +59,43 @@ pub struct Baseline {
 }
 
 /// The shortest history at which memory catches the window. `None` if the window stayed ahead.
-fn crossover(scenario: &Scenario) -> Option<usize> {
+fn crossover(scenario: &Scenario) -> Result<Option<usize>, DistilError> {
     // Walking every prefix is quadratic in sessions, so the search is bounded.
     const LOOKED: usize = 16;
     for n in 2..=scenario.sessions.len().min(LOOKED) {
         let prefix = Scenario {
-            sessions: scenario.sessions[..n].to_vec(),
+            sessions: scenario.sessions.iter().take(n).cloned().collect(),
             ..scenario.clone()
         };
-        let with = crate::run_arm(&prefix, crate::Arm::Memory).hit_rate();
-        let window = crate::run_arm(&prefix, crate::Arm::InWindow(crate::WINDOW)).hit_rate();
+        let with = crate::run_arm(&prefix, crate::Arm::Memory)?.hit_rate();
+        let window = crate::run_arm(&prefix, crate::Arm::InWindow(crate::WINDOW))?.hit_rate();
         if with >= window {
-            return Some(n);
+            return Ok(Some(n));
         }
     }
-    None
+    Ok(None)
 }
 
 impl Baseline {
     /// Run `scenario` both ways and report everything about it.
+    ///
+    /// # Errors
+    /// When the store under a run fails.
     pub fn of(
         scenario: &Scenario,
         name: &str,
         seed: i64,
         settings: &balthasar_lua::Settings,
-    ) -> Self {
-        let (with, cost) = measure(scenario, true);
-        let (without, _) = measure(scenario, false);
-        let (windowed, _) = crate::measure_arm(scenario, crate::Arm::InWindow(crate::WINDOW));
+    ) -> Result<Self, DistilError> {
+        let (with, cost) = measure(scenario, true)?;
+        let (without, _) = measure(scenario, false)?;
+        let (windowed, _) = crate::measure_arm(scenario, crate::Arm::InWindow(crate::WINDOW))?;
         // Only worth walking when there is a crossing to find.
-        let crossover = (with.hit_rate() > windowed.hit_rate())
-            .then(|| crossover(scenario))
-            .flatten();
+        let crossover = if with.hit_rate() > windowed.hit_rate() {
+            crossover(scenario)?
+        } else {
+            None
+        };
         let ceiling = Score::ceiling(scenario);
 
         // Every rediscovery after the first encounter. The first one had nothing to know.
@@ -104,7 +110,7 @@ impl Baseline {
         ))[..16]
             .to_owned();
 
-        Self {
+        Ok(Self {
             run_id,
             git_revision: option_env!("MAGI_BALTHASAR_GIT_REV")
                 .unwrap_or("unknown")
@@ -131,7 +137,7 @@ impl Baseline {
             store_bytes: cost.store_bytes,
             recall_p50_ms: cost.recall_ms(0.50),
             recall_p95_ms: cost.recall_ms(0.95),
-        }
+        })
     }
 
     /// The part of this report that two identical runs must agree on exactly.
@@ -169,9 +175,19 @@ mod tests {
 
     const SEED: i64 = 1_756_000_000;
 
+    /// A baseline the test expects to be measured.
+    fn measured(
+        scenario: &Scenario,
+        name: &str,
+        seed: i64,
+        settings: &balthasar_lua::Settings,
+    ) -> Baseline {
+        Baseline::of(scenario, name, seed, settings).expect("a measured baseline")
+    }
+
     fn baseline() -> Baseline {
         let scenario = Scenario::one_lesson(6, SEED);
-        Baseline::of(
+        measured(
             &scenario,
             "one-lesson",
             SEED,
@@ -209,20 +225,20 @@ mod tests {
         let scenario = Scenario::one_lesson(6, SEED);
         let mut changed = balthasar_lua::Settings::default();
         changed.floors.inject += 0.1;
-        let one = Baseline::of(
+        let one = measured(
             &scenario,
             "one-lesson",
             SEED,
             &balthasar_lua::Settings::default(),
         );
-        let two = Baseline::of(&scenario, "one-lesson", SEED, &changed);
+        let two = measured(&scenario, "one-lesson", SEED, &changed);
         assert_ne!(one.run_id, two.run_id);
     }
 
     #[test]
     fn the_report_carries_no_text_from_the_run() {
         let scenario = Scenario::one_lesson(6, SEED);
-        let held = Baseline::of(
+        let held = measured(
             &scenario,
             "one-lesson",
             SEED,
@@ -249,7 +265,7 @@ mod tests {
     fn recall_p95_over(sessions: usize) -> f64 {
         (0..3)
             .map(|_| {
-                Baseline::of(
+                measured(
                     &Scenario::one_lesson(sessions, SEED),
                     "one-lesson",
                     SEED,
@@ -296,13 +312,13 @@ mod tests {
 
     #[test]
     fn success_is_not_bought_with_an_ever_growing_prompt() {
-        let short = Baseline::of(
+        let short = measured(
             &Scenario::one_lesson(4, SEED),
             "one-lesson",
             SEED,
             &balthasar_lua::Settings::default(),
         );
-        let long = Baseline::of(
+        let long = measured(
             &Scenario::one_lesson(16, SEED),
             "one-lesson",
             SEED,
@@ -320,7 +336,7 @@ mod tests {
     fn what_could_not_have_been_known_is_not_counted_against_memory() {
         // The first encounter of a lesson has nothing to recall from.
         let scenario = Scenario::one_lesson(6, SEED);
-        let held = Baseline::of(
+        let held = measured(
             &scenario,
             "one-lesson",
             SEED,

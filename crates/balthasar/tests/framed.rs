@@ -4,6 +4,8 @@
 //! rows, and a failure printed a sentence on stderr and exited 1 — which is the one answer a
 //! sibling cannot tell from balthasar not being installed.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::Scratch;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

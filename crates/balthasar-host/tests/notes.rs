@@ -1,5 +1,7 @@
 //! Notes: extracted by a helper, pinned or deferred, logged, undone and reviewed.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, Hooks, Keeping, answer_hooked};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{ScopeId, floor};

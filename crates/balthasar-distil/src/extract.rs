@@ -42,8 +42,11 @@ pub fn extract(turns: &[Observation], imperatives: &[String]) -> Extracted {
             // checked as well as the role.
             Role::User if turn.kind.can_instruct() => {
                 if let Some(said) = instruction::read(&turn.text, imperatives) {
-                    out.candidates
-                        .extend(asked_for(&said, turn, &turns[..index]));
+                    out.candidates.extend(asked_for(
+                        &said,
+                        turn,
+                        turns.get(..index).unwrap_or(&[]),
+                    ));
                 } else if let Some(claim) = correction(&turn.text) {
                     out.candidates.push(
                         Candidate::new(
@@ -57,7 +60,9 @@ pub fn extract(turns: &[Observation], imperatives: &[String]) -> Extracted {
                 }
             }
             Role::Tool => {
-                let before = &turns[index.saturating_sub(LOOKBACK)..index];
+                let before = turns
+                    .get(index.saturating_sub(LOOKBACK)..index)
+                    .unwrap_or(&[]);
                 if let Some(candidate) = repair(turn, before) {
                     out.candidates.push(candidate);
                 }
@@ -191,7 +196,7 @@ pub fn correction(text: &str) -> Option<String> {
     let claim = if *marker == "not " {
         first_sentence(trimmed)
     } else {
-        first_sentence(trimmed[marker.len()..].trim_start())
+        first_sentence(trimmed.get(marker.len()..).unwrap_or_default().trim_start())
     };
     (claim.len() >= 8).then_some(claim)
 }
@@ -310,7 +315,7 @@ fn first_sentence(text: &str) -> String {
             _ => false,
         };
         if ends {
-            return bytes[..i].iter().collect::<String>().trim().to_owned();
+            return bytes.iter().take(i).collect::<String>().trim().to_owned();
         }
     }
     text.trim().to_owned()

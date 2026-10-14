@@ -8,6 +8,12 @@ use std::fmt;
 /// Crockford's base32, which is what a ULID's text form is spelled in.
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
+/// The base32 digit for the low five bits of `value`.
+#[allow(clippy::indexing_slicing)]
+fn digit(value: u128) -> char {
+    char::from(ALPHABET[(value & 0x1f) as usize])
+}
+
 macro_rules! text_id {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
@@ -94,12 +100,10 @@ impl MemoryId {
     pub fn minted(millis: u64, entropy: u128) -> Self {
         let mut out = String::with_capacity(26);
         for shift in (0..10).rev() {
-            let index = (millis >> (shift * 5)) & 0x1f;
-            out.push(char::from(ALPHABET[index as usize]));
+            out.push(digit(u128::from(millis >> (shift * 5))));
         }
         for shift in (0..16).rev() {
-            let index = (entropy >> (shift * 5)) & 0x1f;
-            out.push(char::from(ALPHABET[index as usize]));
+            out.push(digit(entropy >> (shift * 5)));
         }
         Self(out)
     }

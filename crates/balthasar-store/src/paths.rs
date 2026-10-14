@@ -128,7 +128,8 @@ pub fn project_home(scope: &ScopeId) -> Option<PathBuf> {
         return None;
     }
     let at = Path::new(scope.as_str());
-    if !at.is_absolute() {
+    // A shared directory or `$HOME` is too broad to be a project: its memory lives elsewhere.
+    if !at.is_absolute() || too_broad(at) {
         return None;
     }
     let home = at.join(HOME);
@@ -170,7 +171,21 @@ fn only_a_store(dir: &Path) -> bool {
 /// Create a store home, marking it and keeping it out of the checkout. Overwrites neither a
 /// `.gitignore` somebody wrote nor an existing marker; layout moves are `crate::layout`'s to record.
 pub fn make_home(home: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(home)?;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    if let Some(project) = home.parent().filter(|project| too_broad(project)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing a store in {}: too broad to be a project",
+                project.display()
+            ),
+        ));
+    }
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(home)?;
+    std::fs::set_permissions(home, std::fs::Permissions::from_mode(0o700))?;
     let marker = home.join(crate::layout::MARKER);
     if !marker.exists() {
         std::fs::write(&marker, crate::layout::marker_body())?;
@@ -306,10 +321,10 @@ pub fn scope_of(cwd: &Path) -> ScopeId {
 }
 
 /// The closest ancestor holding a store home, if any.
-/// The walk stops at the first shared directory, not at the filesystem root: one leftover
-/// `/tmp/balthasar/.store` would otherwise reparent every path under `/tmp` into a single scope.
+/// The walk stops at the first shared directory and at `$HOME`, not at the filesystem root: one
+/// leftover home there would otherwise reparent every directory under it into a single scope.
 fn nearest_home(from: &Path) -> Option<PathBuf> {
-    home_below(from, is_shared)
+    home_below(from, too_broad)
 }
 
 /// The walk itself, with the ceiling passed in so a test can put one where it can plant a home.
@@ -331,41 +346,45 @@ fn home_below(from: &Path, ceiling: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     }
 }
 
-/// Whether `dir` is a directory nobody in particular owns, and so cannot scope a project.
-/// The temporary directory, the parent of a home directory, and the filesystem root. Compared by
-/// path rather than by mode: `/home` is just as shared and has no sticky world-writable bit.
-fn is_shared(dir: &Path) -> bool {
-    if dir.parent().is_none() {
-        return true;
-    }
-    if dir == std::env::temp_dir() {
-        return true;
-    }
+/// `$HOME`, when it is set.
+fn env_home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .as_deref()
-        .and_then(Path::parent)
-        .is_some_and(|above| dir == above)
 }
 
-/// Whether a checkout rooted at `dir` would sweep in directories that have nothing to do with it:
+/// Whether `dir` is a directory nobody in particular owns, and so cannot scope a project.
+/// The temporary directory, the parent of a home directory, and the filesystem root. Compared by
+/// path rather than by mode: `/home` is just as shared and has no sticky world-writable bit.
+fn is_shared_under(dir: &Path, home: Option<&Path>) -> bool {
+    dir.parent().is_none()
+        || dir == std::env::temp_dir()
+        || home
+            .and_then(Path::parent)
+            .is_some_and(|above| dir == above)
+}
+
+/// Whether a project rooted at `dir` would sweep in directories that have nothing to do with it:
 /// the shared directories, and a home directory, where a dotfiles repository would otherwise win.
 fn too_broad(dir: &Path) -> bool {
-    if is_shared(dir) {
-        return true;
-    }
-    std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .is_some_and(|home| dir == Path::new(&home))
+    too_broad_under(dir, env_home().as_deref())
 }
 
-/// The repository a directory is in, walking up. Reads `.git` when it is a file, because that is
-/// what a worktree has: a pointer at the real repository.
+fn too_broad_under(dir: &Path, home: Option<&Path>) -> bool {
+    is_shared_under(dir, home) || home == Some(dir)
+}
+
+/// The repository a directory is in, walking up. Reads `.git` when it is a file: a worktree's
+/// points into `<repo>/.git/worktrees/<name>` and shares that repository's scope; a submodule's
+/// points into `<super>/.git/modules/<name>`, relative to itself, and is a repository of its own.
 fn git_common_dir(from: &Path) -> Option<PathBuf> {
+    git_common_dir_under(from, &too_broad)
+}
+
+fn git_common_dir_under(from: &Path, ceiling: &impl Fn(&Path) -> bool) -> Option<PathBuf> {
     let mut at = from;
     loop {
-        if too_broad(at) {
+        if ceiling(at) {
             return None;
         }
         let dot = at.join(".git");
@@ -373,16 +392,17 @@ fn git_common_dir(from: &Path) -> Option<PathBuf> {
             return Some(at.to_owned());
         }
         if dot.is_file() {
-            // `gitdir: .../.git/worktrees/name` — the repository is two levels up from the entry.
             let pointer = std::fs::read_to_string(&dot).ok()?;
-            let target = pointer.trim().strip_prefix("gitdir:")?.trim();
-            let target = PathBuf::from(target);
-            return target
-                .ancestors()
-                .find(|a| a.file_name().is_some_and(|n| n == ".git"))
-                .and_then(|git| git.parent())
-                .map(Path::to_owned)
-                .or(Some(at.to_owned()));
+            let target = PathBuf::from(pointer.trim().strip_prefix("gitdir:")?.trim());
+            let target = at.join(target);
+            let target = target.canonicalize().unwrap_or(target);
+            let worktrees = target.parent();
+            let repository = worktrees
+                .filter(|dir| dir.file_name().is_some_and(|n| n == "worktrees"))
+                .and_then(Path::parent)
+                .filter(|git| git.file_name().is_some_and(|n| n == ".git"))
+                .and_then(Path::parent);
+            return Some(repository.map_or_else(|| at.to_owned(), Path::to_owned));
         }
         at = at.parent()?;
     }

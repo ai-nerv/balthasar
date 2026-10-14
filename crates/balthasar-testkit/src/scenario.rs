@@ -86,7 +86,7 @@ impl Scenario {
                     Session {
                         id: format!("01SESSION{n:04}"),
                         at: start + n as Timestamp * DAY,
-                        asked: met[0].intent.clone(),
+                        asked: met.first().map(|l| l.intent.clone()).unwrap_or_default(),
                         lessons: met,
                     }
                 })
@@ -130,7 +130,7 @@ impl Scenario {
             "notifier",
         ];
         let make = |n: usize| {
-            let subject = SUBJECT[n % SUBJECT.len()];
+            let subject = SUBJECT.get(n % SUBJECT.len()).copied().unwrap_or_default();
             let round = n / SUBJECT.len();
             Lesson::new(
                 &format!("work on the {subject} service {round}"),

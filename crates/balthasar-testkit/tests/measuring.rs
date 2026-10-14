@@ -1,8 +1,20 @@
 //! The number that would make somebody change what they run.
 
-use balthasar_testkit::{Scenario, Score, run};
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
+use balthasar_testkit::{Scenario, Score};
 
 const START: balthasar_model::Timestamp = 1_756_000_000;
+
+/// A run the test expects to finish.
+fn run(scenario: &Scenario, with_memory: bool) -> Score {
+    balthasar_testkit::run(scenario, with_memory).expect("a run")
+}
+
+/// One arm of a run the test expects to finish.
+fn run_arm(scenario: &Scenario, arm: balthasar_testkit::Arm) -> Score {
+    balthasar_testkit::run_arm(scenario, arm).expect("a run")
+}
 
 #[test]
 fn without_memory_every_session_rediscovers_everything() {
@@ -106,7 +118,7 @@ fn the_window_wins_until_the_history_outruns_it() {
     // fits in the window, so carrying the text forward answers everything and memory buys
     // nothing. The claim balthasar can actually defend is about what happens after that.
     let short = Scenario::one_lesson(3, START);
-    let windowed = balthasar_testkit::run_arm(
+    let windowed = run_arm(
         &short,
         balthasar_testkit::Arm::InWindow(balthasar_testkit::WINDOW),
     );
@@ -122,8 +134,8 @@ fn memory_catches_the_window_once_the_window_overflows() {
     // — while a promoted claim is still there.
     // Many distinct lessons, with early ones revisited late — the shape a bounded window loses.
     let long = Scenario::many_lessons(40, START);
-    let with = balthasar_testkit::run_arm(&long, balthasar_testkit::Arm::Memory);
-    let windowed = balthasar_testkit::run_arm(
+    let with = run_arm(&long, balthasar_testkit::Arm::Memory);
+    let windowed = run_arm(
         &long,
         balthasar_testkit::Arm::InWindow(balthasar_testkit::WINDOW),
     );
@@ -150,7 +162,8 @@ fn the_control_arm_is_reported_and_cannot_go_missing() {
         "control",
         1,
         &balthasar_lua::Settings::default(),
-    );
+    )
+    .expect("a measured baseline");
     assert!(held.in_window >= 0.0 && held.in_window <= 1.0);
     assert!(
         held.task_success >= held.without_memory,

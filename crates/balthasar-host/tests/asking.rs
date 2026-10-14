@@ -1,5 +1,7 @@
 //! M5: what a peer may ask, and what the ceiling refuses it.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Door, answer};
 use balthasar_ipc::{Peer, Request};
 use balthasar_model::{ScopeId, Timestamp, WitnessKind, floor};
@@ -12,6 +14,7 @@ fn peer() -> Door {
         pid: 4021,
         uid: 1000,
         program: Some("harness".to_owned()),
+        agent: None,
     })
 }
 

@@ -18,16 +18,46 @@ const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8];
 pub const VERSION: u32 = MIGRATIONS.len() as u32;
 
 /// Bring `connection` up to the current schema.
-pub fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
+///
+/// Each step and its version bump are one `BEGIN IMMEDIATE` transaction, with the version read
+/// again inside it: a crash leaves the step undone rather than half done, and a second process
+/// migrating the same file finds the step already taken. A file from a newer build is refused.
+pub fn migrate(connection: &Connection) -> Result<(), crate::StoreError> {
+    migrate_to(connection, VERSION)
+}
+
+/// Bring `connection` up to `target`, one step at a time.
+fn migrate_to(connection: &Connection, target: u32) -> Result<(), crate::StoreError> {
     let at: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if at > VERSION {
+        return Err(newer(at));
+    }
     for (index, statements) in MIGRATIONS.iter().enumerate() {
         let version = index as u32 + 1;
-        if version > at {
-            connection.execute_batch(statements)?;
-            connection.pragma_update(None, "user_version", version)?;
+        if version <= at || version > target {
+            continue;
         }
+        let tx = rusqlite::Transaction::new_unchecked(
+            connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let now: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if now > VERSION {
+            return Err(newer(now));
+        }
+        if now < version {
+            tx.execute_batch(statements)?;
+            tx.pragma_update(None, "user_version", version)?;
+        }
+        tx.commit()?;
     }
     Ok(())
+}
+
+fn newer(at: u32) -> crate::StoreError {
+    crate::StoreError::Foreign(format!(
+        "schema version {at} (this build reads up to {VERSION}; a newer balthasar wrote it)"
+    ))
 }
 
 /// The store.
@@ -609,5 +639,65 @@ mod tests {
             [],
         );
         assert!(orphan.is_err(), "evidence for nothing is not evidence");
+    }
+
+    #[test]
+    fn a_step_that_fails_part_way_is_undone_whole_and_runs_again() {
+        let connection = Connection::open_in_memory().expect("open");
+        migrate_to(&connection, VERSION - 2).expect("most of the way");
+        // The step after this adds a column and then an index; the index's name is taken, so the
+        // step dies after its first statement, as it would on a crash.
+        connection
+            .execute_batch("CREATE TABLE squat (x); CREATE INDEX session_archived ON squat(x);")
+            .expect("fault");
+        assert!(migrate(&connection).is_err());
+        let at: u32 = connection
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .expect("version");
+        assert_eq!(at, VERSION - 2, "the failed step left no version behind");
+        connection
+            .execute_batch("DROP TABLE squat;")
+            .expect("clear the fault");
+        migrate(&connection).expect("the step runs again from the start");
+    }
+
+    #[test]
+    fn a_store_from_a_newer_build_is_refused() {
+        let connection = Connection::open_in_memory().expect("open");
+        connection
+            .pragma_update(None, "user_version", VERSION + 1)
+            .expect("from the future");
+        let why = migrate(&connection).expect_err("refused");
+        assert!(why.to_string().contains("newer"), "{why}");
+    }
+
+    #[test]
+    fn two_openers_migrating_one_file_both_finish() {
+        let dir = balthasar_model::scratch::Scratch::new("balthasar-schema", "racing");
+        let path = dir.join("memory.db");
+        // In WAL, as a store is opened, so the race is the migration's and not the journal's.
+        Connection::open(&path)
+            .and_then(|c| c.pragma_update(None, "journal_mode", "WAL"))
+            .expect("wal");
+        let racers: Vec<_> = (0..3)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let connection = Connection::open(&path).expect("open");
+                    connection
+                        .busy_timeout(std::time::Duration::from_secs(60))
+                        .expect("patience");
+                    migrate(&connection)
+                })
+            })
+            .collect();
+        for racer in racers {
+            racer.join().expect("joined").expect("migrated");
+        }
+        let connection = Connection::open(&path).expect("open");
+        let at: u32 = connection
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .expect("version");
+        assert_eq!(at, VERSION);
     }
 }

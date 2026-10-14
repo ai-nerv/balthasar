@@ -123,12 +123,8 @@ pub(super) fn rule_text(line: &str) -> Option<&str> {
     let lower = line.to_lowercase();
     for prefix in MARKERS {
         if lower.starts_with(prefix) {
-            return Some(
-                line[prefix.len()..]
-                    .trim()
-                    .strip_prefix("we ")
-                    .unwrap_or(line[prefix.len()..].trim()),
-            );
+            let rest = line.get(prefix.len()..).unwrap_or_default().trim();
+            return Some(rest.strip_prefix("we ").unwrap_or(rest));
         }
     }
     let body = line
@@ -198,18 +194,19 @@ fn words(text: &str) -> Vec<String> {
 
 /// How many words the two share in the same order: the longest common subsequence.
 fn in_order(a: &[String], b: &[String]) -> usize {
-    let mut row = vec![0; b.len() + 1];
+    let mut row = vec![0; b.len()];
     for x in a {
-        let mut diagonal = 0;
-        for (j, y) in b.iter().enumerate() {
-            let above = row[j + 1];
-            row[j + 1] = if x == y {
+        let (mut diagonal, mut left) = (0, 0);
+        for (y, cell) in b.iter().zip(row.iter_mut()) {
+            let above = *cell;
+            *cell = if x == y {
                 diagonal + 1
             } else {
-                above.max(row[j])
+                above.max(left)
             };
             diagonal = above;
+            left = *cell;
         }
     }
-    row[b.len()]
+    row.last().copied().unwrap_or(0)
 }

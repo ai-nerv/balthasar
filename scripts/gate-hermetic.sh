@@ -54,6 +54,8 @@ trap 'rm -rf "$root" "$out"' EXIT HUP INT TERM
 # alone: cargo reads its registry through it, and a gate that broke the build to prove a point
 # about tidiness would be turned off within a week.
 mkdir -p "$root/tmp" "$root/run" "$root/data" "$root/config" "$root/state" "$root/cache"
+# A runtime directory a session would have: the owner's alone, or it is not used at all.
+chmod 700 "$root/run"
 
 if ! TMPDIR="$root/tmp" \
      XDG_RUNTIME_DIR="$root/run" \

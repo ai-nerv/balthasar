@@ -3,6 +3,8 @@
 //! Fix 4's acceptance: a model may read a session's prose and propose claims, and it may not
 //! decide anything. Everything here is about that second half — the first is a prompt.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_distil::{Budget, Distil, DistilFailure, Observation, Role, Verdict, propose, weigh};
 use balthasar_model::{SessionId, Tier, Timestamp, WitnessKind, floor};
 use balthasar_store::{Store, mint};

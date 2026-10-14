@@ -3,7 +3,7 @@
 //! The measurement is whether session k+1 avoids the mistake session k already made.
 
 use crate::{Lesson, Scenario};
-use balthasar_distil::{Observation, Role, consolidate, extract};
+use balthasar_distil::{DistilError, Observation, Role, consolidate, extract};
 use balthasar_lua::Settings;
 use balthasar_model::{
     Body, Memory, NoteKind, ScopeId, SessionId, Tier, Timestamp, Witness, WitnessId, floor,
@@ -117,7 +117,7 @@ impl Measured {
         let mut sorted = self.recall_us.clone();
         sorted.sort_unstable();
         let at = ((sorted.len() - 1) as f64 * percentile.clamp(0.0, 1.0)).round() as usize;
-        sorted[at] as f64 / 1000.0
+        sorted.get(at).map_or(0.0, |us| *us as f64 / 1000.0)
     }
 }
 
@@ -138,17 +138,17 @@ pub enum Arm {
 pub const WINDOW: usize = 900;
 
 /// Run a scenario against a store, consolidating between sessions.
-pub fn run(scenario: &Scenario, with_memory: bool) -> Score {
-    measure(scenario, with_memory).0
+pub fn run(scenario: &Scenario, with_memory: bool) -> Result<Score, DistilError> {
+    Ok(measure(scenario, with_memory)?.0)
 }
 
 /// Run one arm.
-pub fn run_arm(scenario: &Scenario, arm: Arm) -> Score {
-    measure_arm(scenario, arm).0
+pub fn run_arm(scenario: &Scenario, arm: Arm) -> Result<Score, DistilError> {
+    Ok(measure_arm(scenario, arm)?.0)
 }
 
 /// The same run, with what it cost.
-pub fn measure(scenario: &Scenario, with_memory: bool) -> (Score, Measured) {
+pub fn measure(scenario: &Scenario, with_memory: bool) -> Result<(Score, Measured), DistilError> {
     measure_arm(
         scenario,
         if with_memory {
@@ -160,11 +160,11 @@ pub fn measure(scenario: &Scenario, with_memory: bool) -> (Score, Measured) {
 }
 
 /// The same, for one named arm.
-pub fn measure_arm(scenario: &Scenario, arm: Arm) -> (Score, Measured) {
+pub fn measure_arm(scenario: &Scenario, arm: Arm) -> Result<(Score, Measured), DistilError> {
     let with_memory = arm == Arm::Memory;
     // The text an agent with no memory system would still have, oldest dropped first.
     let mut window: Vec<String> = Vec::new();
-    let mut store = Store::ephemeral().expect("a store");
+    let mut store = Store::ephemeral()?;
     let settings = Settings::default();
     let scope = ScopeId::new(&scenario.project);
     let mut score = Score::default();
@@ -194,7 +194,7 @@ pub fn measure_arm(scenario: &Scenario, arm: Arm) -> (Score, Measured) {
             }
 
             if with_memory {
-                observe(&mut store, &scope, session, lesson, looked);
+                observe(&mut store, &scope, session, lesson, looked)?;
             }
             if let Arm::InWindow(budget) = arm {
                 window.push(format!(
@@ -217,13 +217,12 @@ pub fn measure_arm(scenario: &Scenario, arm: Arm) -> (Score, Measured) {
                 &scope,
                 session.at + 3600,
                 false,
-            )
-            .expect("consolidate");
+            )?;
         }
         score.sessions.push(ran);
     }
     cost.store_bytes = store.bytes().unwrap_or(0);
-    (score, cost)
+    Ok((score, cost))
 }
 
 /// Whether the project already holds something that would have saved this session the trouble,
@@ -281,11 +280,9 @@ fn observe(
     session: &crate::Session,
     lesson: &Lesson,
     knew: bool,
-) {
+) -> Result<(), DistilError> {
     let id = SessionId::new(&session.id);
-    store
-        .open_session(&id, scope, &scenario_cwd(scope), "bench", session.at)
-        .expect("open");
+    store.open_session(&id, scope, &scenario_cwd(scope), "bench", session.at)?;
 
     // A session that did not know reaches for the wrong thing first and repairs.
     let mut turns = vec![Observation {
@@ -312,7 +309,7 @@ fn observe(
         );
         scratch.session = Some(id.clone());
         scratch.temporal = balthasar_model::Temporal::recalled(session.at, session.at);
-        store.keep_scratch(scratch).expect("scratch");
+        store.keep_scratch(scratch)?;
     }
 
     for candidate in extract(&turns, &Settings::default().imperatives).candidates {
@@ -337,10 +334,9 @@ fn observe(
             scope.clone(),
             session.at,
         );
-        store
-            .remember(memory, witness, session.at)
-            .expect("remember");
+        store.remember(memory, witness, session.at)?;
     }
+    Ok(())
 }
 
 /// One tool call, as a harness records it.

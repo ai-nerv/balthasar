@@ -3,6 +3,8 @@
 //! The security half of §6.10: a peer may report how its own action went, and may not sign that
 //! report as the person's judgment or promote its own attribution.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, answer};
 use balthasar_ipc::{Peer, Reply, Request};
 use balthasar_model::{
@@ -91,6 +93,7 @@ fn peer() -> Door {
         pid: 4242,
         uid: 1000,
         program: Some("/usr/bin/some-harness".to_owned()),
+        agent: None,
     })
 }
 

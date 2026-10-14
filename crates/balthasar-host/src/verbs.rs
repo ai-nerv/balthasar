@@ -141,7 +141,7 @@ pub const SURFACE: &[Verb] = &[
     Verb {
         name: "replay",
         writes: false,
-        about: "everything a run said, in order: (session) -> [turn]",
+        about: "everything a run said, in order: (session, {from, bytes, raw}) -> [turn]",
     },
     Verb {
         name: "resume",

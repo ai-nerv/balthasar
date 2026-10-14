@@ -1,5 +1,7 @@
 //! The two verbs a person settles a disagreement with, and who may call them.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, answer};
 use balthasar_ipc::{Peer, Reply, Request};
 use balthasar_model::{
@@ -53,6 +55,7 @@ impl Held {
             pid: 42,
             uid: 1000,
             program: Some("/usr/bin/some-harness".to_owned()),
+            agent: None,
         });
         self.ask(&door, name, args)
     }

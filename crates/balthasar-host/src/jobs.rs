@@ -193,7 +193,7 @@ fn with_failures(
             failed.len() - FAILED_KEPT
         ));
     }
-    for turn in &failed[failed.len().saturating_sub(FAILED_KEPT)..] {
+    for turn in failed.iter().skip(failed.len().saturating_sub(FAILED_KEPT)) {
         out.push_str(&format!(
             "- [{}] {} {} -> {}\n",
             turn.cursor,
@@ -275,7 +275,7 @@ pub(crate) fn hand_out(
     let draining = running >= crate::scheduling::HIGH;
     let mut going: Vec<&str> = Vec::new();
     for job in crate::scheduling::ordered(&known) {
-        if job.kind == "curate" && first_of != job.context["mark"].as_str() {
+        if job.kind == "curate" && first_of != job.context.get("mark").and_then(Value::as_str) {
             scrollback.settle_job(&job.id, JobState::Failed, None, at.now)?;
             continue;
         }
@@ -306,7 +306,7 @@ pub(crate) fn hand_out(
             "job: handed {} {} for {}, attempt {}",
             job.id,
             job.kind,
-            job.spec["role"].as_str().unwrap_or("?"),
+            job.spec.get("role").and_then(Value::as_str).unwrap_or("?"),
             job.attempts + 1
         );
         out.push(job.handed(job.attempts + 1));
@@ -320,7 +320,7 @@ fn retry_or_fail(at: &Answering<'_>, job: &Job, result: Option<&Value>) -> Resul
     let Some(scrollback) = at.scrollback.as_ref() else {
         return Ok(());
     };
-    let blocking = job.spec["blocking"].as_bool() == Some(true);
+    let blocking = job.spec.get("blocking").and_then(Value::as_bool) == Some(true);
     let next = if job.attempts <= RETRIES && !blocking {
         JobState::Queued
     } else {
@@ -389,7 +389,7 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
     };
     let session = SessionId::new(session);
     let said = request.args.get(1).cloned().unwrap_or(Value::Null);
-    let Some(id) = said["id"].as_str() else {
+    let Some(id) = said.get("id").and_then(Value::as_str) else {
         return Reply::refused("job_done needs the job's id");
     };
     let Some(scrollback) = at.scrollback.as_ref() else {
@@ -407,7 +407,7 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
     // Nor does one from a hand-out that has since been superseded: the work was reissued, and
     // this is the earlier lease answering. An answer that names no attempt is an older harness,
     // and is taken as the current one.
-    if let Some(attempt) = said["attempt"].as_u64()
+    if let Some(attempt) = said.get("attempt").and_then(Value::as_u64)
         && attempt != u64::from(job.attempts)
     {
         balthasar_model::noted!(
@@ -416,8 +416,9 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
         );
         return Reply::none();
     }
-    let text = said["text"]
-        .as_str()
+    let text = said
+        .get("text")
+        .and_then(Value::as_str)
         .filter(|_| said.get("failed").is_none());
     let curated = match text {
         Some(text) if job.kind == "curate" => curation(at, &job, text, hooks),
@@ -462,19 +463,19 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
             )));
         }
         match text {
-            None => retry_or_fail(at, &current, Some(&json!({"failed":said["failed"].as_str().unwrap_or("helper returned no text"),"usage":said["usage"],"model":said["model"]}))),
+            None => retry_or_fail(at, &current, Some(&json!({"failed":said.get("failed").and_then(Value::as_str).unwrap_or("helper returned no text"),"usage":said.get("usage"),"model":said.get("model")}))),
             Some(text) => {
                 if matches!(current.kind.as_str(), "extract" | "tidy")
                     && let Err(reason) = crate::notes::extraction::validate(text) {
-                    return retry_or_fail(at, &current, Some(&json!({"failed":reason,"text":text,"usage":said["usage"],"model":said["model"]})));
+                    return retry_or_fail(at, &current, Some(&json!({"failed":reason,"text":text,"usage":said.get("usage"),"model":said.get("model")})));
                 }
                 if !settle(at, &session, &current, text, &keeping, &already)? {
-                    return retry_or_fail(at, &current, Some(&json!({"failed":"source evidence changed or note operations were rejected","text":text,"usage":said["usage"],"model":said["model"]})));
+                    return retry_or_fail(at, &current, Some(&json!({"failed":"source evidence changed or note operations were rejected","text":text,"usage":said.get("usage"),"model":said.get("model")})));
                 }
                 if current.kind == "extract" {
                     crate::notes::extraction::acknowledge(scrollback, &session, &current, id)?;
                 }
-                let kept = json!({ "text": text, "usage": said["usage"], "model": said["model"] });
+                let kept = json!({ "text": text, "usage": said.get("usage"), "model": said.get("model") });
                 scrollback.settle_job(id, JobState::Done, Some(&kept), at.now)
             }
         }
@@ -507,8 +508,10 @@ fn settle(
         "contradict" => Ok(already.clashed.unwrap_or(false)),
         "retitle" => Ok(already.retitled.unwrap_or(false)),
         "summarise" => {
-            let (Some(from), Some(to)) = (job.context["from"].as_u64(), job.context["to"].as_u64())
-            else {
+            let (Some(from), Some(to)) = (
+                job.context.get("from").and_then(Value::as_u64),
+                job.context.get("to").and_then(Value::as_u64),
+            ) else {
                 return Ok(false);
             };
             let Some(scrollback) = at.scrollback.as_ref() else {
@@ -532,7 +535,7 @@ fn settle(
                 return Ok(true);
             };
             if let Some(kept) = already.curated
-                && Some(prompt.mark.as_str()) == job.context["mark"].as_str()
+                && Some(prompt.mark.as_str()) == job.context.get("mark").and_then(Value::as_str)
             {
                 prompt.memory = Some(kept.clone());
                 scrollback.keep_prompt(session, &prompt)?;
@@ -547,8 +550,8 @@ fn settle(
 fn curation(at: &mut Answering<'_>, job: &Job, text: &str, hooks: &mut dyn Hooks) -> Option<Value> {
     let said = json_in(text)?;
     let strings = |name: &str| -> Vec<String> {
-        said[name]
-            .as_array()
+        said.get(name)
+            .and_then(Value::as_array)
             .map(|items| {
                 items
                     .iter()
@@ -559,9 +562,15 @@ fn curation(at: &mut Answering<'_>, job: &Job, text: &str, hooks: &mut dyn Hooks
             .unwrap_or_default()
     };
     let (chosen, notes) = (strings("chosen"), strings("notes"));
-    let query = job.context["query"].as_str().unwrap_or_default();
-    let room = job.context["room"]
-        .as_u64()
+    let query = job
+        .context
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let room = job
+        .context
+        .get("room")
+        .and_then(Value::as_u64)
         .and_then(|n| u32::try_from(n).ok())
         .unwrap_or(0);
     let per = hooks.window().estimate_chars_per_token;
@@ -580,8 +589,12 @@ fn curation(at: &mut Answering<'_>, job: &Job, text: &str, hooks: &mut dyn Hooks
     } else {
         supply::from_notes(&notes, ids, room, per).unwrap_or_default()
     };
-    let through = job.context["through"].as_u64().unwrap_or(0);
+    let through = job
+        .context
+        .get("through")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let mut kept = supplied.as_json(query, through);
-    kept["curated"] = json!(true);
+    crate::queue::set(&mut kept, "curated", json!(true));
     Some(kept)
 }

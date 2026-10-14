@@ -6,6 +6,7 @@ fn shown_to_a_session(harness: &mut Harness, call: &str, args: Vec<Value>) -> St
         pid: 4021,
         uid: 1000,
         program: Some("harness".to_owned()),
+        agent: None,
     });
     let mut at = Answering {
         store: &mut harness.store,

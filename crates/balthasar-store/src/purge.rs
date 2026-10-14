@@ -130,8 +130,14 @@ fn purge_transcript(
         "DELETE FROM turn WHERE session = ?1",
         params![session.as_str()],
     )?;
-    // Summaries, job inputs and proposed layouts quote the turns, so they go with them.
+    // Summaries, job inputs, proposed layouts, earlier revisions, traces, generations and note
+    // changes quote the turns, so they go with them.
     for table in [
+        "turn_revision",
+        "trace",
+        "generation",
+        "chunk",
+        "note_change",
         "extraction_progress",
         "extraction_ack",
         "layout_effect",
@@ -257,6 +263,26 @@ pub fn purge_session(
         "DELETE FROM episode_segment WHERE session = ?1",
         params![session.as_str()],
     )?;
+    // The ledger's rows for the run, children before what they point at; one another run's
+    // action still points at stays.
+    for statement in [
+        "DELETE FROM outcome WHERE action_id IN (SELECT id FROM action_use WHERE session = ?1)",
+        "DELETE FROM action_memory WHERE action_id IN \
+         (SELECT id FROM action_use WHERE session = ?1)",
+        "DELETE FROM action_use WHERE session = ?1",
+        "DELETE FROM injection_memory WHERE injection_id IN \
+         (SELECT id FROM injection WHERE session = ?1 \
+          AND id NOT IN (SELECT injection_id FROM action_use WHERE injection_id IS NOT NULL))",
+        "DELETE FROM injection WHERE session = ?1 \
+         AND id NOT IN (SELECT injection_id FROM action_use WHERE injection_id IS NOT NULL)",
+        "DELETE FROM recall_candidate WHERE recall_id IN \
+         (SELECT id FROM recall_run WHERE session = ?1 \
+          AND id NOT IN (SELECT recall_id FROM injection WHERE recall_id IS NOT NULL))",
+        "DELETE FROM recall_run WHERE session = ?1 \
+         AND id NOT IN (SELECT recall_id FROM injection WHERE recall_id IS NOT NULL)",
+    ] {
+        tx.execute(statement, params![session.as_str()])?;
+    }
     tx.execute(
         "DELETE FROM session WHERE id = ?1",
         params![session.as_str()],
@@ -308,4 +334,21 @@ pub fn purge_domain(
         }
     }
     Ok(gone)
+}
+
+/// How long a layout is kept once a provider has taken it: thirty days.
+pub const LAYOUT_KEPT: balthasar_model::Timestamp = 30 * 24 * 60 * 60;
+
+/// Remove layouts applied before `before`, except each run's newest and any whose effects are
+/// still waiting to be carried out. Answers how many went.
+pub fn prune_layouts(
+    scrollback: &crate::Transcript,
+    before: balthasar_model::Timestamp,
+) -> Result<usize, StoreError> {
+    Ok(scrollback.db().execute(
+        "DELETE FROM layout WHERE applied IS NOT NULL AND applied < ?1 \
+         AND n NOT IN (SELECT max(n) FROM layout GROUP BY session) \
+         AND ('L-' || n) NOT IN (SELECT layout FROM layout_effect WHERE done = 0)",
+        params![before],
+    )?)
 }

@@ -1,5 +1,7 @@
 //! M2: the config API, as a configuration author would meet it.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::Scratch;
 
 use balthasar_lua::{Engine, LuaError, Settings};
@@ -388,6 +390,172 @@ mod trust {
             engine.read(&[(file, false)]),
             Err(LuaError::Untrusted { .. })
         ));
+    }
+
+    /// What reading one project file says, refused or not.
+    fn refusal(body: &str) -> String {
+        let dir = scratch("refused");
+        let file = write(&dir, ".balthasar.lua", body);
+        let mut engine = Engine::new();
+        match engine.read(&[(file, false)]) {
+            Err(LuaError::Untrusted { what, .. }) => what,
+            other => panic!("{body:?} must be refused by name: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_project_file_reaches_no_filesystem() {
+        assert_eq!(
+            refusal("balthasar.fs.read('/etc/passwd')\n"),
+            "balthasar.fs"
+        );
+        assert_eq!(refusal("local g = balthasar.git\n"), "balthasar.git");
+    }
+
+    #[test]
+    fn a_project_file_reaches_no_socket() {
+        assert_eq!(
+            refusal("balthasar.stream.connect('/run/user/1000/bus')\n"),
+            "balthasar.stream"
+        );
+        let dir = scratch("nostream");
+        let file = write(
+            &dir,
+            ".balthasar.lua",
+            "if __stream == nil then balthasar.inject_floor = 0.7 end\n",
+        );
+        let mut engine = Engine::new();
+        engine.read(&[(file, false)]).expect("data only");
+        assert_eq!(engine.config().number("inject_floor"), Some(0.7));
+    }
+
+    #[test]
+    fn a_project_file_reads_no_environment_and_loads_nothing() {
+        let dir = scratch("noenv");
+        let file = write(
+            &dir,
+            ".balthasar.lua",
+            "if os == nil and load == nil then balthasar.live_floor = 0.2 end\n",
+        );
+        let mut engine = Engine::new();
+        engine.read(&[(file, false)]).expect("data only");
+        assert_eq!(engine.config().number("live_floor"), Some(0.2));
+    }
+
+    #[test]
+    fn a_project_file_registers_no_hook() {
+        assert_eq!(
+            refusal("balthasar.on.scope(function() return { id = 'x' } end)\n"),
+            "balthasar.on.scope"
+        );
+        assert_eq!(
+            refusal("balthasar.did.observe(function() end)\n"),
+            "balthasar.did.observe"
+        );
+        assert_eq!(
+            refusal("balthasar.window.policy = function() return {} end\n"),
+            "balthasar.window.policy"
+        );
+    }
+
+    #[test]
+    fn a_refusal_caught_by_pcall_is_still_fatal() {
+        assert_eq!(
+            refusal("pcall(balthasar.on.admit, function() end)\nbalthasar.inject_floor = 0.6\n"),
+            "balthasar.on.admit"
+        );
+    }
+
+    #[test]
+    fn a_setting_off_the_list_is_refused_by_name() {
+        assert_eq!(
+            refusal("balthasar.memory = { review = false }\n"),
+            "balthasar.memory"
+        );
+        assert_eq!(refusal("balthasar.tool = 'other'\n"), "balthasar.tool");
+        assert_eq!(
+            refusal("balthasar.outcome = { capture = true }\n"),
+            "balthasar.outcome"
+        );
+    }
+
+    #[test]
+    fn what_a_project_chose_lays_over_the_owners_without_taking_its_hooks() {
+        let dir = scratch("layered");
+        let owner = write(
+            &dir,
+            "init.lua",
+            "balthasar.window = { prune_at = 0.6, keep = 4 }\n\
+             balthasar.window.policy = function() return nil end\n",
+        );
+        let project = write(
+            &dir,
+            ".balthasar.lua",
+            "balthasar.window.prune_at = 0.5\nbalthasar.section('mine', { weight = 2 })\n",
+        );
+        let mut engine = Engine::new();
+        engine
+            .read(&[(owner, true), (project, false)])
+            .expect("choosing is allowed");
+        let window = engine.config().get("window").cloned().expect("a window");
+        assert_eq!(window["prune_at"], serde_json::json!(0.5));
+        assert_eq!(window["keep"], serde_json::json!(4));
+        assert_eq!(engine.config().all("section").len(), 1);
+        assert_eq!(
+            engine.policy(&serde_json::json!({}), &serde_json::json!([])),
+            None,
+            "the owner's policy is still the one that runs"
+        );
+    }
+
+    #[test]
+    fn a_section_carrying_a_function_is_refused() {
+        assert_eq!(
+            refusal("balthasar.section('x', { render = function() end })\n"),
+            "balthasar.section(\"x\").render"
+        );
+    }
+
+    #[test]
+    fn a_project_file_that_loops_is_stopped() {
+        let dir = scratch("loops");
+        let file = write(&dir, ".balthasar.lua", "while true do end\n");
+        let mut engine = Engine::new();
+        match engine.read(&[(file, false)]) {
+            Err(LuaError::Runtime { message, .. }) => {
+                assert!(message.contains("budget"), "{message}")
+            }
+            other => panic!("a looping project file must be stopped: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn only_the_owners_own_files_are_lent_fs_read() {
+        let dir = scratch("lent");
+        std::fs::write(dir.join("secret"), "s3cret").expect("write");
+        let probe = format!(
+            "local body, why = balthasar.fs.read({:?})\nbalthasar.{{}} = body or why\n",
+            dir.join("secret").display().to_string()
+        );
+        let own_dir = dir.join("config");
+        std::fs::create_dir_all(&own_dir).expect("mkdir");
+        let own = write(&own_dir, "init.lua", &probe.replace("{}", "mine"));
+        let other = write(&dir, "given.lua", &probe.replace("{}", "theirs"));
+        let mut engine = Engine::new();
+        engine.own_config(Some(own_dir));
+        engine
+            .read(&[(own, true), (other, true)])
+            .expect("both load");
+        assert_eq!(engine.config().string("mine"), Some("s3cret"));
+        assert!(
+            engine
+                .config()
+                .string("theirs")
+                .unwrap_or("")
+                .contains("only"),
+            "{:?}",
+            engine.config().string("theirs")
+        );
     }
 
     #[test]

@@ -23,6 +23,8 @@ mod layout;
 mod mint;
 mod notes;
 mod paths;
+mod placed;
+mod private;
 mod purge;
 mod read;
 mod relate;
@@ -34,6 +36,7 @@ mod scroll;
 mod session;
 mod spans;
 mod transcript;
+mod turns;
 mod usage;
 mod write;
 
@@ -53,8 +56,10 @@ pub use paths::{
     HOME, Tool, data_dir, home_of, make_home, project_home, run_dir_in, scope_of, scope_path,
     session_dir, session_dir_in, session_path, tools_in,
 };
+pub use placed::{SCOPED, SCOPED_SCROLLBACK};
 pub use purge::{
-    Closure, closure_of, purge, purge_domain, purge_run, purge_scratch, purge_session,
+    Closure, LAYOUT_KEPT, closure_of, prune_layouts, purge, purge_domain, purge_run, purge_scratch,
+    purge_session,
 };
 pub use read::{Cluster, Recall};
 pub use relate::Reach;
@@ -65,6 +70,7 @@ pub use scroll::{Budget, Read, Want, tokens_of};
 pub use session::{Session, name_for};
 pub use spans::Span;
 pub use transcript::{Run, State, Transcript, Turn, transcript_path};
+pub use turns::{Inserted, Noticed, RawPart, same as same_turn};
 pub use usage::{Candidate, Injection, RecallRun, Signals, Trace, TracedAction, Use, Verdict};
 pub use write::Landing;
 
@@ -105,15 +111,14 @@ impl Store {
     /// cannot outlive the memory it is evidence for. `secure_delete` on, because SQLite does not
     /// zero a freed page by default and the words stay in the file where `strings` finds them.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(parent.to_owned(), e))?;
-        }
+        private::before_open(path)?;
         let connection = Connection::open(path)?;
+        // A busy store is a store being consolidated. Waiting is right; failing is not.
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "secure_delete", true)?;
-        // A busy store is a store being consolidated. Waiting is right; failing is not.
-        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        private::tighten(path)?;
         schema::migrate(&connection)?;
         Ok(Self {
             connection,

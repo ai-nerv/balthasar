@@ -106,7 +106,8 @@ fn described(request: &Request, reply: &Reply, took: std::time::Duration) -> Str
         request
             .args
             .get(1)
-            .map(|a| a[key].clone())
+            .and_then(|a| a.get(key))
+            .cloned()
             .unwrap_or_default()
     };
     let first = reply.result.first().cloned().unwrap_or_default();
@@ -115,10 +116,19 @@ fn described(request: &Request, reply: &Reply, took: std::time::Duration) -> Str
         "observe" | "amend" => format!("cursor {} {}", arg("cursor"), arg("kind")),
         "layout" | "overflowed" => format!(
             "{} with {} slots, {} jobs — {}",
-            first["id"],
-            first["slots"].as_array().map_or(0, Vec::len),
-            first["jobs"].as_array().map_or(0, Vec::len),
-            first["why"].as_str().unwrap_or("")
+            first.get("id").cloned().unwrap_or_default(),
+            first
+                .get("slots")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len),
+            first
+                .get("jobs")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len),
+            first
+                .get("why")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
         ),
         "applied" => format!("{} took {}", arg("id"), arg("usage")),
         "jobs" => format!("handed {} jobs", reply.n),
@@ -166,11 +176,11 @@ fn answering(
         "why" => why(at, request),
         "sessions" => sessions(at, request),
         "rename" => rename(at, request),
-        "observe" => crate::window::observe(at, request),
-        "amend" => crate::window::amend(at, request),
-        "replay" => crate::window::replay(at, request),
-        "scroll" => crate::window::scroll(at, request),
-        "resume" => crate::window::resume(at, request),
+        "observe" => crate::recording::observe(at, request),
+        "amend" => crate::recording::amend(at, request),
+        "replay" => crate::reading::replay(at, request),
+        "scroll" => crate::reading::scroll(at, request),
+        "resume" => crate::reading::resume(at, request),
         "model" => crate::window::model(at, request),
         "plan" => crate::window::plan(at, request, |turn| hooks.stub(turn)),
         "layout" => crate::layout::layout(at, request, hooks),
@@ -277,7 +287,7 @@ fn recall(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
 
     // Handing memories to a caller about to put them in a context is an injection.
     let injection = if at.capture {
-        match note_served(at, &found, opts) {
+        match note_served(at, query, &found, opts) {
             Ok(id) => Some(id),
             Err(why) => return Reply::refused(why.to_string()),
         }
@@ -301,6 +311,7 @@ fn recall(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
 /// After the answer is decided, never before it: the ledger is instrumentation.
 fn note_served(
     at: &mut Answering<'_>,
+    query: &str,
     found: &[balthasar_store::Scored],
     opts: Option<&serde_json::Value>,
 ) -> Result<String, balthasar_store::StoreError> {
@@ -308,13 +319,11 @@ fn note_served(
         .and_then(|o| o.get("session"))
         .and_then(serde_json::Value::as_str)
         .map(SessionId::new);
-    let query_hash = balthasar_model::content_hash(
-        opts.and_then(|o| o.get("query"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default(),
-    )[..16]
-        .to_owned();
-    let stamp = format!("{}-{}", at.now, &query_hash[..8]);
+    let query_hash = balthasar_model::content_hash(query)[..16].to_owned();
+    // Two searches in one second, even for the same words, are two records.
+    let unique =
+        balthasar_model::content_hash(&format!("{query_hash}:{}", balthasar_store::mint(at.now)));
+    let stamp = format!("{}-{}", at.now, &unique[..8]);
 
     at.store.note_recall(
         &balthasar_store::RecallRun {
@@ -624,13 +633,11 @@ fn forget(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         Err(why) => return Reply::refused(why.to_string()),
     };
 
-    // A peer may retract what its own session put in. Anything else is the owner's to forget.
+    // A peer may retract scratch. Anything kept is the owner's to forget.
     if !matches!(door, Door::Owner) {
         let own = held.tier == Tier::Scratch;
         if !own {
-            return Reply::refused(
-                "a peer may forget only what its own session wrote — ask the owner",
-            );
+            return Reply::refused("a peer may forget only scratch — ask the owner");
         }
     }
 
@@ -651,7 +658,9 @@ fn forget_run(at: &mut Answering<'_>, door: &Door, handle: &str, purge: bool) ->
     };
 
     let turns = match at.scrollback.as_ref() {
-        Some(held) => held.replay(&session).map(|t| t.len()).unwrap_or(0),
+        Some(held) => held
+            .count(&session)
+            .map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX)),
         None => 0,
     };
     let promoted = match at.store.owned_by(&session) {

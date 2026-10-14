@@ -136,13 +136,16 @@ pub fn fit(examples: &[Example], holdout: f64, passes: usize) -> Result<Fitted, 
     let width = FEATURES.len();
     let mut mean = vec![0.0; width];
     let mut scale = vec![1.0; width];
-    for i in 0..width {
-        let column: Vec<f64> = train.iter().map(|e| e.features[i]).collect();
+    for (i, (centre, spread)) in mean.iter_mut().zip(scale.iter_mut()).enumerate() {
+        let column: Vec<f64> = train
+            .iter()
+            .filter_map(|e| e.features.get(i).copied())
+            .collect();
         let m = column.iter().sum::<f64>() / column.len() as f64;
         let variance = column.iter().map(|x| (x - m).powi(2)).sum::<f64>() / column.len() as f64;
-        mean[i] = m;
+        *centre = m;
         // A constant feature gets a scale of one rather than dividing by zero.
-        scale[i] = if variance > 1e-12 {
+        *spread = if variance > 1e-12 {
             variance.sqrt()
         } else {
             1.0

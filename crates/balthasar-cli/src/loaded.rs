@@ -31,6 +31,8 @@ pub struct Loaded {
     /// `balthasar.window` and `balthasar.memory`, read once.
     window: balthasar_host::Rules,
     keeping: balthasar_host::Keeping,
+    /// What the mask hook said for each turn as it stood, so a layout does not ask again.
+    stubs: std::collections::HashMap<String, Option<String>>,
 }
 
 impl balthasar_host::Hooks for Loaded {
@@ -95,6 +97,7 @@ impl Loaded {
 
         // Trust is decided after the owner's own files have run; they set `balthasar.trusted`.
         let mut engine = Engine::new();
+        engine.own_config(roots.config.clone());
 
         let owned: Vec<(std::path::PathBuf, bool)> =
             files.iter().filter(|(_, t)| *t).cloned().collect();
@@ -118,6 +121,7 @@ impl Loaded {
             embedder,
             window,
             keeping,
+            stubs: std::collections::HashMap::new(),
         })
     }
 
@@ -132,6 +136,7 @@ impl Loaded {
             embedder: balthasar_embed::open(&balthasar_embed::Spec::default()),
             window: balthasar_host::Rules::default(),
             keeping: balthasar_host::Keeping::default(),
+            stubs: std::collections::HashMap::new(),
         }
     }
 
@@ -274,7 +279,17 @@ impl Loaded {
             "handle": entry.handle,
             "error": entry.error,
         });
-        self.engine.mask_for(tool, &item)
+        // Keyed by the revision and everything the hook is shown, so a changed turn asks again.
+        let key = format!("{}:{item}", entry.revisions);
+        if let Some(said) = self.stubs.get(&key) {
+            return said.clone();
+        }
+        let said = self.engine.mask_for(tool, &item);
+        if self.stubs.len() >= STUBS {
+            self.stubs.clear();
+        }
+        self.stubs.insert(key, said.clone());
+        said
     }
 
     /// Tell every handler registered for an event.
@@ -288,6 +303,9 @@ impl Loaded {
         self.engine.config().log
     }
 }
+
+/// How many hook answers are kept before the cache starts over.
+const STUBS: usize = 4096;
 
 /// Installed package files that are not cleared to run.
 fn withheld(roots: &Roots) -> std::collections::BTreeSet<std::path::PathBuf> {
@@ -338,4 +356,37 @@ pub fn trust(cwd: &Path) -> Result<Vec<std::path::PathBuf>, String> {
         &files,
     )?;
     Ok(files.into_iter().map(|(path, _)| path).collect())
+}
+
+#[cfg(test)]
+mod stubs {
+    use super::*;
+
+    #[test]
+    fn a_turn_is_described_once_per_revision_rather_than_once_per_layout() {
+        let mut loaded = Loaded::bare();
+        loaded
+            .engine
+            .run(
+                "balthasar.mask['shell'] = function(item) balthasar.log('asked') return 'ran it' end",
+                "init.lua",
+            )
+            .expect("registered");
+        let turn = balthasar_store::Turn {
+            cursor: 3,
+            role: "tool".into(),
+            kind: "tool_result".into(),
+            tool: Some("shell".into()),
+            ..balthasar_store::Turn::default()
+        };
+        for _ in 0..3 {
+            assert_eq!(loaded.mask(&turn).as_deref(), Some("ran it"));
+        }
+        let revised = balthasar_store::Turn {
+            revisions: 1,
+            ..turn
+        };
+        assert_eq!(loaded.mask(&revised).as_deref(), Some("ran it"));
+        assert_eq!(loaded.log().len(), 2, "{:?}", loaded.log());
+    }
 }

@@ -18,6 +18,9 @@
 --
 --   load(src)(transport)     transport.connect(path, timeout_ms) -> handle
 --                            handle:send(bytes) / handle:recv(n) / handle:close()
+--                            handle:call(request, { deadline_ms = N }) -> reply | nil, why
+--
+-- A handle with `call` frames, caps and decodes in the host; one without is framed here by hand.
 --
 -- Inside balthasar that is `balthasar.stream`, and it is found automatically when nothing is passed.
 --
@@ -40,6 +43,9 @@ local transport = ...
 -- that an older reader ignores, which is what this field itself was.
 local FAMILY = 1
 
+-- The most one frame may carry, either way: the family's one cap, 16 MiB.
+local MAX_FRAME = 16777216
+
 -- Where the socket primitive comes from when the caller did not say. Inside balthasar the whole library
 -- is already there; elsewhere a host that named its own `__stream` is honoured too.
 if not transport then
@@ -52,6 +58,80 @@ local M = { _NAME = "balthasar", _VERSION = 1 }
 -- only its own name would send discovery down the `io.popen` path on exactly the hosts that refuse
 -- it -- which reads as "nothing is running".
 local HOSTS = { "balthasar", "magi", "hexe", "oslo" }
+
+--- An environment variable, or `nil` when it is unset, empty, or the host lends no `os.getenv`.
+local function env(name)
+  local getenv = type(os) == "table" and os.getenv or nil
+  local value = getenv and getenv(name) or nil
+  if value == "" then return nil end
+  return value
+end
+
+--- This user's uid, as the host says it: `<host>.uid`, a number or a function answering one.
+--- `nil` when no host says. `$UID` is never read.
+local function host_uid()
+  for _, name in ipairs(HOSTS) do
+    local h = _G[name]
+    local uid = type(h) == "table" and h.uid or nil
+    if type(uid) == "function" then uid = uid() end
+    if type(uid) == "number" and uid >= 0 and uid == math.floor(uid) then return math.floor(uid) end
+  end
+  return nil
+end
+
+--- The first host's `fs.stat`, or `nil` when no host lends one.
+local function host_stat()
+  for _, name in ipairs(HOSTS) do
+    local h = _G[name]
+    local fs = type(h) == "table" and h.fs or nil
+    if type(fs) == "table" and type(fs.stat) == "function" then return fs.stat end
+  end
+  return nil
+end
+
+--- What `stat` says of `path` when it is `uid`'s and of `kind`; `nil` otherwise. A host that
+--- names no type is taken at its word on owner and mode alone.
+local function owned(stat, path, uid, kind)
+  if not stat or not uid then return nil end
+  local ok, s = pcall(stat, path)
+  if not ok or type(s) ~= "table" or type(s.mode) ~= "number" or s.uid ~= uid then return nil end
+  if s.type ~= nil and s.type ~= kind and not (kind == "directory" and s.type == "dir") then
+    return nil
+  end
+  return s
+end
+
+--- Whether permission `bit` (a power of two) is set in `mode`. Arithmetic, as Lua 5.1 has no `&`.
+local function has(mode, bit)
+  return math.floor(mode / bit) % 2 == 1
+end
+
+--- Whether `path` is `uid`'s directory with no group or other bits, as the host's stat says.
+local function private_dir(stat, path, uid)
+  local s = owned(stat, path, uid, "directory")
+  return s ~= nil and math.floor(s.mode) % 64 == 0
+end
+
+--- `$XDG_RUNTIME_DIR` when it is absolute and the host says it is `uid`'s directory, closed to
+--- group and other. `nil` otherwise, including when no host lends a stat to ask.
+local function runtime(uid)
+  local dir = env("XDG_RUNTIME_DIR")
+  if not dir or dir:sub(1, 1) ~= "/" then return nil end
+  if not private_dir(host_stat(), dir, uid) then return nil end
+  return (dir:gsub("/+$", ""))
+end
+
+--- Where `program` keeps its runtime files: `<runtime>/<program>` under a trusted runtime dir,
+--- else `<tmp>/<program>-<uid>`. `nil` when no host says the uid.
+local function program_dir(program)
+  local uid = host_uid()
+  if not uid then return nil end
+  local base = runtime(uid)
+  if base then return base .. "/" .. program end
+  local tmp = env("TMPDIR")
+  if not tmp or tmp:sub(1, 1) ~= "/" then tmp = "/tmp" end
+  return (tmp:gsub("/+$", "")) .. "/" .. program .. "-" .. string.format("%d", uid)
+end
 
 -- ---------------------------------------------------------------- JSON, in Lua
 
@@ -278,23 +358,61 @@ Session.__index = Session
 --- The handle is held. balthasar serves many requests per connection, so a client that reconnected
 --- each time would pay for a connect per call on a socket it is about to use again -- and a
 --- memory layer is asked several times in a single turn.
+--- One call framed by hand, for a transport that lends no `call`: the reply table, or `nil, why`
+--- and a fault when nothing was sent.
+local function by_hand(self, body)
+  -- A send that failed may still have put part of a frame on the wire, which the far end reads
+  -- as the head of a call this side will never finish.
+  -- Refused here, before a byte is sent: a call over the cap would only be refused at the far end.
+  local encoded = encode(body)
+  if #encoded > MAX_FRAME then
+    return nil, "this call is " .. #encoded .. " bytes, over the " .. MAX_FRAME
+      .. "-byte frame cap", "refused"
+  end
+  local sent, why = self.handle:send(frame(encoded))
+  if not sent then return nil, adrift(self, why) end
+
+  local head, gone = exactly(self, 4)
+  if not head then return nil, gone end
+  -- Checked before a byte of the body is asked for: a length over the cap is a peer out of step.
+  local length = be32(head)
+  if length == 0 or length > MAX_FRAME then
+    return nil, adrift(self, "balthasar sent a frame of " .. length .. " bytes; the cap is "
+      .. MAX_FRAME .. " and zero is malformed")
+  end
+  local reply_body, cut = exactly(self, length)
+  if not reply_body then return nil, cut end
+
+  -- A body that will not decode is a peer out of step, not an error to raise into the caller.
+  local decoded, reply = pcall(decode, reply_body)
+  if not decoded or type(reply) ~= "table" then
+    return nil, adrift(self, "balthasar sent a reply that will not decode: " .. tostring(reply))
+  end
+  return reply
+end
+
+--- One call through the transport's own `call`, which frames, caps and decodes. A handle it
+--- closed answers a send of nothing with `nil`, and is dropped here; one it kept never sent.
+local function through_transport(self, body)
+  local reply, why = self.handle:call(body, { deadline_ms = self.timeout_ms })
+  if reply then return reply end
+  if not self.handle:send("") then return nil, adrift(self, why) end
+  return nil, why, "refused"
+end
+
 function Session:call(name, ...)
   if not self.handle then return nil, "this connection is closed" end
   local args = { ... }
   local body = { call = name }
   if #args > 0 then body.args = args end
 
-  -- A send that failed may still have put part of a frame on the wire, which the far end reads
-  -- as the head of a call this side will never finish.
-  local sent, why = self.handle:send(frame(encode(body)))
-  if not sent then return nil, adrift(self, why) end
-
-  local head, gone = exactly(self, 4)
-  if not head then return nil, gone end
-  local reply_body, cut = exactly(self, be32(head))
-  if not reply_body then return nil, cut end
-
-  local reply = decode(reply_body)
+  local reply, why, fault
+  if type(self.handle.call) == "function" then
+    reply, why, fault = through_transport(self, body)
+  else
+    reply, why, fault = by_hand(self, body)
+  end
+  if not reply then return nil, why, fault end
   -- A third value, because the two failures a caller must tell apart look identical in the
   -- message. "refused" costs a feature and the caller carries on; "failed" means what it just
   -- handed over was not recorded, and the next turn would be written on top of a hole.
@@ -339,8 +457,8 @@ end
 --
 -- **Mostly read.** There is no `prompt`, `run`, `eval` or `purge` here. What writes -- and only
 -- `remember` and `forget` do -- is capped at the far end by who the kernel says is calling: a
--- peer proposes at a peer's weight, cannot pin, cannot reach the global store, and cannot
--- forget what it did not write. It contributes; it does not decide.
+-- peer proposes at a peer's weight, cannot pin, cannot reach the global store, and may forget
+-- only scratch. It contributes; it does not decide.
 --
 -- `verbs` ships from the first version. One sibling having it and another not is how a family
 -- stops being one, and it cannot be retrofitted quietly.
@@ -463,15 +581,11 @@ local function socket_dirs()
       if d and d ~= "" then return { d } end
     end
   end
-  local runtime = os.getenv("XDG_RUNTIME_DIR")
-  local instance = os.getenv("MAGI_MEMORY_INSTANCE")
-  if not instance or instance == "" then instance = os.getenv("MAGI_BALTHASAR_INSTANCE") end
+  local instance = env("MAGI_MEMORY_INSTANCE") or env("MAGI_BALTHASAR_INSTANCE")
   local dirs = {}
   for _, named in ipairs({ "memory", "balthasar" }) do
-    local base = (runtime and runtime ~= "")
-      and (runtime .. "/" .. named)
-      or ("/tmp/" .. named .. "-" .. (os.getenv("UID") or "0"))
-    dirs[#dirs + 1] = (instance and instance ~= "") and (base .. "/" .. instance) or base
+    local base = program_dir(named)
+    if base then dirs[#dirs + 1] = instance and (base .. "/" .. instance) or base end
   end
   return dirs
 end
@@ -494,8 +608,8 @@ local function find(where)
   if type(where) == "table" and where.path then return { { path = where.path } } end
   local named = type(where) == "string" and where or nil
 
-  local env = os.getenv("MAGI_API_SOCKET")
-  if not named and env and env ~= "" then return { { path = env } } end
+  local said = env("MAGI_API_SOCKET")
+  if not named and said then return { { path = said } } end
 
   local dirs = socket_dirs()
   if not named then
@@ -544,7 +658,8 @@ function M.connect(where)
     end
     local handle, why = transport.connect(candidate.path, timeout)
     if handle then
-      local session = attach(setmetatable({ handle = handle, path = candidate.path }, Session))
+      local session = attach(setmetatable(
+        { handle = handle, path = candidate.path, timeout_ms = timeout }, Session))
       -- **Connecting is not an answer.** A socket outlives the process that bound it, and the
       -- kernel accepts on behalf of a listener whose owner has stopped reading -- so a balthasar
       -- that was killed, or one left over from an older build, takes the connection and answers
@@ -596,27 +711,28 @@ end
 --- where nothing was listening, is not the same risk as opening a socket something chose to create.
 --- A tool whose state IS its process simply never writes one of these, so "do not spawn me" is a
 --- fact this can check rather than a rule someone has to remember.
---- Where a named tool keeps its runtime files. The same shape as `socket_dir`, for a sibling
---- rather than for us -- a descriptor has to be findable by whoever is asking, not only by its
---- author, so it lives under the tool's own name and not under ours.
-local function tool_dir(tool)
-  local runtime = os.getenv("XDG_RUNTIME_DIR")
-  if runtime and runtime ~= "" then return runtime .. "/" .. tool end
-  return "/tmp/" .. tool .. "-" .. (os.getenv("UID") or "0")
-end
-
+---
+--- It is `<tool>.tool` in the tool's own runtime directory. It is read only when that directory
+--- is this uid's and closed, the file is this uid's and nobody else may write it, and it names an
+--- absolute program; `nil` otherwise.
 local function descriptor(tool)
   if type(tool) ~= "string" or tool == "" or tool:find("[^%w._-]") then return nil end
-  local host, path = nil, tool_dir(tool) .. "/" .. tool .. ".tool"
+  local dir, uid = program_dir(tool), host_uid()
+  if not dir or not uid then return nil end
+  local host, path = nil, dir .. "/" .. tool .. ".tool"
   for _, name in ipairs(HOSTS) do
     local h = _G[name]
     if h and h.fs and h.fs.ls then host = h; break end
   end
-  if not host or not host.fs.read then return nil end
+  if not host or not host.fs.read or not host.fs.stat then return nil end
+  if not private_dir(host.fs.stat, dir, uid) then return nil end
+  local file = owned(host.fs.stat, path, uid, "file")
+  if not file or has(file.mode, 16) or has(file.mode, 2) then return nil end
   local body = host.fs.read(path)
   if not body then return nil end
   local ok, d = pcall(decode, body)
   if not ok or type(d) ~= "table" or type(d.exec) ~= "string" then return nil end
+  if d.exec:sub(1, 1) ~= "/" then return nil end
   return d
 end
 

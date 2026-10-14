@@ -258,7 +258,7 @@ fn adding_the_outbox_preserves_legacy_transcripts_notes_jobs_and_applied_layouts
     );
     drop(store);
     let old = rusqlite::Connection::open(&path).expect("old fixture");
-    old.execute_batch("DROP TABLE layout_effect")
+    old.execute_batch("DROP TABLE layout_effect; PRAGMA user_version = 0;")
         .expect("pre-outbox schema");
     drop(old);
     let reopened = Transcript::open(&path).expect("migrated");

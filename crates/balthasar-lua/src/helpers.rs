@@ -12,32 +12,17 @@ use std::rc::Rc;
 /// Anything the config passed to `balthasar.log`.
 pub type Logged = Rc<RefCell<Vec<String>>>;
 
-/// Install `balthasar.json`, `balthasar.path`, `balthasar.git`, `balthasar.text`, `balthasar.log` and the few constants.
-pub fn install<'gc>(ctx: luna::Context<'gc>, balthasar: Table<'gc>, logged: &Logged) {
-    balthasar.set(ctx, "json", json_table(ctx)).ok();
-    balthasar.set(ctx, "path", path_table(ctx)).ok();
+/// Install `balthasar.json`, `balthasar.path`, `balthasar.git`, `balthasar.text`, `balthasar.fs`,
+/// `balthasar.log` and the few constants. `fs.read` answers only while `lent` is set.
+pub fn install<'gc>(
+    ctx: luna::Context<'gc>,
+    balthasar: Table<'gc>,
+    logged: &Logged,
+    lent: &Rc<std::cell::Cell<bool>>,
+) {
+    install_data(ctx, balthasar, logged);
     balthasar.set(ctx, "git", git_table(ctx)).ok();
-    balthasar.set(ctx, "text", text_table(ctx)).ok();
-    balthasar.set(ctx, "fs", fs_table(ctx)).ok();
-
-    let held = Rc::clone(logged);
-    let log = Callback::from_fn(&ctx, move |ctx, _exec, mut stack| {
-        let message: Value = stack.consume(ctx)?;
-        let text = match message {
-            Value::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-            other => {
-                convert::to_json(ctx, other, 0).map_or_else(|| "?".to_owned(), |j| j.to_string())
-            }
-        };
-        held.borrow_mut().push(text);
-        stack.replace(ctx, ());
-        Ok(CallbackReturn::Return)
-    });
-    balthasar.set(ctx, "log", log).ok();
-
-    balthasar
-        .set(ctx, "looks_like_secret", secret_check(ctx))
-        .ok();
+    balthasar.set(ctx, "fs", fs_table(ctx, lent)).ok();
 
     for (name, value) in [
         ("home", std::env::var("HOME").unwrap_or_default()),
@@ -49,18 +34,44 @@ pub fn install<'gc>(ctx: luna::Context<'gc>, balthasar: Table<'gc>, logged: &Log
     }
 }
 
+/// What needs neither the filesystem nor the environment: `json`, `path`, `text`, `log` and
+/// `looks_like_secret`.
+pub fn install_data<'gc>(ctx: luna::Context<'gc>, balthasar: Table<'gc>, logged: &Logged) {
+    balthasar.set(ctx, "json", json_table(ctx)).ok();
+    balthasar.set(ctx, "path", path_table(ctx)).ok();
+    balthasar.set(ctx, "text", text_table(ctx)).ok();
+
+    let held = Rc::clone(logged);
+    let log = Callback::from_fn(&ctx, move |ctx, _exec, mut stack| {
+        let message: Value = stack.consume(ctx)?;
+        let text = match message {
+            Value::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            other => convert::to_json(ctx, other, "the message")
+                .map_or_else(|why| format!("? ({why})"), |j| j.to_string()),
+        };
+        held.borrow_mut().push(text);
+        stack.replace(ctx, ());
+        Ok(CallbackReturn::Return)
+    });
+    balthasar.set(ctx, "log", log).ok();
+
+    balthasar
+        .set(ctx, "looks_like_secret", secret_check(ctx))
+        .ok();
+}
+
 /// `balthasar.json.encode` and `balthasar.json.decode`, so a source adapter does not carry a parser.
 fn json_table<'gc>(ctx: luna::Context<'gc>) -> Table<'gc> {
     let table = Table::new(&ctx);
 
     let encode = Callback::from_fn(&ctx, |ctx, _exec, mut stack| {
         let value: Value = stack.consume(ctx)?;
-        let Some(json) = convert::to_json(ctx, value, 0) else {
-            return Err(convert::raise(
+        let json = convert::to_json(ctx, value, "the value").map_err(|why| {
+            convert::raise(
                 ctx,
-                "balthasar.json.encode: cannot be written down",
-            ));
-        };
+                &format!("balthasar.json.encode: cannot be written down: {why}"),
+            )
+        })?;
         let text = luna::String::from_slice(&ctx, json.to_string().as_bytes());
         stack.replace(ctx, text);
         Ok(CallbackReturn::Return)
@@ -152,7 +163,10 @@ fn text_table<'gc>(ctx: luna::Context<'gc>) -> Table<'gc> {
         };
         let body = String::from_utf8_lossy(text.as_bytes()).into_owned();
         let lines: Vec<&str> = body.lines().collect();
-        let kept = lines[lines.len().saturating_sub(wanted)..].join("\n");
+        let kept = lines
+            .get(lines.len().saturating_sub(wanted)..)
+            .unwrap_or(&[])
+            .join("\n");
         stack.replace(ctx, luna::String::from_slice(&ctx, kept.as_bytes()));
         Ok(CallbackReturn::Return)
     });
@@ -160,11 +174,11 @@ fn text_table<'gc>(ctx: luna::Context<'gc>) -> Table<'gc> {
     table
 }
 
-/// `balthasar.fs.glob`, `balthasar.fs.read` and `balthasar.fs.ls`.
+/// `balthasar.fs.glob` and `balthasar.fs.read`.
 ///
-/// Read-only, and deliberately so. A source adapter walks somebody else's transcripts; it has
-/// no reason to write, and a config that could would be a config that could be handed a path.
-fn fs_table<'gc>(ctx: luna::Context<'gc>) -> Table<'gc> {
+/// Read-only. `read` answers only while the person's own configuration is running; anything
+/// else gets `nil` and a reason.
+fn fs_table<'gc>(ctx: luna::Context<'gc>, lent: &Rc<std::cell::Cell<bool>>) -> Table<'gc> {
     let table = Table::new(&ctx);
 
     let glob = Callback::from_fn(&ctx, |ctx, _exec, mut stack| {
@@ -183,8 +197,19 @@ fn fs_table<'gc>(ctx: luna::Context<'gc>) -> Table<'gc> {
     });
     table.set(ctx, "glob", glob).ok();
 
-    let read = Callback::from_fn(&ctx, |ctx, _exec, mut stack| {
+    let lent = Rc::clone(lent);
+    let read = Callback::from_fn(&ctx, move |ctx, _exec, mut stack| {
         let value: Value = stack.consume(ctx)?;
+        if !lent.get() {
+            stack.replace(
+                ctx,
+                (
+                    Value::Nil,
+                    "balthasar.fs.read is lent only to your own configuration",
+                ),
+            );
+            return Ok(CallbackReturn::Return);
+        }
         let Value::String(text) = value else {
             return Err(convert::raise(ctx, "balthasar.fs.read: expects a path"));
         };
@@ -293,14 +318,18 @@ fn common_dir(from: &std::path::Path) -> Option<std::path::PathBuf> {
             return Some(at.to_owned());
         }
         if dot.is_file() {
+            // A worktree's gitdir is `<repo>/.git/worktrees/<name>`; anything else, a submodule's
+            // `../.git/modules/<name>` included, is a repository of its own.
             let pointer = std::fs::read_to_string(&dot).ok()?;
-            let target = pointer.trim().strip_prefix("gitdir:")?.trim();
-            return std::path::PathBuf::from(target)
-                .ancestors()
-                .find(|a| a.file_name().is_some_and(|n| n == ".git"))
+            let target = at.join(pointer.trim().strip_prefix("gitdir:")?.trim());
+            let target = target.canonicalize().unwrap_or(target);
+            let repository = target
+                .parent()
+                .filter(|dir| dir.file_name().is_some_and(|n| n == "worktrees"))
                 .and_then(std::path::Path::parent)
-                .map(std::path::Path::to_owned)
-                .or_else(|| Some(at.to_owned()));
+                .filter(|git| git.file_name().is_some_and(|n| n == ".git"))
+                .and_then(std::path::Path::parent);
+            return Some(repository.map_or_else(|| at.to_owned(), std::path::Path::to_owned));
         }
         at = at.parent()?;
     }
@@ -364,5 +393,30 @@ mod tests {
         assert!(!looks_like_secret("we deploy with fly, never heroku"));
         assert!(!looks_like_secret("the sk- prefix means a secret key"));
         assert!(!looks_like_secret("run make test before pushing"));
+    }
+}
+
+#[cfg(test)]
+mod git_tests {
+    use super::common_dir;
+    use balthasar_model::scratch::Scratch;
+
+    #[test]
+    fn a_submodule_is_its_own_repository_and_a_worktree_is_its_repositorys() {
+        let root = Scratch::new("balthasar-git", "pointers");
+        let sup = root.join("sup");
+        std::fs::create_dir_all(sup.join(".git/modules/lib")).expect("mkdir");
+        std::fs::create_dir_all(sup.join(".git/worktrees/side")).expect("mkdir");
+        std::fs::create_dir_all(sup.join("lib")).expect("mkdir");
+        std::fs::write(sup.join("lib/.git"), "gitdir: ../.git/modules/lib\n").expect("write");
+        let side = root.join("side");
+        std::fs::create_dir_all(&side).expect("mkdir");
+        std::fs::write(
+            side.join(".git"),
+            format!("gitdir: {}/.git/worktrees/side\n", sup.display()),
+        )
+        .expect("write");
+        assert_eq!(common_dir(&sup.join("lib")), Some(sup.join("lib")));
+        assert_eq!(common_dir(&side), Some(sup.clone()));
     }
 }

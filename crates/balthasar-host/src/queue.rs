@@ -1,5 +1,6 @@
 //! Small facts about the job queue that both the jobs and the notes consult: whether a job is still
-//! on its way, whether the harness can run a role, and where the JSON is in what a model wrote.
+//! on its way, whether the harness can run a role, where the JSON is in what a model wrote, and
+//! how one field of it is set.
 
 use balthasar_model::Timestamp;
 use balthasar_store::Turn;
@@ -17,7 +18,13 @@ pub(crate) fn pending(jobs: &[Job], kind: &str, now: Timestamp) -> bool {
 
 /// Whether an issued job has waited longer than it could take.
 pub(crate) fn stale(job: &Job, now: Timestamp) -> bool {
-    let limit = job.spec["timeout_ms"].as_u64().unwrap_or(20_000) / 1_000 + 60;
+    let limit = job
+        .spec
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(20_000)
+        / 1_000
+        + 60;
     job.state == JobState::Issued
         && job
             .issued
@@ -28,6 +35,22 @@ pub(crate) fn stale(job: &Job, now: Timestamp) -> bool {
 pub(crate) fn json_in(text: &str) -> Option<Value> {
     let (start, end) = (text.find('{')?, text.rfind('}')?);
     serde_json::from_str(text.get(start..=end)?).ok()
+}
+
+/// `value[key]`: the field, or a null when `value` has none.
+pub(crate) fn field_of<'a>(value: &'a Value, key: &str) -> &'a Value {
+    value.get(key).unwrap_or(&Value::Null)
+}
+
+/// `value[key] = to` for an object, or for a null that becomes one; anything else is left as it
+/// is rather than panicking as `IndexMut` does.
+pub(crate) fn set(value: &mut Value, key: &str, to: Value) {
+    if value.is_null() {
+        *value = Value::Object(serde_json::Map::new());
+    }
+    if let Value::Object(fields) = value {
+        fields.insert(key.to_owned(), to);
+    }
 }
 
 /// One turn as a helper reads it, with what a configuration withholds taken out.
@@ -108,5 +131,20 @@ mod tests {
         let named = ["memory".to_owned()];
         assert!(can_run(&named, "memory"));
         assert!(!can_run(&named, "safety"));
+    }
+
+    #[test]
+    fn setting_a_field_on_something_that_is_not_an_object_does_not_panic() {
+        let mut object = serde_json::json!({"a": 1});
+        set(&mut object, "b", Value::from(2));
+        assert_eq!(object, serde_json::json!({"a": 1, "b": 2}));
+
+        let mut null = Value::Null;
+        set(&mut null, "b", Value::from(2));
+        assert_eq!(null, serde_json::json!({"b": 2}));
+
+        let mut list = serde_json::json!([1]);
+        set(&mut list, "b", Value::from(2));
+        assert_eq!(list, serde_json::json!([1]));
     }
 }

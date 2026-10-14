@@ -3,6 +3,8 @@
 //! The acceptance criteria are mostly negative: truth must not move because something helped,
 //! habit statistics must not move without attribution, and no lifecycle path may delete.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::{
     Attribution, Body, Environment, Memory, NoteKind, OutcomeKind, Presentation, Record, ScopeId,
     SessionId, Standing, Tier, Witness, WitnessId, WitnessKind,

@@ -7,6 +7,8 @@
 //! This is the path that turns an empty `outcome` column into training data, so every step of
 //! it is worth a test.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, answer};
 use balthasar_ipc::{Peer, Reply, Request};
 use balthasar_model::{
@@ -74,6 +76,7 @@ impl Harness {
                 pid: 42,
                 uid: 1000,
                 program: Some("/usr/bin/some-harness".to_owned()),
+                agent: None,
             }),
             &Request {
                 call: name.to_owned(),

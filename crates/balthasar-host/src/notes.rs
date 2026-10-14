@@ -4,7 +4,7 @@
 
 use crate::Answering;
 use crate::calendar::day;
-use crate::queue::{can_run, json_in, pending};
+use crate::queue::{can_run, field_of, json_in, pending, set};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::SessionId;
 use balthasar_store::{Change, Job, Note, StoreError, Transcript};
@@ -317,8 +317,18 @@ pub(crate) fn settle(
     let mut accepted = true;
     match job.kind.as_str() {
         "extract" | "tidy" => {
-            let ops = said["ops"].as_array().cloned().unwrap_or_default();
-            if job.context["coverage"]["version"] == 1 && !provenance::intact(scrollback, job)? {
+            let ops = said
+                .get("ops")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if job
+                .context
+                .pointer("/coverage/version")
+                .and_then(Value::as_i64)
+                == Some(1)
+                && !provenance::intact(scrollback, job)?
+            {
                 for op in &ops {
                     scrollback.record_change(
                         &Change {
@@ -356,9 +366,13 @@ pub(crate) fn settle(
             accepted = valid;
             // A rule was laid down and nothing came back: asked once more, since a small model sometimes
             // answers an obvious rule with an empty list, and nothing later says it again.
-            if job.kind == "extract" && ops.is_empty() && job.context["again"].is_null() && ruled {
+            if job.kind == "extract"
+                && ops.is_empty()
+                && field_of(&job.context, "again").is_null()
+                && ruled
+            {
                 let mut context = job.context.clone();
-                context["again"] = json!(true);
+                set(&mut context, "again", json!(true));
                 scrollback.queue_job(session, "extract", &job.spec, &context, at.now)?;
             }
             if job.kind == "extract" && accepted {
@@ -380,8 +394,8 @@ pub(crate) fn settle(
             }
         }
         "review" => {
-            decide(scrollback, &ids(&said["approve"]), true, at.now)?;
-            decide(scrollback, &ids(&said["reject"]), false, at.now)?;
+            decide(scrollback, &ids(field_of(&said, "approve")), true, at.now)?;
+            decide(scrollback, &ids(field_of(&said, "reject")), false, at.now)?;
         }
         _ => {}
     }
@@ -439,9 +453,9 @@ pub fn note_open(at: &mut Answering<'_>, request: &Request) -> Reply {
     match scrollback.note(&id) {
         Ok(Some(note)) => {
             let mut out = note.fields();
-            out["id"] = json!(note.id);
-            out["updated"] = json!(note.updated);
-            out["retired"] = json!(note.retired);
+            set(&mut out, "id", json!(note.id));
+            set(&mut out, "updated", json!(note.updated));
+            set(&mut out, "retired", json!(note.retired));
             Reply::one(out)
         }
         Ok(None) => Reply::refused(format!("no note called '{id}'")),
@@ -484,7 +498,10 @@ pub fn undo(at: &mut Answering<'_>, request: &Request) -> Reply {
 
 /// `approve(session, {changes})` and `reject(session, {changes})`: settle staged changes.
 pub fn decided(at: &mut Answering<'_>, request: &Request, approve: bool) -> Reply {
-    let asked = ids(&request.args.get(1).cloned().unwrap_or_default()["changes"]);
+    let asked = ids(request
+        .args
+        .get(1)
+        .map_or(&Value::Null, |opts| field_of(opts, "changes")));
     if asked.is_empty() {
         return Reply::refused("name the changes: { changes = [...] }");
     }

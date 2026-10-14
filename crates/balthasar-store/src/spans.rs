@@ -48,14 +48,20 @@ impl Transcript {
         Ok(found)
     }
 
-    /// Rebuild the search index over every turn held. The table is dropped and refilled.
+    /// Rebuild the search index over every turn held: emptied and refilled in one transaction,
+    /// so a crash between the two leaves the old index rather than none.
     pub fn reindex(&self) -> Result<usize, StoreError> {
-        self.db().execute("DELETE FROM turn_fts", [])?;
-        let n = self.db().execute(
+        let tx = rusqlite::Transaction::new_unchecked(
+            self.db(),
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        tx.execute("DELETE FROM turn_fts", [])?;
+        let n = tx.execute(
             "INSERT INTO turn_fts (text, session, cursor) \
              SELECT text, session, cursor FROM turn WHERE trim(text) != ''",
             [],
         )?;
+        tx.commit()?;
         Ok(n)
     }
 }

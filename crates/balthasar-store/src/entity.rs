@@ -192,7 +192,7 @@ impl Store {
         text: &str,
     ) -> Result<usize, StoreError> {
         let found = extract(text);
-        let tx = self.db_mut().transaction()?;
+        let tx = self.db_mut().savepoint()?;
         tx.execute("DELETE FROM entity WHERE memory = ?1", params![id.as_str()])?;
         for entity in &found {
             tx.execute(

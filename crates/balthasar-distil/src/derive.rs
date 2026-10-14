@@ -58,7 +58,9 @@ pub fn temporal(memories: &[Memory], rules: &Thresholds, now: Timestamp) -> Vec<
 
     let mut out = Vec::new();
     for pair in held.windows(2) {
-        let ((one, when), (two, then)) = (&pair[0], &pair[1]);
+        let [(one, when), (two, then)] = pair else {
+            continue;
+        };
         let apart = then - when;
         let view = if apart.abs() <= rules.overlap_seconds {
             View::Overlaps

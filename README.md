@@ -27,7 +27,8 @@ balthasar decay                   # what today's forgetting would take, before i
 ```
                           a harness
                               │
-                      observe │  SO_PEERCRED names it, so the kernel says who
+                      observe │  SO_PEERCRED: the kernel says which uid and program;
+                              │  a write carries the key serve was started with
                               ▼
                      ┌────────────────────┐
                      │  api@default.sock  │
@@ -107,9 +108,11 @@ recurred in an unrelated run becomes a fact without anyone having said so.
 stops being *findable*. That gap is the answer to staleness: an agent that can say "you told me
 this in March, it may be stale" instead of stating it flatly.
 
-**Nothing is ever deleted.** Superseded, contradicted, decayed past the floor, forgotten on
+**No memory is ever deleted.** Superseded, contradicted, decayed past the floor, forgotten on
 purpose — every one of those is a column. `balthasar forget --purge` is the single exception, and it
-exists so that "delete the key I pasted" can be answered with yes.
+exists so that "delete the key I pasted" can be answered with yes. What is not a memory is
+bounded: derived indexes are rebuilt, the recall ledger keeps what its retention says, and an
+applied layout goes after thirty days, keeping each run's newest.
 
 **Diversity beats volume.** One session repeating something is a person being emphatic; the
 same thing surfacing in unrelated runs is a property of the world. Confidence counts sessions,
@@ -126,10 +129,10 @@ in the transcript and nowhere else. `recall` answers from it too, as evidence �
 
 Built. M0–M9, F0–F9, and the three things a survey of the field turned up afterwards —
 searching the spans, the control arm that can lose, and an erasure that reaches what was
-derived from what. 927 tests, seven gates.
+derived from what. 1579 tests, fourteen gates.
 
 ```sh
-balthasar serve                     # listen for a harness
+balthasar serve                     # listen for a harness; its key is in <socket>.key
 balthasar distil                    # read what this project's own runs said
 balthasar ingest --source magi      # or read transcripts that already exist
 balthasar consolidate               # carry what recurred into the project's memory
@@ -203,7 +206,8 @@ The gates are not advisory:
 | Gate | Rule |
 |---|---|
 | `gate-file-size` | no `.rs` over 800 lines |
-| `gate-no-delete` | no `DELETE FROM` outside `purge.rs` |
+| `gate-comments` | a file's comments are at most a fifth of its code |
+| `gate-no-delete` | nothing a memory holds is deleted outside `purge.rs` |
 | `gate-independent` | no Rust file names a harness |
 | `gate-witnessed` | every asserted memory answers for itself |
 | `gate-untrusted` | untrusted content cannot become durable instruction |
@@ -211,6 +215,9 @@ The gates are not advisory:
 | `gate-cycles` | no two top-level modules depend on each other |
 | `gate-hermetic` | the suite leaves nothing behind in `$TMPDIR` |
 | `gate-wire` | one way of saying a thing crosses a boundary |
+| `gate-sandbox` | one Lua VM, built in one place, and it is sandboxed |
+| `gate-family` | the binary answers the family contract |
+| `gate-role` | the binary fills the memory role |
 | `gate-no-llm` | the suite passes with no key, no network, no embeddings |
 
 The last one is the load-bearing one. A model makes balthasar better; its absence never makes balthasar
@@ -223,9 +230,18 @@ Every reply carries `family`, which says which revision of the wire it is writte
 refuses a number it does not know and tolerates one it predates.
 
 ```
-->  {"call":"recall","args":["deploy",{"limit":5}]}
+->  {"call":"recall","args":["deploy",{"limit":5}],"key":"…"}
 <-  {"ok":true,"family":1,"n":1,"result":[[{"id":"…","text":"…","asserted":true,…}]]}
 ```
+
+**The socket takes writes from whoever started `serve`.** `serve` reads one line from standard
+input before it binds: a key of 64 lowercase hex characters. magi mints one for each session's
+`serve` and writes it there. Handed none — started by hand, from a terminal or with its input
+closed — `serve` mints its own and writes it beside the socket as `<socket>.key`, 0600, removed
+when it exits. A call that writes or issues work carries the key as `"key"`; one without it, or
+with another, is refused as a reply and the connection stays open. A call that only reads needs no
+key. The agent a call is recorded for is `MAGI_MEMORY_AGENT` in `serve`'s own environment, never
+the caller's.
 
 `asserted` is the distinction the whole design turns on, handed over rather than left for a
 caller to work out from a number and a threshold it would have to be told. Above the floor a
@@ -399,3 +415,21 @@ stops being answered.
 `.make.lua` and `.env.lua` are read by [oslo](https://github.com/termworks/oslo), which provides
 both the `make` task runner and the directory environment. Without it, `cargo` does everything
 `make` does.
+
+## Nix
+
+Each release tag publishes a static build for x86_64 and aarch64 Linux to the `ai-nerv` cache,
+with `config/` under `share/balthasar/`.
+
+```sh
+cachix use ai-nerv
+nix run github:ai-nerv/balthasar -- verbs
+nix build github:ai-nerv/balthasar
+```
+
+The flake names the cache itself, so `--accept-flake-config` does the same as `cachix use`. In
+another flake, take `inputs.balthasar.packages.${system}.default`, and configure the cache on the
+consuming machine: an input's `nixConfig` is not inherited.
+
+Here, `make nix-build` builds it into `result/`, `make nix-check` checks the flake, and
+`make nix-download-check` fetches it from the cache without building anything.

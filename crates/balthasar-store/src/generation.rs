@@ -196,7 +196,7 @@ impl Transcript {
             {
                 return Ok(Err(Stale::Amended { at }));
             }
-            let prepared_for = found.policy["limit"].as_u64();
+            let prepared_for = found.policy.get("limit").and_then(Value::as_u64);
             if let (Some(prepared_for), Some(now)) = (prepared_for, limit_now)
                 && prepared_for > now
             {

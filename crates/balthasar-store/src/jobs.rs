@@ -59,10 +59,10 @@ impl Job {
     /// not taken for the current attempt.
     #[must_use]
     pub fn handed(&self, attempt: u32) -> Value {
-        let mut out = self.spec.clone();
-        out["id"] = Value::String(self.id.clone());
-        out["attempt"] = Value::from(attempt);
-        out
+        let mut out = self.spec.as_object().cloned().unwrap_or_default();
+        out.insert("id".to_owned(), Value::String(self.id.clone()));
+        out.insert("attempt".to_owned(), Value::from(attempt));
+        Value::Object(out)
     }
 }
 

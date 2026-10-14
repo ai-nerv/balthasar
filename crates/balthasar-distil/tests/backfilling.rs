@@ -4,6 +4,8 @@
 //! test honest about the claim it is testing — that a harness is a *file* — and it keeps
 //! `gate-independent` able to stay strict, since no Rust file here names one.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::{Scratch, ScratchFile};
 
 use balthasar_distil::{Ingest, ingest};

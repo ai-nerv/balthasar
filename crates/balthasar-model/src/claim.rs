@@ -34,7 +34,7 @@ pub fn same_claim_different_value(before: &str, after: &str) -> bool {
     if shared * 2 < shorter {
         return false;
     }
-    a[shared..] != b[shared..]
+    a.get(shared..) != b.get(shared..)
 }
 
 /// Words that open a turn without being part of the claim it carries.
@@ -184,7 +184,9 @@ fn stem(word: &str) -> String {
     }
     // `committ` -> `commit`: a doubled consonant before a suffix is spelling, not a new word.
     let letters: Vec<char> = held.chars().collect();
-    if letters.len() > 2 && letters[letters.len() - 1] == letters[letters.len() - 2] {
+    if let [_, .., before, last] = letters.as_slice()
+        && before == last
+    {
         held.pop();
     }
     held

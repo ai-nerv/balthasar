@@ -91,8 +91,8 @@ mod tests {
 
     #[test]
     fn binding_a_socket_does_not_change_how_this_process_dies() {
-        let listener =
-            crate::Listener::bind(&format!("mask-{}", std::process::id())).expect("bind");
+        let (_root, dirs) = crate::serve::aside("mask");
+        let listener = crate::Listener::bind_in(&dirs, "m").expect("bind");
         for (signal, named) in STOPPING {
             assert!(!blocked(signal), "binding blocked {named}");
         }

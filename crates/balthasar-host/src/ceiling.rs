@@ -92,6 +92,7 @@ mod tests {
             pid: 4021,
             uid: 1000,
             program: Some("harness".to_owned()),
+            agent: None,
         })
     }
 

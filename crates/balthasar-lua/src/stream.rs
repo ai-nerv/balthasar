@@ -6,12 +6,17 @@
 //! ```lua
 //! local h = balthasar.stream.connect(path, timeout_ms)
 //! h:send(bytes)   h:recv(n)   h:close()
+//! local reply, why = h:call({ call = "verbs" }, { deadline_ms = 2000 })
 //! ```
+
+mod call;
 
 use luna::{Callback, CallbackReturn, Context, Table, Value};
 use std::cell::RefCell;
 use std::io::{Read, Write};
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -28,34 +33,33 @@ type Handle = Rc<RefCell<Option<UnixStream>>>;
 
 /// Whether `path` is a socket a config may dial.
 ///
-/// This user's own socket directories and nothing else: without it, any Lua a config can reach
-/// could open any socket this user can. Lexical, on a normalised path, so `..` cannot climb out.
-fn dialable(path: &std::path::Path) -> bool {
-    roots().iter().any(|root| under(path, root))
+/// One of the family's own, by directory: the path's parent, canonicalised, is under one of
+/// [`balthasar_model::runtime::family_dirs`], and the path itself is a socket owned by this uid.
+/// Answers the canonical path to connect to, so a parent swapped after the check is not followed.
+fn dialable(path: &Path) -> Option<PathBuf> {
+    let roots = balthasar_model::runtime::family_dirs();
+    dialable_under(path, &roots, balthasar_model::runtime::uid())
 }
 
-/// Where this user's sockets may live. Both roots, because the family uses either.
-fn roots() -> Vec<std::path::PathBuf> {
-    let mut out = vec![std::env::temp_dir()];
-    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
-        out.push(std::path::PathBuf::from(runtime));
+/// The same rule, against roots and a uid the caller names.
+fn dialable_under(path: &Path, roots: &[PathBuf], uid: u32) -> Option<PathBuf> {
+    let name = path.file_name()?;
+    let parent = path.parent()?.canonicalize().ok()?;
+    // The base each family dir sits in is canonicalised, the family dir itself is not: one that
+    // is a symlink to somewhere else is judged by where it goes.
+    let inside = roots.iter().any(|root| {
+        let (Some(base), Some(leaf)) = (root.parent(), root.file_name()) else {
+            return false;
+        };
+        let base = base.canonicalize().unwrap_or_else(|_| base.to_owned());
+        parent.starts_with(base.join(leaf))
+    });
+    if !inside {
+        return None;
     }
-    out
-}
-
-/// Whether `path`, once `..` is resolved, is inside `root`.
-fn under(path: &std::path::Path, root: &std::path::Path) -> bool {
-    let mut out = std::path::PathBuf::new();
-    for part in path.components() {
-        match part {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    out.starts_with(root)
+    let target = parent.join(name);
+    let meta = std::fs::symlink_metadata(&target).ok()?;
+    (meta.file_type().is_socket() && meta.uid() == uid).then_some(target)
 }
 
 /// Build the `stream` table.
@@ -72,16 +76,16 @@ pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
 
         // Refused as an ordinary answer: raising would kill a config that probed for an absent
         // sibling.
-        if !dialable(std::path::Path::new(&path)) {
+        let Some(target) = dialable(Path::new(&path)) else {
             stack.replace(
                 ctx,
                 (
                     Value::Nil,
-                    "a socket outside this user's runtime directory is not this VM's to open",
+                    "only a family program's own socket is this VM's to open",
                 ),
             );
             return Ok(CallbackReturn::Return);
-        }
+        };
 
         let timeout = match timeout {
             Value::Integer(ms) if ms > 0 => Duration::from_millis(ms as u64),
@@ -89,7 +93,15 @@ pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
             _ => DEFAULT_TIMEOUT,
         };
 
-        match UnixStream::connect(&path) {
+        // A socket answered by another uid is closed unused.
+        let ours = |socket: &UnixStream| {
+            rustix::net::sockopt::socket_peercred(socket)
+                .is_ok_and(|said| said.uid.as_raw() == balthasar_model::runtime::uid())
+        };
+        match UnixStream::connect(&target) {
+            Ok(socket) if !ours(&socket) => {
+                stack.replace(ctx, (Value::Nil, "that socket is answered by another user"));
+            }
             Ok(socket) => {
                 // This VM has no way to interrupt a blocking read, so a handle whose deadline
                 // never took would hang the whole harness.
@@ -102,7 +114,7 @@ pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
                     return Ok(CallbackReturn::Return);
                 }
                 let held: Handle = Rc::new(RefCell::new(Some(socket)));
-                stack.replace(ctx, handle_table(ctx, held));
+                stack.replace(ctx, handle_table(ctx, held, timeout));
             }
             Err(why) => {
                 let message = luna::String::from_slice(&ctx, why.to_string().as_bytes());
@@ -115,9 +127,48 @@ pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
     stream
 }
 
-/// One connection's methods.
-fn handle_table<'gc>(ctx: Context<'gc>, held: Handle) -> Table<'gc> {
+/// One connection's methods. `timeout` is what `send` and `recv` wait, and what `call` waits when
+/// it is given no deadline.
+fn handle_table<'gc>(ctx: Context<'gc>, held: Handle, timeout: Duration) -> Table<'gc> {
     let handle = Table::new(&ctx);
+
+    let calling = Rc::clone(&held);
+    let call = Callback::from_fn(&ctx, move |ctx, _exec, mut stack| {
+        let (_this, request, opts): (Value, Value, Value) = stack.consume(ctx)?;
+        let deadline = std::time::Instant::now() + call::patience(ctx, opts, timeout);
+        let frame = match call::framed(ctx, request) {
+            Ok(frame) => frame,
+            Err(why) => {
+                let message = luna::String::from_slice(&ctx, why.as_bytes());
+                stack.replace(ctx, (Value::Nil, message));
+                return Ok(CallbackReturn::Return);
+            }
+        };
+        let mut borrowed = calling.borrow_mut();
+        let Some(socket) = borrowed.as_mut() else {
+            stack.replace(ctx, (Value::Nil, "this connection is closed"));
+            return Ok(CallbackReturn::Return);
+        };
+        let answered = call::exchange(socket, &frame, deadline);
+        let restored = socket
+            .set_read_timeout(Some(timeout))
+            .and_then(|()| socket.set_write_timeout(Some(timeout)));
+        match (answered, restored) {
+            (Ok(reply), Ok(())) => stack.replace(ctx, crate::convert::from_json(ctx, &reply)),
+            (Ok(_), Err(why)) => {
+                borrowed.take();
+                let message = luna::String::from_slice(&ctx, why.to_string().as_bytes());
+                stack.replace(ctx, (Value::Nil, message));
+            }
+            (Err(why), _) => {
+                borrowed.take();
+                let message = luna::String::from_slice(&ctx, why.as_bytes());
+                stack.replace(ctx, (Value::Nil, message));
+            }
+        }
+        Ok(CallbackReturn::Return)
+    });
+    handle.set(ctx, "call", call).ok();
 
     let sending = Rc::clone(&held);
     let send = Callback::from_fn(&ctx, move |ctx, _exec, mut stack| {
@@ -191,8 +242,121 @@ fn handle_table<'gc>(ctx: Context<'gc>, held: Handle) -> Table<'gc> {
 }
 
 #[cfg(test)]
+mod dialling {
+    use super::dialable_under;
+    use balthasar_model::runtime::{family_dirs_in, uid};
+    use balthasar_model::scratch::Scratch;
+    use std::os::unix::net::UnixListener;
+
+    /// A runtime directory of the test's own, with a family socket and a bus beside it.
+    struct Runtime {
+        root: Scratch,
+        _held: Vec<UnixListener>,
+    }
+
+    impl Runtime {
+        fn new(name: &str) -> Self {
+            let root = Scratch::new("balthasar-dial", name);
+            std::fs::create_dir_all(root.join("run/melchior")).expect("mkdir");
+            let held = vec![
+                UnixListener::bind(root.join("run/melchior/host.sock")).expect("bind"),
+                UnixListener::bind(root.join("run/bus")).expect("bind"),
+            ];
+            Self { root, _held: held }
+        }
+
+        fn allowed(&self, path: &std::path::Path) -> bool {
+            let roots = family_dirs_in(Some(self.root.join("run")), &self.root.join("tmp"), uid());
+            dialable_under(path, &roots, uid()).is_some()
+        }
+    }
+
+    #[test]
+    fn a_family_socket_may_be_dialled() {
+        let at = Runtime::new("family");
+        assert!(at.allowed(&at.root.join("run/melchior/host.sock")));
+    }
+
+    #[test]
+    fn the_session_bus_beside_it_may_not() {
+        let at = Runtime::new("bus");
+        assert!(!at.allowed(&at.root.join("run/bus")));
+    }
+
+    #[test]
+    fn climbing_out_of_a_family_dir_is_not_inside_it() {
+        let at = Runtime::new("climb");
+        assert!(!at.allowed(&at.root.join("run/melchior/../bus")));
+    }
+
+    #[test]
+    fn a_symlink_wearing_a_family_name_is_refused() {
+        let at = Runtime::new("link");
+        let link = at.root.join("run/melchior/bus.sock");
+        std::os::unix::fs::symlink(at.root.join("run/bus"), &link).expect("symlink");
+        assert!(!at.allowed(&link));
+    }
+
+    #[test]
+    fn a_family_dir_that_is_a_symlink_to_elsewhere_is_judged_by_where_it_goes() {
+        let at = Runtime::new("dirlink");
+        std::fs::create_dir_all(at.root.join("elsewhere")).expect("mkdir");
+        let _bound = UnixListener::bind(at.root.join("elsewhere/x.sock")).expect("bind");
+        std::os::unix::fs::symlink(at.root.join("elsewhere"), at.root.join("run/casper"))
+            .expect("symlink");
+        assert!(!at.allowed(&at.root.join("run/casper/x.sock")));
+    }
+
+    #[test]
+    fn a_regular_file_is_not_a_socket() {
+        let at = Runtime::new("file");
+        std::fs::write(at.root.join("run/melchior/plain"), "x").expect("write");
+        assert!(!at.allowed(&at.root.join("run/melchior/plain")));
+    }
+
+    #[test]
+    fn a_socket_owned_by_another_uid_is_refused() {
+        let at = Runtime::new("owner");
+        let roots = family_dirs_in(Some(at.root.join("run")), &at.root.join("tmp"), uid());
+        assert!(
+            dialable_under(&at.root.join("run/melchior/host.sock"), &roots, uid() + 1).is_none()
+        );
+    }
+
+    #[test]
+    fn the_uid_suffixed_temporary_dir_counts_too() {
+        let at = Runtime::new("tmp");
+        let dir = at.root.join(format!("tmp/memory-{}", uid()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let _bound = UnixListener::bind(dir.join("api@default.sock")).expect("bind");
+        assert!(at.allowed(&dir.join("api@default.sock")));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use crate::Engine;
+
+    #[test]
+    fn a_socket_outside_the_family_dirs_is_refused_from_lua() {
+        let at = balthasar_model::scratch::Scratch::new("balthasar-dial", "lua");
+        let bus = at.join("bus");
+        let _bound = std::os::unix::net::UnixListener::bind(&bus).expect("bind");
+        let mut engine = Engine::new();
+        engine
+            .run(
+                &format!(
+                    "local h, why = balthasar.stream.connect({:?})\n\
+                     balthasar.answered = (h == nil) and why",
+                    bus.display().to_string()
+                ),
+                "probe.lua",
+            )
+            .expect("run");
+        engine.harvest();
+        let said = engine.config().string("answered").unwrap_or("").to_owned();
+        assert!(said.contains("family"), "{said}");
+    }
 
     #[test]
     fn connecting_to_nothing_answers_nil_and_a_reason() {

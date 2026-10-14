@@ -1,6 +1,7 @@
 //! Evidence validation for each proposed note operation.
 
 use super::ruling::{canonical, instruction, rule_text, same_rule, unquoted};
+use crate::queue::{field_of, set};
 use balthasar_store::{Change, Job, Note, StoreError, Transcript};
 use serde_json::{Value, json};
 
@@ -36,7 +37,7 @@ pub(super) fn selected(op: &Value, sources: &[Value]) -> Result<Vec<Value>, &'st
                 return Err("evidence quote is not in the original source");
             }
             let mut source = source.clone();
-            source["quote"] = json!(quote);
+            set(&mut source, "quote", json!(quote));
             Ok(source)
         })
         .collect()
@@ -61,8 +62,8 @@ fn matching(sources: &[Value], accepts: impl Fn(&str) -> bool) -> Option<Value> 
             }
             if accepts(line) {
                 let mut found = source.clone();
-                if found["quote"].is_null() {
-                    found["quote"] = json!(line);
+                if field_of(&found, "quote").is_null() {
+                    set(&mut found, "quote", json!(line));
                 }
                 found.as_object_mut()?.remove("text");
                 return Some(found);
@@ -92,7 +93,7 @@ pub(super) fn supports_rule(scrollback: &Transcript, note: &Note) -> Result<bool
     let Some(sources) = super::provenance::restored(scrollback, &note.evidence)? else {
         return Ok(false);
     };
-    Ok(match note.evidence["kind"].as_str() {
+    Ok(match note.evidence.get("kind").and_then(Value::as_str) {
         Some("user-rule") => standing(&sources, &note.text).is_some(),
         Some("user-rule-change") => changing(&sources, note, Some(&note.fields())).is_some(),
         _ => false,
@@ -110,12 +111,14 @@ pub(super) fn supports_change(
     if !was_pinned && !pinned {
         return Ok(true);
     }
-    if was_pinned && after.is_none() && change.evidence["kind"] == "duplicate" {
+    if was_pinned && after.is_none() && field_of(&change.evidence, "kind") == "duplicate" {
         return Ok(before.is_some_and(|n| {
             same_rule(
                 &n.text,
-                change.evidence["retained"]["fields"]["text"]
-                    .as_str()
+                change
+                    .evidence
+                    .pointer("/retained/fields/text")
+                    .and_then(Value::as_str)
                     .unwrap_or_default(),
             )
         }));
@@ -124,9 +127,10 @@ pub(super) fn supports_change(
         return Ok(false);
     };
     Ok(if let Some(note) = before.filter(|n| n.pinned) {
-        change.evidence["kind"] == "user-rule-change" && changing(&sources, note, after).is_some()
+        field_of(&change.evidence, "kind") == "user-rule-change"
+            && changing(&sources, note, after).is_some()
     } else {
-        change.evidence["kind"] == "user-rule"
+        field_of(&change.evidence, "kind") == "user-rule"
             && after
                 .and_then(|a| a["text"].as_str())
                 .is_some_and(|text| standing(&sources, text).is_some())
@@ -144,7 +148,7 @@ fn changing(sources: &[Value], note: &Note, after: Option<&Value>) -> Option<Val
         if after["pinned"] != true {
             let unchanged = ["title", "text", "description"]
                 .iter()
-                .all(|field| after[field] == note.fields()[field]);
+                .all(|field| field_of(after, field) == field_of(&note.fields(), field));
             unchanged
                 .then(|| {
                     matching(sources, |line| {

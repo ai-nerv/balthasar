@@ -5,6 +5,8 @@
 //! socket primitive, and has to find, connect, frame, encode, decode and unpack on its own —
 //! which is every layer a sibling would exercise, in the order a sibling would exercise them.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door};
 use balthasar_ipc::{Listener, Peer, Request};
 use balthasar_lua::{CLIENT, Engine};
@@ -13,36 +15,48 @@ use balthasar_store::Store;
 
 const NOW: balthasar_model::Timestamp = 1_756_000_000;
 
-/// A served socket whose file goes when the test ends, however the test ends.
+/// A served socket in directories of the test's own, under the memory role's fallback directory
+/// so the client library may dial it, and removed whole however the test ends.
 ///
 /// The accept loop never returns, so the [`Listener`] moved into the serving thread outlives the
-/// test and its `Drop` never runs. Every test here used to unlink on its last line instead, which
-/// an `assert!` unwinds straight past — so a *failing* run left `api@stub-*.sock` in the runtime
-/// directory permanently, and that directory is shared with every balthasar on the machine.
-struct Serving(Vec<std::path::PathBuf>);
+/// test and its `Drop` never runs; nothing it leaves reaches the shared runtime directory.
+struct Serving {
+    paths: Vec<std::path::PathBuf>,
+    root: std::path::PathBuf,
+}
 
 impl std::ops::Deref for Serving {
     type Target = std::path::Path;
 
     fn deref(&self) -> &std::path::Path {
-        &self.0[0]
+        &self.paths[0]
     }
 }
 
 impl Drop for Serving {
-    /// Every name it bound, not only the one a caller dials: one instance answers under the role's
-    /// name and under the program's, and the second is as much a leak as the first.
     fn drop(&mut self) {
-        for path in &self.0 {
-            let _ = std::fs::remove_file(path);
-        }
+        let _ = std::fs::remove_dir_all(&self.root);
     }
+}
+
+/// A fresh pair of private socket directories, the role's and the old name's.
+fn aside(name: &str) -> (std::path::PathBuf, [std::path::PathBuf; 2]) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = std::env::temp_dir()
+        .join(format!("memory-{}", balthasar_model::runtime::uid()))
+        .join(format!("{name}-{}-{n}", std::process::id()));
+    let dirs = [root.join("m"), root.join("b")];
+    for dir in &dirs {
+        balthasar_model::runtime::private_dir(dir).expect("a private socket directory");
+    }
+    (root, dirs)
 }
 
 /// Serve a seeded store on a socket, for as long as the handle lives.
 fn serving(name: &str, seed: &[&str]) -> Serving {
-    let instance = format!("stub-{name}-{}", std::process::id());
-    let listener = Listener::bind(&instance).expect("bind");
+    let (root, dirs) = aside(name);
+    let listener = Listener::bind_in(&dirs, "s").expect("bind");
     let paths: Vec<std::path::PathBuf> = listener
         .paths()
         .into_iter()
@@ -72,8 +86,14 @@ fn serving(name: &str, seed: &[&str]) -> Serving {
         );
     }
 
+    let key = balthasar_ipc::Key::read(&mut format!("{KEY}\n").as_bytes())
+        .expect("read")
+        .expect("a key");
+    let guard = balthasar_ipc::Guard::new(key, |verb| {
+        balthasar_host::known(verb).is_some_and(|known| known.writes)
+    });
     std::thread::spawn(move || {
-        let _ = listener.serve(|peer: &Peer, request: Request| {
+        let _ = listener.serve(guard, |peer: &Peer, request: Request| {
             let mut at = Answering {
                 store: &mut store,
                 scrollback: None,
@@ -88,8 +108,11 @@ fn serving(name: &str, seed: &[&str]) -> Serving {
             balthasar_host::answer(&mut at, &Door::Socket(peer.clone()), &request)
         });
     });
-    Serving(paths)
+    Serving { paths, root }
 }
+
+/// The key the socket in these tests is served with.
+const KEY: &str = "5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e";
 
 /// Run a script with the stub loaded and connected, and take what it left in `balthasar.answer`.
 fn through_the_stub(path: &std::path::Path, script: &str) -> String {
@@ -97,8 +120,18 @@ fn through_the_stub(path: &std::path::Path, script: &str) -> String {
     let source = format!(
         r#"
         local chunk = assert(load({CLIENT:?}, "balthasar.lua"))
-        -- Given nothing but the socket primitive, exactly as a sibling would hand it over.
-        local client = chunk(balthasar.stream)
+        -- The socket primitive, with the key added to each call by the host as a sibling's does.
+        local transport = {{ connect = function(path, timeout)
+          local h, why = balthasar.stream.connect(path, timeout)
+          if not h then return nil, why end
+          return {{
+            call = function(_, request, opts) request.key = {KEY:?}; return h:call(request, opts) end,
+            send = function(_, bytes) return h:send(bytes) end,
+            recv = function(_, n) return h:recv(n) end,
+            close = function() return h:close() end,
+          }}
+        end }}
+        local client = chunk(transport)
         local mem, why = client.connect({{ path = {:?} }})
         if not mem then balthasar.answer = "could not connect: " .. tostring(why) return end
         balthasar.answer = tostring({script})
@@ -161,6 +194,33 @@ fn the_stub_reports_a_refusal_rather_than_raising() {
 }
 
 #[test]
+fn the_stub_without_the_key_reads_and_is_turned_away_from_writing() {
+    let path = serving("keyless", &["we deploy with fly"]);
+    let mut engine = Engine::new();
+    let source = format!(
+        r#"
+        local client = assert(load({CLIENT:?}, "balthasar.lua"))(balthasar.stream)
+        local mem = assert(client.connect({{ path = {:?} }}))
+        local found = mem.recall("deploy")
+        local kept, why = mem.remember("an intruder's note")
+        balthasar.answer = found[1].text .. "|" .. tostring(kept) .. "|" .. tostring(why)
+        "#,
+        path.to_string_lossy()
+    );
+    engine.run(&source, "stub.lua").expect("run");
+    engine.harvest();
+    let said = engine
+        .config()
+        .string("answer")
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(
+        said,
+        format!("we deploy with fly|nil|{}", balthasar_ipc::KEY_REFUSED)
+    );
+}
+
+#[test]
 fn the_stub_says_so_when_nothing_is_listening() {
     // The ordinary state of a machine where no daemon was started, and it must read as that
     // rather than as a crash.
@@ -213,9 +273,8 @@ fn the_stub_gathers_a_listing_back_into_one_table() {
 fn stalling(name: &str, early: usize) -> Serving {
     use std::io::{Read, Write};
 
-    let path = balthasar_ipc::socket_path(&format!("stub-{name}-{}", std::process::id()));
-    std::fs::create_dir_all(path.parent().expect("a directory")).expect("dir");
-    let _ = std::fs::remove_file(&path);
+    let (root, dirs) = aside(name);
+    let path = dirs[0].join("api@s.sock");
     let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
 
     std::thread::spawn(move || {
@@ -254,7 +313,10 @@ fn stalling(name: &str, early: usize) -> Serving {
             let _ = socket.write_all(&framed(r#"{"ok":true,"result":["SECOND"],"n":1}"#));
         }
     });
-    Serving(vec![path])
+    Serving {
+        paths: vec![path],
+        root,
+    }
 }
 
 /// Make two calls over one held handle, having given up on the first, and say what came back.

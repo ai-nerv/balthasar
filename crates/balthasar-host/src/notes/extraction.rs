@@ -51,8 +51,8 @@ pub(crate) fn queue(
         let jobs = scrollback.jobs_of(session)?;
         if jobs.iter().any(|j| j.kind == "extract" && matches!(j.state, JobState::Queued | JobState::Issued)) { return Ok(()); }
         if !retry && jobs.iter().any(|j| j.kind == "extract" && j.state == JobState::Failed
-            && j.context["coverage"]["from"].as_u64().is_some_and(|n| n <= from)
-            && j.context["coverage"]["to"].as_u64().is_some_and(|n| n >= from)) { return Ok(()); }
+            && j.context.pointer("/coverage/from").and_then(Value::as_u64).is_some_and(|n| n <= from)
+            && j.context.pointer("/coverage/to").and_then(Value::as_u64).is_some_and(|n| n >= from)) { return Ok(()); }
         let outline = scrollback.outline(session)?;
         let Some(last) = outline.last().map(|row| row.cursor) else { return Ok(()) };
         let to = upto.unwrap_or(last).min(last);
@@ -104,7 +104,7 @@ pub(crate) fn queue(
         }
         // What it covers is still recorded, so evidence is checked the same way; whether that
         // becomes coverage is `acknowledge`'s, and a row only partly read never does.
-        let Some(to) = end.or_else(|| piece["cursor"].as_u64()) else { return Ok(()) };
+        let Some(to) = end.or_else(|| piece.get("cursor").and_then(Value::as_u64)) else { return Ok(()) };
         let covers = json!({"version":1,"from":from,"to":to});
         let spec = json!({"kind":"extract","role":"notes","fallback":"skip",
             "instruction":format!("{EXTRACT}\n\n{}", keeping.checklist),"input":input,"schema":ops_schema(),
@@ -168,11 +168,12 @@ pub(crate) fn status(scrollback: &Transcript, session: &SessionId) -> Result<Val
         .iter()
         .map(|j| {
             json!({"id":j.id,"kind":j.kind,
-        "state":j.state.as_str(),"attempts":j.attempts,"covers":j.spec["covers"],"result":j.result})
+        "state":j.state.as_str(),"attempts":j.attempts,"covers":j.spec.get("covers"),"result":j.result})
         })
         .collect();
     let mut progress = serde_json::to_value(scrollback.extraction_progress(session)?)?;
-    progress["partial"] = partial(scrollback, session)?.unwrap_or(Value::Null);
+    let partial = partial(scrollback, session)?.unwrap_or(Value::Null);
+    crate::queue::set(&mut progress, "partial", partial);
     Ok(json!({"extraction":progress,"jobs":jobs}))
 }
 
@@ -223,7 +224,7 @@ pub(crate) fn acknowledge(
     job: &balthasar_store::Job,
     id: &str,
 ) -> Result<(), StoreError> {
-    let piece = &job.context["piece"];
+    let piece = crate::queue::field_of(&job.context, "piece");
     if let (Some(cursor), Some(revision), Some(offset), Some(length)) = (
         piece["cursor"].as_u64(),
         piece["revision"].as_str(),
@@ -242,15 +243,24 @@ pub(crate) fn acknowledge(
         let read = scrollback.pieces_read(session, cursor, revision)?;
         let whole = piece["of"].as_u64().unwrap_or(u64::MAX) as usize;
         if balthasar_store::covered(&read) >= whole {
-            let from = job.context["from"].as_u64().unwrap_or(cursor);
+            let from = job
+                .context
+                .get("from")
+                .and_then(Value::as_u64)
+                .unwrap_or(cursor);
             scrollback.acknowledge_extraction(session, id, from, cursor)?;
         }
         return Ok(());
     }
-    if job.context["coverage"]["version"] != 1 {
+    if job
+        .context
+        .pointer("/coverage/version")
+        .and_then(Value::as_i64)
+        != Some(1)
+    {
         return Err(StoreError::Foreign("extraction coverage is missing".into()));
     }
-    let coverage = &job.context["coverage"];
+    let coverage = crate::queue::field_of(&job.context, "coverage");
     let (Some(from), Some(to)) = (coverage["from"].as_u64(), coverage["to"].as_u64()) else {
         return Err(StoreError::Foreign("extraction coverage is missing".into()));
     };
@@ -263,7 +273,7 @@ pub(crate) fn partial(
     session: &SessionId,
 ) -> Result<Option<Value>, StoreError> {
     for job in scrollback.jobs_of(session)? {
-        let piece = &job.context["piece"];
+        let piece = crate::queue::field_of(&job.context, "piece");
         let (Some(cursor), Some(revision), Some(of)) = (
             piece["cursor"].as_u64(),
             piece["revision"].as_str(),

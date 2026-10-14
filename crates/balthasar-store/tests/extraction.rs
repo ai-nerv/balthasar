@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::{SessionId, scratch::Scratch};
 use balthasar_store::Transcript;
 use serde_json::json;

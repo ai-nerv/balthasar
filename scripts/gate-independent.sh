@@ -10,10 +10,16 @@ set -eu
 # A bare substring matches the name inside longer words and reports prose as a dependency. A
 # full `-w` match stops catching `magi_proto`, which is the thing the gate is actually for.
 # Leading-only gets both.
+#
+# One line is named rather than exempted by silence: the family's runtime directory names in
+# `runtime.rs`, which FAMILY.md requires a config's socket to be dialled under. A directory name
+# is where a socket lives, not a type balthasar depends on.
+FAMILY_DIRS='crates/balthasar-model/src/runtime.rs:[0-9]*:pub const FAMILY: &\[&str\] = &\["magi", '
 fail=0
-if grep -rlnE '\bmagi' crates --include='*.rs' >/dev/null 2>&1; then
+named=$(grep -rnE '\bmagi' crates --include='*.rs' | grep -v "^$FAMILY_DIRS" || true)
+if [ -n "$named" ]; then
     echo "gate-independent: a Rust file names a harness:" >&2
-    grep -rlnE '\bmagi' crates --include='*.rs' >&2
+    printf '%s\n' "$named" | cut -d: -f1 | sort -u >&2
     fail=1
 fi
 if grep -rn '^magi' crates/*/Cargo.toml >/dev/null 2>&1; then

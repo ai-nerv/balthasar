@@ -3,6 +3,8 @@
 //! The contract the storage restructure exists for: a session's scratch is in that session's
 //! own file, so removing one run removes one directory and nothing else.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::Scratch;
 
 use balthasar_host::{Answering, Door, answer};
@@ -72,6 +74,7 @@ impl Held {
                 pid: 4242,
                 uid: 1000,
                 program: Some("/usr/bin/some-harness".to_owned()),
+                agent: None,
             }),
             &Request {
                 call: name.to_owned(),

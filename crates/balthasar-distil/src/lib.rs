@@ -5,6 +5,7 @@
 
 mod akin;
 mod candidate;
+mod child;
 mod clash;
 mod consolidate;
 mod derive;

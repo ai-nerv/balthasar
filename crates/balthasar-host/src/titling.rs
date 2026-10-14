@@ -50,20 +50,22 @@ pub(crate) fn queue(
     if at.store.is_named(session)? {
         return Ok(());
     }
-    let turns = scrollback.replay(session)?;
-    if turns.len() < ENOUGH {
+    // What the run has said since the last title, not how often this was offered a turn.
+    let grown = scrollback.count(session)?;
+    if grown < ENOUGH as u64 {
         return Ok(());
     }
-    // What the run has said since the last title, not how often this was offered a turn.
-    let grown = turns.len() as u64;
     let since = crate::cadence::since(scrollback, session, ASKED, grown, at.now)?;
     if !crate::cadence::due(since, every) {
         return Ok(());
     }
     let mut input = String::new();
-    for turn in turns.iter().take(TURNS) {
-        input.push_str(&crate::queue::line(turn, OF_EACH));
-    }
+    let mut taken = 0;
+    scrollback.replay_while(session, 0, |turn| {
+        input.push_str(&crate::queue::line(&turn, OF_EACH));
+        taken += 1;
+        taken < TURNS
+    })?;
     let spec = json!({
         "kind": "retitle", "role": "summary", "fallback": "skip",
         "instruction": INSTRUCTION, "input": input, "max_tokens": 200,
@@ -84,8 +86,9 @@ pub(crate) fn settle(
     let Some(said) = json_in(text) else {
         return Ok(false);
     };
-    let Some(title) = said["title"]
-        .as_str()
+    let Some(title) = said
+        .get("title")
+        .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|t| !t.is_empty())
     else {

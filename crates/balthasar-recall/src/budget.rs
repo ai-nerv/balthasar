@@ -78,15 +78,21 @@ pub fn fit(text: &str, chars: usize) -> Option<String> {
     if chars < 24 {
         return None;
     }
-    let cut = text[..chars - 1]
-        .rfind(char::is_whitespace)
-        .unwrap_or(chars - 1);
+    let end = text.floor_char_boundary(chars - 1);
+    let cut = text[..end].rfind(char::is_whitespace).unwrap_or(end);
     Some(format!("{}…", text[..cut].trim_end()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_of_wide_characters_is_cut_on_a_character() {
+        let text = "日本語のテキストはとても長いのでここで切る必要があります";
+        let cut = fit(text, 25).expect("room for something");
+        assert!(cut.ends_with('…'), "{cut}");
+    }
 
     #[test]
     fn a_share_is_proportional_to_weight() {

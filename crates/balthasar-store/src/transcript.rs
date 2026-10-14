@@ -1,13 +1,7 @@
-//! The scrollback, kept verbatim.
+//! The scrollback, kept verbatim, in a file of its own beside the memory store.
 //!
-//! A separate file from the memory store: a transcript is roughly three orders of magnitude
-//! larger than the memories distilled from it, is append-mostly, and is pruned by age rather
-//! than by decay.
-//!
-//! This is the system of record, so the store is opened with `synchronous = FULL` — every commit
-//! is on the platter before it is acknowledged. What a turn holds is opaque: balthasar keeps the
-//! harness's own record as a string it never parses, alongside a small projection it does
-//! understand.
+//! The system of record: opened with `synchronous = FULL`. A turn's `raw` is the harness's own
+//! record, kept as a string and never parsed, beside a small projection balthasar understands.
 
 use crate::StoreError;
 use balthasar_model::{SessionId, Timestamp};
@@ -211,16 +205,15 @@ impl Transcript {
     /// Open the scrollback at `path`, creating it if need be. `synchronous = FULL` rather than
     /// the WAL default of `NORMAL`, which can lose the last transactions to a power cut.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(parent.to_owned(), e))?;
-        }
+        crate::private::before_open(path)?;
         let connection = Connection::open(path)?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         // The scrollback holds whatever was pasted into it verbatim, which makes it the most
         // likely place for a secret to be sitting. A freed page SQLite has not zeroed keeps it.
         connection.pragma_update(None, "secure_delete", true)?;
-        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        crate::private::tighten(path)?;
         prepare(&connection)?;
         Ok(Self {
             connection,
@@ -275,57 +268,6 @@ impl Transcript {
         Ok(())
     }
 
-    /// Write one turn, or revise the one already at that cursor.
-    ///
-    /// Revising is ordinary: a tool call is written when it is made and written again when its
-    /// result arrives. Durable on return.
-    pub fn write(&mut self, session: &SessionId, turn: &Turn) -> Result<(), StoreError> {
-        self.connection.execute(
-            "INSERT INTO turn \
-             (session, cursor, at, role, kind, text, tool, raw, entry, tokens, pinned, \
-              ok, ms, args, revisions, grp, stub, handle, keep, error) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, \
-                     ?15, ?16, ?17, ?18, ?19) \
-             ON CONFLICT(session, cursor) DO UPDATE SET \
-               at = ?3, role = ?4, kind = ?5, text = ?6, tool = ?7, raw = ?8, entry = ?9, \
-               tokens = ?10, pinned = ?11, ok = ?12, ms = ?13, args = ?14, \
-               grp = ?15, stub = ?16, handle = ?17, keep = ?18, error = ?19, \
-               revisions = revisions + 1",
-            params![
-                session.as_str(),
-                turn.cursor as i64,
-                turn.at,
-                turn.role,
-                turn.kind,
-                turn.text,
-                turn.tool,
-                turn.raw,
-                turn.entry,
-                turn.tokens,
-                i64::from(turn.pinned),
-                turn.ok,
-                turn.ms.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
-                turn.args,
-                turn.group.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
-                turn.stub,
-                turn.handle,
-                i64::from(turn.keep),
-                i64::from(turn.error),
-            ],
-        )?;
-        self.connection.execute(
-            "DELETE FROM turn_fts WHERE session = ?1 AND cursor = ?2",
-            params![session.as_str(), turn.cursor as i64],
-        )?;
-        if !turn.text.trim().is_empty() {
-            self.connection.execute(
-                "INSERT INTO turn_fts (text, session, cursor) VALUES (?1, ?2, ?3)",
-                params![turn.text, session.as_str(), turn.cursor as i64],
-            )?;
-        }
-        Ok(())
-    }
-
     /// Everything a run said, in order. Answers the turns as they finally stood, not as they
     /// were first written — a tool call comes back with its result.
     pub fn replay(&self, session: &SessionId) -> Result<Vec<Turn>, StoreError> {
@@ -336,6 +278,38 @@ impl Transcript {
             .query_map(params![session.as_str()], read)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(found)
+    }
+
+    /// The turns from `from` on, in order, handed one at a time to `take` until it says stop.
+    ///
+    /// Stepped rather than collected, so what is not taken is not read.
+    pub fn replay_while(
+        &self,
+        session: &SessionId,
+        from: u64,
+        mut take: impl FnMut(Turn) -> bool,
+    ) -> Result<(), StoreError> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {COLUMNS} FROM turn WHERE session = ?1 AND cursor >= ?2 ORDER BY cursor"
+        ))?;
+        let floor = i64::try_from(from).unwrap_or(i64::MAX);
+        let mut rows = statement.query(params![session.as_str(), floor])?;
+        while let Some(row) = rows.next()? {
+            if !take(read(row)?) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// How many turns a run holds.
+    pub fn count(&self, session: &SessionId) -> Result<u64, StoreError> {
+        let held: i64 = self.connection.query_row(
+            "SELECT count(*) FROM turn WHERE session = ?1",
+            params![session.as_str()],
+            |r| r.get(0),
+        )?;
+        Ok(held.max(0) as u64)
     }
 
     /// One turn, for quoting.
@@ -517,8 +491,27 @@ const ADDED: &[(&str, &str)] = &[
     ("error", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
-/// Create what is missing and bring an older file forward.
+/// Create what is missing and bring an older file forward, but only when the file was last
+/// prepared for a different schema: an open that changes nothing takes no write lock.
 fn prepare(connection: &Connection) -> Result<(), StoreError> {
+    let wanted = fingerprint();
+    let held: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if held == wanted {
+        return Ok(());
+    }
+    let tx =
+        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)?;
+    let held: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if held != wanted {
+        build(&tx)?;
+        tx.pragma_update(None, "user_version", wanted)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Every table and column the scrollback holds, created where missing.
+fn build(connection: &Connection) -> Result<(), StoreError> {
     connection.execute_batch(SCHEMA)?;
     let mut statement = connection.prepare("SELECT name FROM pragma_table_info('turn')")?;
     let held = statement
@@ -536,6 +529,32 @@ fn prepare(connection: &Connection) -> Result<(), StoreError> {
     connection.execute_batch(crate::generation::SCHEMA)?;
     crate::notes::prepare(connection)?;
     Ok(())
+}
+
+/// A positive 31-bit digest of everything [`build`] declares, kept as the file's `user_version`.
+fn fingerprint() -> i64 {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    for part in [
+        SCHEMA,
+        crate::laying::SCHEMA,
+        crate::jobs::SCHEMA,
+        crate::effects::SCHEMA,
+        crate::extraction::SCHEMA,
+        crate::generation::SCHEMA,
+        crate::notes::SCHEMA,
+    ] {
+        digest.update(part.as_bytes());
+    }
+    for (name, declared) in ADDED.iter().chain(crate::effects::ADDED) {
+        digest.update(format!("{name} {declared};").as_bytes());
+    }
+    for (table, name, declared) in crate::notes::ADDED {
+        digest.update(format!("{table}.{name} {declared};").as_bytes());
+    }
+    let bytes: [u8; 32] = digest.finalize().into();
+    let [a, b, c, d, ..] = bytes;
+    i64::from(u32::from_be_bytes([a, b, c, d]) & 0x7fff_ffff) | 1
 }
 
 /// The scrollback, as first written. Columns added later are in [`ADDED`] as well, so a file
@@ -605,6 +624,44 @@ CREATE TABLE IF NOT EXISTS turn (
   PRIMARY KEY (session, cursor)
 ) STRICT;
 
+-- Every earlier revision of a turn, kept when it is amended rather than lost to the overwrite.
+CREATE TABLE IF NOT EXISTS turn_revision (
+  session    TEXT NOT NULL,
+  cursor     INTEGER NOT NULL,
+  at         INTEGER NOT NULL,
+  role       TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  text       TEXT NOT NULL DEFAULT '',
+  tool       TEXT,
+  raw        TEXT,
+  entry      TEXT,
+  tokens     INTEGER,
+  state      TEXT NOT NULL DEFAULT 'live',
+  pinned     INTEGER NOT NULL DEFAULT 0,
+  ok         INTEGER,
+  ms         INTEGER,
+  args       TEXT,
+  revisions  INTEGER NOT NULL,
+  grp        INTEGER,
+  stub       TEXT,
+  handle     TEXT,
+  keep       INTEGER NOT NULL DEFAULT 0,
+  error      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (session, cursor, revisions)
+) STRICT;
+
+-- What was noticed at a cursor and is not a turn: a permission, a retry, a compaction. Its own
+-- space, so a trace sent at an entry's cursor never takes the entry's place.
+CREATE TABLE IF NOT EXISTS trace (
+  session  TEXT NOT NULL,
+  cursor   INTEGER NOT NULL,
+  seq      INTEGER NOT NULL,
+  at       INTEGER NOT NULL,
+  kind     TEXT NOT NULL,
+  text     TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (session, cursor, seq)
+) STRICT;
+
 CREATE INDEX IF NOT EXISTS turn_of ON turn(session, cursor);
 CREATE INDEX IF NOT EXISTS turn_live ON turn(session, state, cursor);
 CREATE INDEX IF NOT EXISTS turn_entry ON turn(session, entry) WHERE entry IS NOT NULL;
@@ -623,176 +680,4 @@ CREATE VIRTUAL TABLE IF NOT EXISTS turn_fts USING fts5(
 "#;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_turn_occupies_one_place_in_one_run() {
-        // Keyed on (session, cursor): a re-sent turn corrects what was said rather than adding one.
-        let mut held = Transcript::ephemeral().expect("a transcript");
-        let session = SessionId::new("s");
-        held.write(&session, &turn(7, "first")).expect("first");
-        held.write(&session, &turn(7, "corrected")).expect("again");
-        let back = held.replay(&session).expect("replay");
-        assert_eq!(back.len(), 1);
-        assert_eq!(back[0].text, "corrected");
-    }
-
-    fn turn(cursor: u64, text: &str) -> Turn {
-        Turn {
-            cursor,
-            at: 1_756_000_000,
-            role: "user".into(),
-            kind: "prose".into(),
-            text: text.to_owned(),
-            raw: Some(format!(r#"{{"type":"user","text":{text:?}}}"#)),
-            ..Turn::default()
-        }
-    }
-
-    fn held() -> Transcript {
-        Transcript::ephemeral().expect("a scrollback")
-    }
-
-    #[test]
-    fn a_run_comes_back_in_the_order_it_was_said() {
-        let mut t = held();
-        let s = SessionId::new("s1");
-        for cursor in [2, 0, 1] {
-            t.write(&s, &turn(cursor, &format!("turn {cursor}")))
-                .expect("write");
-        }
-        let cursors: Vec<u64> = t
-            .replay(&s)
-            .expect("replay")
-            .iter()
-            .map(|t| t.cursor)
-            .collect();
-        assert_eq!(cursors, [0, 1, 2]);
-    }
-
-    #[test]
-    fn the_same_thing_said_twice_is_two_turns() {
-        // The memory store deduplicates within a session; two identical turns here are two turns.
-        let mut t = held();
-        let s = SessionId::new("s1");
-        t.write(&s, &turn(0, "carry on")).expect("write");
-        t.write(&s, &turn(1, "carry on")).expect("write");
-        assert_eq!(t.replay(&s).expect("replay").len(), 2);
-    }
-
-    #[test]
-    fn a_turn_can_be_revised_where_it_stands() {
-        let mut t = held();
-        let s = SessionId::new("s1");
-        t.write(&s, &turn(0, "running")).expect("write");
-        t.write(&s, &turn(0, "done")).expect("revise");
-
-        let back = t.replay(&s).expect("replay");
-        assert_eq!(back.len(), 1, "a revision is not a second turn");
-        assert_eq!(back[0].text, "done");
-        assert_eq!(back[0].revisions, 1, "and it is visible that it happened");
-    }
-
-    #[test]
-    fn what_a_harness_wrote_comes_back_untouched() {
-        let mut t = held();
-        let s = SessionId::new("s1");
-        let raw = r#"{"type":"tool","id":"t1","name":"shell","result":{"output":"ok"}}"#;
-        t.write(
-            &s,
-            &Turn {
-                raw: Some(raw.to_owned()),
-                ..turn(0, "")
-            },
-        )
-        .expect("write");
-        assert_eq!(t.replay(&s).expect("replay")[0].raw.as_deref(), Some(raw));
-    }
-
-    #[test]
-    fn a_resuming_harness_is_told_where_it_was() {
-        let mut t = held();
-        let s = SessionId::new("s1");
-        assert_eq!(t.next_cursor(&s).expect("next"), 0, "nothing yet");
-        t.write(&s, &turn(0, "a")).expect("write");
-        t.write(&s, &turn(7, "b")).expect("write");
-        assert_eq!(t.next_cursor(&s).expect("next"), 8);
-    }
-
-    #[test]
-    fn one_turn_can_be_fetched_for_quoting() {
-        let mut t = held();
-        let s = SessionId::new("s1");
-        t.write(&s, &turn(3, "the deploy target is fly.io"))
-            .expect("write");
-        let one = t.at(&s, 3).expect("at").expect("there");
-        assert_eq!(one.text, "the deploy target is fly.io");
-        assert!(t.at(&s, 99).expect("at").is_none());
-    }
-
-    #[test]
-    fn two_runs_keep_separate_scrollbacks() {
-        let mut t = held();
-        t.write(&SessionId::new("a"), &turn(0, "one"))
-            .expect("write");
-        t.write(&SessionId::new("b"), &turn(0, "two"))
-            .expect("write");
-        assert_eq!(t.replay(&SessionId::new("a")).expect("replay").len(), 1);
-        assert_eq!(
-            t.replay(&SessionId::new("b")).expect("replay")[0].text,
-            "two"
-        );
-    }
-
-    #[test]
-    fn a_run_is_opened_once_however_often_it_reconnects() {
-        let mut t = held();
-        let s = SessionId::new("s1");
-        for _ in 0..3 {
-            t.open_run(&s, "/w/thing", "/w/thing", "harness", 100)
-                .expect("open");
-        }
-        assert_eq!(t.runs(10).expect("runs").len(), 1);
-    }
-
-    #[test]
-    fn a_run_says_how_much_it_holds() {
-        let mut t = held();
-        let s = SessionId::new("s1");
-        t.open_run(&s, "/w/thing", "/w/thing", "harness", 100)
-            .expect("open");
-        for cursor in 0..4 {
-            t.write(&s, &turn(cursor, "x")).expect("write");
-        }
-        assert_eq!(t.runs(10).expect("runs")[0].turns, 4);
-        assert_eq!(t.census().expect("census"), (1, 4));
-    }
-
-    #[test]
-    fn a_model_told_before_its_run_opens_is_kept() {
-        let mut t = held();
-        let s = SessionId::new("s1");
-        t.note_model(&s, "deepseek/v3.2", 163_840).expect("told");
-        t.open_run(&s, "/w/thing", "/w/thing", "harness", 100)
-            .expect("open");
-        assert_eq!(
-            t.model_of(&s).expect("read"),
-            Some(("deepseek/v3.2".to_owned(), 163_840))
-        );
-    }
-
-    #[test]
-    fn the_scrollback_lives_beside_the_memory_but_not_in_it() {
-        let scope = balthasar_model::ScopeId::new("/w/thing");
-        let memory = crate::scope_path(&scope, &crate::Tool::default());
-        let scrollback = transcript_path(&scope, &crate::Tool::default());
-        assert_ne!(memory, scrollback);
-        assert_eq!(memory.parent(), scrollback.parent());
-        assert!(
-            scrollback.to_string_lossy().ends_with("-transcript.db"),
-            "{}",
-            scrollback.display()
-        );
-    }
-}
+mod tests;

@@ -42,7 +42,16 @@ pub fn applied(at: &mut Answering<'_>, request: &Request) -> Reply {
         return Reply::refused("applied needs the layout's id");
     };
     match crate::applying::confirm(at, &session, id, said.and_then(|s| s.get("usage"))) {
-        Ok(()) => Reply::none(),
+        Ok(()) => {
+            // Layouts long since sent go; one that cannot be pruned now is pruned next time.
+            if let Some(scrollback) = at.scrollback.as_ref() {
+                let before = at.now.saturating_sub(balthasar_store::LAYOUT_KEPT);
+                if let Err(why) = balthasar_store::prune_layouts(scrollback, before) {
+                    balthasar_model::noted!("applied: pruning old layouts failed: {why}");
+                }
+            }
+            Reply::none()
+        }
         Err(why) => Reply::refused(why.to_string()),
     }
 }
@@ -192,9 +201,10 @@ fn lay_out(
         crate::preparing::at_boundary(at, session, Some(u64::from(laid.budget.conversation)))
             .map_err(e)?;
     }
-    let curating = known
-        .iter()
-        .any(|job| job.kind == "curate" && job.context["mark"].as_str() == Some(&prompt.mark));
+    let curating = known.iter().any(|job| {
+        job.kind == "curate"
+            && job.context.get("mark").and_then(Value::as_str) == Some(&prompt.mark)
+    });
     if ask.round == 0
         && !curating
         && !query.trim().is_empty()
@@ -221,7 +231,9 @@ fn lay_out(
             vec![match slot {
                 Slot::Pinned => unreachable!("project notes are expanded above"),
                 Slot::Summary => {
-                    let s = summary.as_ref().expect("a summary slot has a summary");
+                    let Some(s) = summary.as_ref() else {
+                        return Vec::new();
+                    };
                     json!({ "kind": "summary", "text": s.text, "covers": [s.from, s.to],
                         "tokens": fix(rules.estimate(&s.text)) })
                 }
@@ -263,7 +275,7 @@ fn lay_out(
         .keep_prompt(session, &prompt)
         .map_err(|e| e.to_string())?;
     let mut body = body;
-    body["id"] = json!(id);
+    crate::queue::set(&mut body, "id", json!(id));
     Ok(body)
 }
 
@@ -434,8 +446,9 @@ fn by_policy(
     laid.warned = slots.contains(&Slot::Note);
     laid.slots = slots;
     balthasar_buffer::account(laid, rows, held, factor);
-    laid.why = said["why"]
-        .as_str()
+    laid.why = said
+        .get("why")
+        .and_then(Value::as_str)
         .unwrap_or("laid out by the configured policy")
         .to_owned();
 }
@@ -508,8 +521,8 @@ fn policy_slots(
         if unit(slot).is_some() {
             continue;
         }
-        let before = out[..index].iter().rev().find_map(unit);
-        let after = out[index + 1..].iter().find_map(unit);
+        let before = out.iter().take(index).rev().find_map(unit);
+        let after = out.iter().skip(index + 1).find_map(unit);
         if before.is_some() && before == after {
             return None;
         }
@@ -540,8 +553,15 @@ fn tighten(
         .measured(&proposal.model)
         .map_err(e)?
         .map_or(1.0, |m| m.0);
-    let window = proposal.body["budget"]["window"].as_u64().unwrap_or(0);
-    let reply = proposal.body["budget"]["reply"].as_u64().unwrap_or(0);
+    let budget = |field: &str| {
+        proposal
+            .body
+            .get("budget")
+            .and_then(|budget| budget.get(field))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    let (window, reply) = (budget("window"), budget("reply"));
     let next = counted_in(message, &[window, reply])
         .map(|n| n as f64 / proposal.estimated.max(1) as f64)
         .filter(|f| *f > old)

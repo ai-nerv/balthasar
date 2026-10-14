@@ -40,7 +40,13 @@ pub(crate) fn confirm(
         }
         let run = scrollback.run_of(session)?;
         let outline = scrollback.outline(session)?;
-        for slot in proposal.body["slots"].as_array().into_iter().flatten() {
+        for slot in proposal
+            .body
+            .get("slots")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             match slot["kind"].as_str() {
                 Some("stub") => {
                     if let Some(cursor) = slot["cursor"].as_u64() {
@@ -48,9 +54,10 @@ pub(crate) fn confirm(
                     }
                 }
                 Some("summary") => {
-                    let (Some(from), Some(to)) =
-                        (slot["covers"][0].as_u64(), slot["covers"][1].as_u64())
-                    else {
+                    let (Some(from), Some(to)) = (
+                        slot.pointer("/covers/0").and_then(Value::as_u64),
+                        slot.pointer("/covers/1").and_then(Value::as_u64),
+                    ) else {
                         continue;
                     };
                     for row in &outline {

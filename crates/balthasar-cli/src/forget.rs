@@ -119,9 +119,9 @@ pub fn run(
 
 /// What happened, for a caller that asked in an encoding.
 fn went(what: &str, to: &serde_json::Value) -> serde_json::Value {
-    let mut said = to.clone();
-    said["forgotten"] = serde_json::json!(what);
-    said
+    let mut said = to.as_object().cloned().unwrap_or_default();
+    said.insert("forgotten".to_owned(), serde_json::json!(what));
+    serde_json::Value::Object(said)
 }
 
 /// Archive or purge a whole run.
@@ -139,7 +139,7 @@ fn run_session(
         .map_or_else(|| balthasar_model::SessionId::new(&args.id), |s| s.id);
     let owned = store.owned_by(&session)?;
     let held = scrollback(store_path, scope, tool)?;
-    let turns = held.replay(&session)?.len();
+    let turns = held.count(&session)?;
     // A handle that names no run is a typo, and must not report a successful purge of nothing.
     anyhow::ensure!(
         !owned.is_empty() || turns > 0,

@@ -117,7 +117,8 @@ impl Transcript {
         }
     }
 
-    /// Turns from `from` onwards, stopping at `to` or at the budget.
+    /// Turns from `from` onwards, stopping at `to` or at the budget. Stepped, so what is not
+    /// returned is not read; the rest is counted.
     fn forwards(
         &self,
         session: &SessionId,
@@ -126,19 +127,22 @@ impl Transcript {
         budget: &Budget,
     ) -> Result<Read, StoreError> {
         let ceiling = to.unwrap_or(u64::MAX);
-        let all = self.range(session, from, ceiling)?;
-        let mut turns = Vec::new();
-        let mut tokens = 0;
-        for turn in all.iter() {
-            let cost = tokens_of(turn);
-            // Always take the first, however large: a budget smaller than one turn still gives it.
-            if !turns.is_empty() && (tokens + cost > budget.tokens || turns.len() >= budget.turns) {
-                break;
-            }
-            tokens += cost;
-            turns.push(turn.clone());
-        }
-        let omitted = all.len() - turns.len();
+        let turns = self.stepped(
+            &format!(
+                "SELECT {} FROM turn WHERE session = ?1 AND cursor >= ?2 AND cursor <= ?3 \
+                 ORDER BY cursor",
+                crate::transcript::COLUMNS
+            ),
+            params![session.as_str(), clamp(from), clamp(ceiling)],
+            budget,
+        )?;
+        let tokens = turns.iter().map(tokens_of).sum();
+        let total: i64 = self.db().query_row(
+            "SELECT count(*) FROM turn WHERE session = ?1 AND cursor >= ?2 AND cursor <= ?3",
+            params![session.as_str(), clamp(from), clamp(ceiling)],
+            |r| r.get(0),
+        )?;
+        let omitted = (total.max(0) as usize).saturating_sub(turns.len());
         let next = (omitted > 0).then(|| turns.last().map_or(from, |t| t.cursor + 1));
         Ok(Read {
             turns,
@@ -172,7 +176,8 @@ impl Transcript {
     }
 
     /// The turns either side of one cursor. Grown outward a turn at a time rather than by a fixed
-    /// radius, so a citation surrounded by long turns gets fewer of them.
+    /// radius, so a citation surrounded by long turns gets fewer of them. No more than the turn
+    /// budget is read from either side.
     fn centred(
         &self,
         session: &SessionId,
@@ -187,8 +192,23 @@ impl Transcript {
                 next: None,
             });
         };
-        let before = self.range(session, 0, cursor.saturating_sub(1))?;
-        let after = self.range(session, cursor + 1, u64::MAX)?;
+        let side = |order: &str, op: &str| -> Result<Vec<Turn>, StoreError> {
+            let mut statement = self.db().prepare(&format!(
+                "SELECT {} FROM turn WHERE session = ?1 AND cursor {op} ?2 \
+                 ORDER BY cursor {order} LIMIT ?3",
+                crate::transcript::COLUMNS
+            ))?;
+            let found = statement
+                .query_map(
+                    params![session.as_str(), clamp(cursor), budget.turns as i64],
+                    turn_of,
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(found)
+        };
+        let mut before = side("DESC", "<")?;
+        before.reverse();
+        let after = side("ASC", ">")?;
 
         let mut tokens = tokens_of(&middle);
         let mut taken: std::collections::VecDeque<Turn> = std::collections::VecDeque::new();
@@ -221,43 +241,60 @@ impl Transcript {
             }
         }
 
-        let total = before.len() + 1 + after.len();
+        let total = usize::try_from(self.count(session)?).unwrap_or(usize::MAX);
         Ok(Read {
-            omitted: total - taken.len(),
+            omitted: total.saturating_sub(taken.len()),
             turns: taken.into_iter().collect(),
             tokens,
             next: None,
         })
     }
 
-    /// Turns mentioning every term.
+    /// Turns mentioning every term, found through the search index: each term a word or the
+    /// start of one. At most `MOST_TERMS` terms are used.
     fn matching(
         &self,
         session: &SessionId,
         terms: &[String],
         budget: &Budget,
     ) -> Result<Read, StoreError> {
-        let all = self.range(session, 0, u64::MAX)?;
-        let wanted: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
-        let hits: Vec<&Turn> = all
+        let wanted: Vec<String> = terms
             .iter()
-            .filter(|turn| {
-                let text = turn.text.to_lowercase();
-                !wanted.is_empty() && wanted.iter().all(|term| text.contains(term))
-            })
+            .map(|t| t.to_lowercase().replace('"', " ").trim().to_owned())
+            .filter(|t| !t.is_empty())
+            .take(MOST_TERMS)
+            .map(|t| format!("\"{t}\"*"))
             .collect();
-
-        let mut turns = Vec::new();
-        let mut tokens = 0;
-        for turn in &hits {
-            let cost = tokens_of(turn);
-            if !turns.is_empty() && (tokens + cost > budget.tokens || turns.len() >= budget.turns) {
-                break;
-            }
-            tokens += cost;
-            turns.push((*turn).clone());
+        if wanted.is_empty() {
+            return Ok(Read {
+                turns: Vec::new(),
+                tokens: 0,
+                omitted: 0,
+                next: None,
+            });
         }
-        let omitted = hits.len() - turns.len();
+        let query = wanted.join(" AND ");
+        let columns: Vec<String> = crate::transcript::COLUMNS
+            .split(',')
+            .map(|c| format!("turn.{}", c.trim()))
+            .collect();
+        let turns = self.stepped(
+            &format!(
+                "SELECT {} FROM turn_fts JOIN turn \
+                   ON turn.session = turn_fts.session AND turn.cursor = turn_fts.cursor \
+                 WHERE turn_fts MATCH ?1 AND turn_fts.session = ?2 ORDER BY turn.cursor",
+                columns.join(", ")
+            ),
+            params![query, session.as_str()],
+            budget,
+        )?;
+        let tokens = turns.iter().map(tokens_of).sum();
+        let total: i64 = self.db().query_row(
+            "SELECT count(*) FROM turn_fts WHERE turn_fts MATCH ?1 AND session = ?2",
+            params![query, session.as_str()],
+            |r| r.get(0),
+        )?;
+        let omitted = (total.max(0) as usize).saturating_sub(turns.len());
         let next = (omitted > 0).then(|| turns.last().map_or(0, |t| t.cursor + 1));
         Ok(Read {
             turns,
@@ -265,6 +302,31 @@ impl Transcript {
             omitted,
             next,
         })
+    }
+
+    /// The turns a statement steps through, stopping at the budget. The first is always taken,
+    /// however large: a budget smaller than one turn still gives it.
+    fn stepped(
+        &self,
+        sql: &str,
+        bound: impl rusqlite::Params,
+        budget: &Budget,
+    ) -> Result<Vec<Turn>, StoreError> {
+        let mut statement = self.db().prepare(sql)?;
+        let mut rows = statement.query(bound)?;
+        let mut taken: Vec<Turn> = Vec::new();
+        let mut tokens = 0;
+        while let Some(row) = rows.next()? {
+            let turn = turn_of(row)?;
+            let cost = tokens_of(&turn);
+            let over = tokens + cost > budget.tokens || taken.len() >= budget.turns;
+            if over && !taken.is_empty() {
+                break;
+            }
+            tokens += cost;
+            taken.push(turn);
+        }
+        Ok(taken)
     }
 
     /// Turns at or before `until`, newest first, stopping as soon as the budget is spent.
@@ -276,26 +338,14 @@ impl Transcript {
         until: u64,
         budget: &Budget,
     ) -> Result<Vec<Turn>, StoreError> {
-        let mut statement = self.db().prepare(&format!(
-            "SELECT {} FROM turn WHERE session = ?1 AND cursor <= ?2 ORDER BY cursor DESC",
-            crate::transcript::COLUMNS
-        ))?;
-        let ceiling = i64::try_from(until).unwrap_or(i64::MAX);
-        let rows = statement.query_map(params![session.as_str(), ceiling], turn_of)?;
-
-        let mut taken: Vec<Turn> = Vec::new();
-        let mut tokens = 0;
-        for row in rows {
-            let turn = row?;
-            let cost = tokens_of(&turn);
-            // Always take the first, however large: a budget smaller than one turn still gives it.
-            if !taken.is_empty() && (tokens + cost > budget.tokens || taken.len() >= budget.turns) {
-                break;
-            }
-            tokens += cost;
-            taken.push(turn);
-        }
-        Ok(taken)
+        self.stepped(
+            &format!(
+                "SELECT {} FROM turn WHERE session = ?1 AND cursor <= ?2 ORDER BY cursor DESC",
+                crate::transcript::COLUMNS
+            ),
+            params![session.as_str(), clamp(until)],
+            budget,
+        )
     }
 
     /// How many turns this run has at or before `until`, counted over the cursor index.
@@ -336,21 +386,13 @@ impl Transcript {
         }
         Ok(())
     }
-
-    /// Every turn in a cursor range, in order.
-    fn range(&self, session: &SessionId, from: u64, to: u64) -> Result<Vec<Turn>, StoreError> {
-        let mut statement = self.db().prepare(&format!(
-            "SELECT {} FROM turn WHERE session = ?1 AND cursor >= ?2 AND cursor <= ?3 \
-             ORDER BY cursor",
-            crate::transcript::COLUMNS
-        ))?;
-        // Clamped, because SQLite has no unsigned integer and `u64::MAX as i64` is -1, which
-        // makes `cursor <= ?3` match nothing.
-        let ceiling = i64::try_from(to).unwrap_or(i64::MAX);
-        let floor = i64::try_from(from).unwrap_or(i64::MAX);
-        let rows = statement
-            .query_map(params![session.as_str(), floor, ceiling], turn_of)?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
 }
+
+/// A cursor as SQLite holds it. Clamped, because SQLite has no unsigned integer and
+/// `u64::MAX as i64` is -1, which makes `cursor <= ?` match nothing.
+fn clamp(cursor: u64) -> i64 {
+    i64::try_from(cursor).unwrap_or(i64::MAX)
+}
+
+/// The most terms a `matching` read searches for.
+pub const MOST_TERMS: usize = 32;

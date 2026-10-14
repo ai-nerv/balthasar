@@ -4,6 +4,8 @@
 //! discovery bug there is — a socket in the wrong directory, a lister that only sees its own
 //! host, a name that does not match its file — works perfectly when a tool tests itself.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door};
 use balthasar_ipc::{Listener, Peer, Request};
 use balthasar_model::{ScopeId, floor};
@@ -14,24 +16,22 @@ use std::os::unix::net::UnixStream;
 /// Serve a store on a socket for as long as the returned handle lives.
 struct Serving {
     path: std::path::PathBuf,
-    also: Vec<std::path::PathBuf>,
+    root: std::path::PathBuf,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Serving {
     fn start(name: &str, seed: &[&str]) -> Self {
-        let instance = format!("{name}-{}", std::process::id());
-        let listener = Listener::bind(&instance).expect("bind");
+        // Directories of this test's own, so nothing it leaves reaches the shared runtime one.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir()
+            .join(format!("memory-{}", balthasar_model::runtime::uid()))
+            .join(format!("{name}-{}-{n}", std::process::id()));
+        let dirs = [root.join("m"), root.join("b")];
+        let listener = Listener::bind_in(&dirs, "f").expect("bind");
         let path = listener.path().to_owned();
-        // Every other name it bound. One instance answers under the role's name and under the
-        // program's, and a file left behind under either is one the next instance must disprove.
-        let also: Vec<std::path::PathBuf> = listener
-            .paths()
-            .into_iter()
-            .skip(1)
-            .map(std::path::Path::to_owned)
-            .collect();
 
         let mut store = Store::ephemeral().expect("store");
         for text in seed {
@@ -58,8 +58,14 @@ impl Serving {
         }
 
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let key = balthasar_ipc::Key::read(&mut format!("{KEY}\n").as_bytes())
+            .expect("read")
+            .expect("a key");
+        let guard = balthasar_ipc::Guard::new(key, |verb| {
+            balthasar_host::known(verb).is_some_and(|known| known.writes)
+        });
         let thread = std::thread::spawn(move || {
-            let _ = listener.serve(|peer: &Peer, request: Request| {
+            let _ = listener.serve(guard, |peer: &Peer, request: Request| {
                 let mut at = Answering {
                     store: &mut store,
                     scrollback: None,
@@ -77,7 +83,7 @@ impl Serving {
 
         Self {
             path,
-            also,
+            root,
             stop,
             thread: Some(thread),
         }
@@ -87,21 +93,31 @@ impl Serving {
 impl Drop for Serving {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        // The listener owns the socket file and removes it; the accept loop ends when the
-        // process does. Leaking the thread here is deliberate: a test that joined it would
-        // wait on an accept that never returns.
+        // The accept loop ends when the process does. Leaking the thread here is deliberate: a
+        // test that joined it would wait on an accept that never returns.
         let _ = self.thread.take();
-        let _ = std::fs::remove_file(&self.path);
-        for path in &self.also {
-            let _ = std::fs::remove_file(path);
-        }
+        let _ = std::fs::remove_dir_all(&self.root);
     }
+}
+
+/// The key the socket in these tests is served with.
+const KEY: &str = "5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e";
+
+/// `body` with the key added, unless it already says which key it carries.
+fn keyed(body: &serde_json::Value) -> serde_json::Value {
+    let mut body = body.clone();
+    if let Some(fields) = body.as_object_mut() {
+        fields
+            .entry("key")
+            .or_insert_with(|| serde_json::json!(KEY));
+    }
+    body
 }
 
 /// Speak the wire by hand, the way the stub does.
 fn ask(path: &std::path::Path, body: &serde_json::Value) -> serde_json::Value {
     let mut stream = UnixStream::connect(path).expect("connect");
-    let encoded = serde_json::to_vec(body).expect("encode");
+    let encoded = serde_json::to_vec(&keyed(body)).expect("encode");
     stream
         .write_all(&(encoded.len() as u32).to_be_bytes())
         .expect("length");
@@ -136,7 +152,7 @@ fn one_connection_carries_many_calls() {
     let mut stream = UnixStream::connect(&serving.path).expect("connect");
 
     for verb in ["verbs", "status", "sessions"] {
-        let body = serde_json::json!({ "call": verb }).to_string();
+        let body = keyed(&serde_json::json!({ "call": verb })).to_string();
         stream
             .write_all(&(body.len() as u32).to_be_bytes())
             .expect("length");
@@ -150,6 +166,31 @@ fn one_connection_carries_many_calls() {
         let parsed: serde_json::Value = serde_json::from_slice(&reply).expect("decode");
         assert_eq!(parsed["ok"], serde_json::json!(true), "{verb} failed");
     }
+}
+
+#[test]
+fn a_write_without_the_key_is_refused_and_a_read_without_it_is_answered() {
+    let serving = Serving::start("keyless", &[]);
+    let wrong = KEY.replace('5', "6");
+    for key in [serde_json::Value::Null, serde_json::json!(wrong)] {
+        let reply = ask(
+            &serving.path,
+            &serde_json::json!({
+                "call": "remember", "args": ["an intruder's note"], "key": key,
+            }),
+        );
+        assert_eq!(reply["fault"], "refused", "{reply}");
+        assert_eq!(reply["error"], balthasar_ipc::KEY_REFUSED, "{reply}");
+    }
+    let found = ask(
+        &serving.path,
+        &serde_json::json!({ "call": "recall", "args": ["intruder"], "key": null }),
+    );
+    assert_eq!(found["ok"], true, "a read needs no key: {found}");
+    assert_eq!(
+        found["n"], 0,
+        "nothing the refused calls said was kept: {found}"
+    );
 }
 
 #[test]

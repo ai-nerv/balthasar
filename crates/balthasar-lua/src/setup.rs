@@ -179,7 +179,19 @@ pub fn needs() -> Vec<Need> {
 /// # Errors
 /// When the chunk will not compile or raises.
 pub fn configure(source: &str) -> Result<Applied, LuaError> {
-    configure_into(&given(), source)
+    let applied = evaluate(source)?;
+    if applied.whole() {
+        let Some(path) = given() else {
+            return Err(LuaError::Io {
+                file: GIVEN.to_owned(),
+                source: std::io::Error::other(
+                    "names no directory, so there is nowhere to keep what was said",
+                ),
+            });
+        };
+        remember(&path, source)?;
+    }
+    Ok(applied)
 }
 
 /// The same, kept somewhere named. The path is a parameter so a test can own one.
@@ -187,6 +199,15 @@ pub fn configure(source: &str) -> Result<Applied, LuaError> {
 /// # Errors
 /// As [`configure`].
 pub fn configure_into(path: &std::path::Path, source: &str) -> Result<Applied, LuaError> {
+    let applied = evaluate(source)?;
+    if applied.whole() {
+        remember(path, source)?;
+    }
+    Ok(applied)
+}
+
+/// Run a chunk in a VM of its own, and say which settings it set and which it was refused.
+fn evaluate(source: &str) -> Result<Applied, LuaError> {
     let mut engine = Engine::new();
     // What the VM holds before the chunk runs; the difference is what the coordinator said.
     engine.harvest();
@@ -218,10 +239,6 @@ pub fn configure_into(path: &std::path::Path, source: &str) -> Result<Applied, L
             });
         }
     }
-
-    if applied.whole() {
-        remember(path, source)?;
-    }
     Ok(applied)
 }
 
@@ -233,38 +250,49 @@ fn held(config: &Config) -> serde_json::Map<String, serde_json::Value> {
 /// Names the directory a coordinator keeps one session's configuration in.
 pub const GIVEN: &str = "NERV_GIVEN";
 
-/// Where configuration sent by a coordinator is kept: the runtime directory, not `config/`.
+/// Where configuration sent by a coordinator is kept: `<NERV_GIVEN>/balthasar.lua`, and nowhere
+/// when the coordinator named no directory. There is no shared fallback.
 #[must_use]
-pub fn given() -> std::path::PathBuf {
-    given_from(std::env::var_os(GIVEN), std::env::var_os("XDG_RUNTIME_DIR"))
+pub fn given() -> Option<std::path::PathBuf> {
+    given_from(std::env::var_os(GIVEN))
 }
 
-/// The same, from what the environment said. One file per session when the coordinator names a
-/// directory: one per machine let a session's thresholds outlive it and govern the next.
-fn given_from(
-    session: Option<std::ffi::OsString>,
-    runtime: Option<std::ffi::OsString>,
-) -> std::path::PathBuf {
-    if let Some(dir) = session.filter(|dir| !dir.is_empty()) {
-        return std::path::PathBuf::from(dir).join("balthasar.lua");
-    }
-    let base = runtime
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("balthasar").join("given.lua")
+/// The same, from what the environment said.
+fn given_from(session: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    session
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| std::path::PathBuf::from(dir).join("balthasar.lua"))
 }
 
+/// Keep `source` at `path`, in a directory of this uid's alone, never through a symlink.
 fn remember(path: &std::path::Path, source: &str) -> Result<(), LuaError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| LuaError::Io {
-            file: path.display().to_string(),
-            source,
-        })?;
-    }
-    std::fs::write(path, source).map_err(|source| LuaError::Io {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let failed = |source| LuaError::Io {
         file: path.display().to_string(),
         source,
-    })
+    };
+    if let Some(parent) = path.parent() {
+        balthasar_model::runtime::private_dir(parent).map_err(failed)?;
+    }
+    // Written new beside it and renamed over it: neither step follows a symlink in its place.
+    let mut fresh = path.as_os_str().to_owned();
+    fresh.push(format!(".{}.new", std::process::id()));
+    let fresh = std::path::PathBuf::from(fresh);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&fresh)
+        .map_err(failed)?;
+    let written = file
+        .write_all(source.as_bytes())
+        .and_then(|()| file.sync_all())
+        .and_then(|()| std::fs::rename(&fresh, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&fresh);
+    }
+    written.map_err(failed)
 }
 
 /// Forget what a coordinator said, so a restart reads the files again.
@@ -272,7 +300,7 @@ fn remember(path: &std::path::Path, source: &str) -> Result<(), LuaError> {
 /// # Errors
 /// When the file is there and will not go. Nothing to forget is not a failure.
 pub fn forget() -> Result<(), LuaError> {
-    forget_from(&given())
+    given().map_or(Ok(()), |path| forget_from(&path))
 }
 
 /// The half that does not read the environment, so a test can exercise it.
@@ -298,24 +326,59 @@ mod tests {
     #[test]
     fn a_session_that_names_a_directory_keeps_its_own_configuration() {
         let dir = Scratch::new("balthasar-setup", "session-directory");
-        let runtime = dir.join("run");
-        let configured = runtime.join("coordinator/given/42");
-        let own = given_from(
-            Some(configured.clone().into_os_string()),
-            Some(runtime.clone().into_os_string()),
-        );
-        assert_eq!(own, configured.join("balthasar.lua"));
+        let configured = dir.join("coordinator/given/42");
+        let own = given_from(Some(configured.clone().into_os_string()));
+        assert_eq!(own, Some(configured.join("balthasar.lua")));
+    }
+
+    #[test]
+    fn a_coordinator_that_names_no_directory_has_no_shared_file_to_fall_back_on() {
         for unnamed in [None, Some(std::ffi::OsString::new())] {
-            assert_eq!(
-                given_from(unnamed, Some(runtime.clone().into_os_string())),
-                runtime.join("balthasar/given.lua")
-            );
+            assert_eq!(given_from(unnamed), None);
         }
+    }
+
+    #[test]
+    fn a_symlink_planted_where_the_file_goes_is_replaced_not_followed() {
+        let dir = Scratch::new("balthasar-setup", "planted");
+        let victim = dir.join("victim");
+        std::fs::write(&victim, "untouched").expect("write");
+        let path = dir.join("given/balthasar.lua");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::set_permissions(
+            path.parent().expect("parent"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .expect("chmod");
+        std::os::unix::fs::symlink(&victim, &path).expect("plant");
+        configure_into(&path, "balthasar.hold_floor = 0.4").expect("kept");
+        assert_eq!(std::fs::read_to_string(&victim).expect("read"), "untouched");
+        assert!(
+            !std::fs::symlink_metadata(&path)
+                .expect("there")
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn what_was_given_is_the_owners_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = Scratch::new("balthasar-setup", "modes");
+        let path = dir.join("given/balthasar.lua");
+        configure_into(&path, "balthasar.hold_floor = 0.4").expect("kept");
+        let mode = |p: &std::path::Path| std::fs::metadata(p).expect("there").permissions().mode();
+        assert_eq!(mode(&path) & 0o777, 0o600);
+        assert_eq!(mode(&dir.join("given")) & 0o777, 0o700);
     }
 
     /// A place of this test's own, so tests running together do not delete each other's.
     fn mine(name: &str) -> ScratchFile {
-        Scratch::file("balthasar-setup", name, "given.lua")
+        use std::os::unix::fs::PermissionsExt;
+        let file = Scratch::file("balthasar-setup", name, "given.lua");
+        let dir = file.parent().expect("a parent");
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        file
     }
 
     #[test]

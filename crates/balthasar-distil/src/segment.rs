@@ -177,8 +177,8 @@ fn signals(turns: &[Observation], rules: &Rules) -> Vec<Boundary> {
         why: "the run began".to_owned(),
     }];
 
-    for (at, turn) in turns.iter().enumerate().skip(1) {
-        let previous = &turns[at - 1];
+    for (at, (previous, turn)) in turns.iter().zip(turns.iter().skip(1)).enumerate() {
+        let at = at + 1;
         let cursor = cursor_of(turns, at);
 
         if let Some(marker) = phase_marker(turn) {
@@ -331,7 +331,10 @@ fn opening(cursor: u64, when: Timestamp, before: Boundary) -> Segment {
 
 /// The cursor a turn carries, or its position when the harness sent none.
 fn cursor_of(turns: &[Observation], at: usize) -> u64 {
-    turns[at].cursor.unwrap_or(at as u64)
+    turns
+        .get(at)
+        .and_then(|turn| turn.cursor)
+        .unwrap_or(at as u64)
 }
 
 /// A phase the caller named for itself.

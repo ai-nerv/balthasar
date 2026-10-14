@@ -1,5 +1,7 @@
 //! `layout`, `applied` and `overflowed`, end to end through the door.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, Hooks, answer_hooked};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{ScopeId, SessionId, floor};
@@ -410,6 +412,7 @@ fn a_rule_a_session_proposed_to_itself_is_not_laid_into_the_next_prompt() {
         pid: 4021,
         uid: 1000,
         program: Some("harness".to_owned()),
+        agent: None,
     });
     let mut harness = Harness::new();
     for text in [
@@ -460,6 +463,7 @@ fn a_helper_rewriting_a_doubted_memory_does_not_rewrite_the_doubt_away() {
         pid: 4021,
         uid: 1000,
         program: Some("harness".to_owned()),
+        agent: None,
     });
     let mut harness = Harness::new();
     let fact = "The zq_ storage module keeps its index in index.db.";

@@ -1,5 +1,7 @@
 //! The scrollback, as a harness with no journal of its own would use it.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, answer};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{ScopeId, floor};
@@ -249,7 +251,7 @@ fn a_host_with_no_scrollback_says_so_rather_than_pretending() {
             &Door::Owner,
             &Request {
                 call: verb.to_owned(),
-                args: vec![serde_json::json!(S), serde_json::json!({})],
+                args: vec![serde_json::json!(S), serde_json::json!({ "cursor": 0 })],
             },
         );
         assert!(!reply.ok, "'{verb}' must refuse rather than answer emptily");
@@ -360,13 +362,15 @@ fn amending_a_cursor_returns_only_the_final_state() {
     // owes it once.
     let mut held = Held::new();
     for n in 0..4 {
-        held.ask(
-            "observe",
+        let verb = if n == 0 { "observe" } else { "amend" };
+        let said = held.ask(
+            verb,
             vec![
                 serde_json::json!(S),
                 carrying(3, NOW, &format!("{{\"grown\":{n}}}")),
             ],
         );
+        assert!(said.ok, "{verb}: {:?}", said.error);
     }
     let turns = Held::rows(&held.ask("replay", vec![serde_json::json!(S)]));
     assert_eq!(turns.len(), 1, "one cursor, one turn");
@@ -375,6 +379,90 @@ fn amending_a_cursor_returns_only_the_final_state() {
         "{\"grown\":3}",
         "the second write wins, and the fourth wins over that"
     );
+    let kept = held
+        .scrollback
+        .revisions_of(&balthasar_model::SessionId::new(S), 3)
+        .expect("revisions");
+    let raws: Vec<_> = kept.iter().filter_map(|t| t.raw.clone()).collect();
+    assert_eq!(
+        raws,
+        ["{\"grown\":0}", "{\"grown\":1}", "{\"grown\":2}"],
+        "every earlier revision is kept"
+    );
+}
+
+#[test]
+fn observing_a_cursor_twice_is_a_retry_or_a_refusal_never_an_overwrite() {
+    let mut held = Held::new();
+    let first = carrying(5, NOW, "{\"said\":\"first\"}");
+    for _ in 0..2 {
+        let said = held.ask("observe", vec![serde_json::json!(S), first.clone()]);
+        assert!(said.ok, "the same turn again is a retry: {:?}", said.error);
+    }
+    let other = held.ask(
+        "observe",
+        vec![
+            serde_json::json!(S),
+            carrying(5, NOW, "{\"said\":\"other\"}"),
+        ],
+    );
+    assert_eq!(other.fault, Some(balthasar_ipc::Fault::Refused));
+    assert_eq!(
+        other.error.as_deref(),
+        Some("cursor 5 already holds a different turn")
+    );
+    let turns = Held::rows(&held.ask("replay", vec![serde_json::json!(S)]));
+    assert_eq!(turns[0]["raw"], "{\"said\":\"first\"}");
+    assert_eq!(turns[0]["revisions"], 0);
+}
+
+#[test]
+fn a_cursor_that_is_missing_negative_or_not_whole_is_refused() {
+    let mut held = Held::new();
+    for cursor in [
+        serde_json::Value::Null,
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!("3"),
+    ] {
+        for verb in ["observe", "amend"] {
+            let mut turn = carrying(0, NOW, "{}");
+            turn["cursor"] = cursor.clone();
+            let said = held.ask(verb, vec![serde_json::json!(S), turn]);
+            assert_eq!(
+                said.fault,
+                Some(balthasar_ipc::Fault::Refused),
+                "{verb} {cursor}"
+            );
+        }
+    }
+    assert!(Held::rows(&held.ask("replay", vec![serde_json::json!(S)])).is_empty());
+}
+
+#[test]
+fn a_trace_at_an_entrys_cursor_leaves_the_entry_and_its_raw_alone() {
+    let mut held = Held::new();
+    let entry = carrying(2, NOW, "{\"entry\":\"tool call\"}");
+    assert!(held.ask("observe", vec![serde_json::json!(S), entry]).ok);
+    for text in ["allowed: rm -rf build", "retried once"] {
+        let trace = serde_json::json!({
+            "cursor": 2, "role": "trace", "kind": "permission", "text": text,
+        });
+        let said = held.ask("observe", vec![serde_json::json!(S), trace]);
+        assert!(said.ok, "{:?}", said.error);
+    }
+    let turns = Held::rows(&held.ask("replay", vec![serde_json::json!(S)]));
+    assert_eq!(turns.len(), 1, "a trace is not a turn");
+    assert_eq!(turns[0]["raw"], "{\"entry\":\"tool call\"}");
+
+    let read = Held::value(&held.ask(
+        "scroll",
+        vec![serde_json::json!(S), serde_json::json!({ "want": "tail" })],
+    ));
+    let traces = read["traces"].as_array().expect("traces");
+    assert_eq!(traces.len(), 2, "{read}");
+    assert_eq!(traces[0]["text"], "allowed: rm -rf build");
+    assert_eq!(traces[1]["seq"], 1);
 }
 
 #[test]
@@ -523,4 +611,94 @@ fn reading_history_back_carries_what_was_said_and_not_the_harnesses_own_record()
     // And restoring a session still gets it, whole.
     let replayed = Held::rows(&held.ask("replay", vec![serde_json::json!(S)]));
     assert!(replayed[0]["raw"].as_str().expect("raw").len() > 4000);
+}
+
+#[test]
+fn a_row_too_large_for_any_frame_comes_back_truncated_and_the_next_page_follows_it() {
+    let mut held = Held::new();
+    let huge = "z".repeat(balthasar_ipc::MAX_FRAME + 1024);
+    for (cursor, text) in [(0, "small"), (1, huge.as_str()), (2, "after")] {
+        let raw = serde_json::json!({ "type": "user" });
+        let said = held.ask(
+            "observe",
+            vec![serde_json::json!(S), turn(cursor, "user", text, raw)],
+        );
+        assert!(said.ok, "{:?}", said.error);
+    }
+    let page = |held: &mut Held, from: u64| {
+        Held::rows(&held.ask(
+            "replay",
+            vec![
+                serde_json::json!(S),
+                serde_json::json!({ "from": from, "bytes": 4 * 1024 * 1024 }),
+            ],
+        ))
+    };
+    assert_eq!(
+        page(&mut held, 0).len(),
+        1,
+        "the huge row is not taken after another"
+    );
+    let cut = page(&mut held, 1);
+    assert_eq!(cut.len(), 1);
+    assert_eq!(cut[0]["cursor"], 1);
+    assert_eq!(cut[0]["truncated"], true, "marked so a reader can tell");
+    assert!(cut[0].to_string().len() <= balthasar_ipc::MAX_FRAME);
+    let record = r#"{"type":"user"}"#;
+    assert_eq!(
+        cut[0]["raw_bytes"],
+        record.len(),
+        "and how much raw it left out"
+    );
+    let raw = Held::rows(&held.ask(
+        "replay",
+        vec![
+            serde_json::json!(S),
+            serde_json::json!({ "from": 1, "raw": 0 }),
+        ],
+    ));
+    assert_eq!(raw[0]["raw"], record, "which is read back after it");
+    assert!(raw[0].get("next").is_none(), "in one piece");
+    assert_eq!(
+        page(&mut held, 2)[0]["text"],
+        "after",
+        "and the stream continues"
+    );
+
+    let whole = held.ask("replay", vec![serde_json::json!(S)]);
+    assert_eq!(whole.fault, Some(balthasar_ipc::Fault::Failed));
+    assert!(whole.error.unwrap_or_default().contains("cap"));
+}
+
+#[test]
+fn only_what_a_person_or_the_model_said_is_mirrored_into_scratch() {
+    let mut held = Held::new();
+    for (cursor, role, text) in [
+        (0, "user", "the deploy target is fly"),
+        (1, "assistant", "noted, fly it is"),
+        (2, "tool", "AWS_SECRET=hunter2 printed by env"),
+    ] {
+        let said = held.ask(
+            "observe",
+            vec![
+                serde_json::json!(S),
+                turn(cursor, role, text, serde_json::json!({ "type": role })),
+            ],
+        );
+        assert!(said.ok, "{:?}", said.error);
+    }
+    let scope = ScopeId::new("/w/thing");
+    let session = balthasar_model::SessionId::new(S);
+    let kept = |held: &Held, text: &str| {
+        held.store
+            .scratch_for(&scope, &session, text)
+            .expect("scratch")
+            .is_some()
+    };
+    assert!(kept(&held, "the deploy target is fly"));
+    assert!(kept(&held, "noted, fly it is"));
+    assert!(
+        !kept(&held, "AWS_SECRET=hunter2 printed by env"),
+        "a tool's output stays in the scrollback only"
+    );
 }

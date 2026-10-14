@@ -9,9 +9,11 @@ mod client;
 mod config;
 mod convert;
 mod engine;
+mod fuel;
 mod handler;
 mod helpers;
 mod plugins;
+mod project;
 mod sandbox;
 mod settings;
 pub mod setup;
@@ -20,10 +22,11 @@ mod stream;
 pub use client::CLIENT;
 pub use config::{Config, Registered};
 pub use engine::Engine;
-pub use engine::{PRIVILEGED, PRIVILEGED_SETTINGS, REGISTRARS, SPECS};
+pub use engine::{REGISTRARS, SPECS};
 pub use handler::{ASKED, TOLD};
 pub use helpers::glob_paths;
 pub use plugins::{Roots, Trust, installed, runtimepath, vouched_for};
+pub use project::PROJECT_SETTINGS;
 pub use settings::{Budget, Decay, Floors, Ledger, Settings, Weights};
 
 /// What went wrong while reading a configuration.

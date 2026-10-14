@@ -1,6 +1,6 @@
 //! The VM, and the module it hands `init.lua`.
 
-use crate::{Config, LuaError, config::Registered, convert, handler, helpers};
+use crate::{Config, LuaError, convert, handler, helpers};
 use luna::{Callback, CallbackReturn, Closure, Executor, Lua, Table, Value};
 use std::cell::RefCell;
 use std::path::Path;
@@ -14,18 +14,18 @@ pub const REGISTRARS: &[&str] = &["source", "extractor", "section", "tool"];
 /// rather than a Rust map: a spec carries functions, and a function cannot cross the boundary.
 pub const SPECS: &str = "__balthasar_specs";
 
-/// Registrars a project's own `.balthasar.lua` may not use. A file that arrived with `git clone`
-/// may choose — set a floor, add a section — but it may not declare.
-pub const PRIVILEGED: &[&str] = &["source", "extractor", "tool"];
-
-/// Settings a project's own file may not assign, for the same reason.
-pub const PRIVILEGED_SETTINGS: &[&str] = &["distiller", "embedder", "trusted"];
-
 /// The Lua VM, holding whatever the configuration has declared so far.
 pub struct Engine {
     lua: Lua,
     config: Rc<RefCell<Config>>,
     logged: helpers::Logged,
+    fuel: crate::fuel::Budget,
+    /// What a project file reached for and was refused, by name.
+    refused: crate::project::Refused,
+    /// Whether the file running now is the person's own, which alone is lent `fs.read`.
+    lent: Rc<std::cell::Cell<bool>>,
+    /// Where the person's own files live.
+    own: Option<std::path::PathBuf>,
 }
 
 impl Default for Engine {
@@ -35,17 +35,35 @@ impl Default for Engine {
 }
 
 impl Engine {
+    /// The one place a VM is built, from the allowlist for `surface`, before anything is installed.
+    fn bare_vm(surface: crate::sandbox::Surface) -> Self {
+        let mut engine = Self {
+            lua: crate::sandbox::vm(surface),
+            config: Rc::new(RefCell::new(Config::default())),
+            logged: Rc::new(RefCell::new(Vec::new())),
+            fuel: crate::fuel::Budget::default(),
+            refused: Rc::new(RefCell::new(Vec::new())),
+            lent: Rc::new(std::cell::Cell::new(false)),
+            own: None,
+        };
+        engine.lua.set_memory_limit(Some(crate::fuel::MEMORY));
+        engine
+    }
+
     /// A VM with the `balthasar` module installed and nothing declared.
     #[must_use]
     pub fn new() -> Self {
-        let mut engine = Self {
-            lua: Lua::full(),
-            config: Rc::new(RefCell::new(Config::default())),
-            logged: Rc::new(RefCell::new(Vec::new())),
-        };
-        // Before anything is installed and long before anything is read -- see `sandbox`.
-        crate::sandbox::apply(&mut engine.lua);
+        let mut engine = Self::bare_vm(crate::sandbox::Surface::Owner);
         engine.install();
+        engine
+    }
+
+    /// A VM for a file that arrived with a checkout: data only. No socket, filesystem,
+    /// environment, `load` or hook; it may set only [`crate::PROJECT_SETTINGS`] and add sections.
+    #[must_use]
+    pub fn project() -> Self {
+        let mut engine = Self::bare_vm(crate::sandbox::Surface::Project);
+        crate::project::install(&mut engine.lua, &engine.config, &engine.refused);
         engine
     }
 
@@ -66,8 +84,19 @@ impl Engine {
         self.run(&source, &path.display().to_string())
     }
 
-    /// Run one chunk.
+    /// Run one chunk, under the file budget.
     pub fn run(&mut self, source: &str, chunk: &str) -> Result<(), LuaError> {
+        self.run_within(source, chunk, self.fuel.file)
+    }
+
+    /// Run one chunk, stopping it once it has spent `fuel` instructions.
+    fn run_within(&mut self, source: &str, chunk: &str, fuel: u64) -> Result<(), LuaError> {
+        if crate::sandbox::precompiled(source.as_bytes()) {
+            return Err(LuaError::Syntax {
+                file: chunk.to_owned(),
+                message: crate::sandbox::PRECOMPILED.to_owned(),
+            });
+        }
         let executor = self
             .lua
             .try_enter(|ctx| {
@@ -79,18 +108,26 @@ impl Engine {
                 message: e.to_string(),
             })?;
 
+        let runtime = |message: String| LuaError::Runtime {
+            file: chunk.to_owned(),
+            message,
+        };
+        crate::fuel::drive(&mut self.lua, &executor, fuel).map_err(runtime)?;
         self.lua
-            .execute::<()>(&executor)
-            .map_err(|e| LuaError::Runtime {
-                file: chunk.to_owned(),
-                message: e.to_string(),
-            })
+            .try_enter(|ctx| ctx.fetch(&executor).take_result::<()>(ctx)?)
+            .map_err(|e| runtime(e.to_string()))
+    }
+
+    /// Set how many instructions a file and a single hook call may spend.
+    pub fn budget(&mut self, file: u64, hook: u64) {
+        self.fuel = crate::fuel::Budget { file, hook };
     }
 
     /// Read the settings the configuration assigned, once after every file has run. Settings live
     /// as plain fields so a config can read its own back and re-assign them.
     pub fn harvest(&mut self) {
         let config = Rc::clone(&self.config);
+        let logged = Rc::clone(&self.logged);
         self.lua.enter(|ctx| {
             let Value::Table(balthasar) = ctx.get_global_value("balthasar") else {
                 return;
@@ -100,8 +137,16 @@ impl Engine {
                 let Value::String(name) = key else { continue };
                 let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
                 // A registrar is a function and cannot be described, so it is skipped here.
-                if let Some(json) = convert::to_json(ctx, value, 0) {
-                    held.settings.insert(name, json);
+                match convert::to_json(ctx, value, &format!("balthasar.{name}")) {
+                    Ok(json) => {
+                        held.settings.insert(name, json);
+                    }
+                    Err(convert::Undescribable::Code(_)) => {}
+                    Err(why) => {
+                        let said = format!("balthasar.{name} was not read: {why}");
+                        balthasar_model::noted!("lua: {said}");
+                        logged.borrow_mut().push(said);
+                    }
                 }
             }
         });
@@ -123,15 +168,29 @@ impl Engine {
         let packed = serde_json::Value::Array(args.to_vec());
         self.lua.enter(|ctx| {
             let value = convert::from_json(ctx, &packed);
+            ctx.set_global(handler::ANSWER, Value::Nil);
             ctx.set_global(handler::ARGS, value);
         });
-        self.run(chunk, "handler").ok()?;
+        if let Err(why) = self.run_within(chunk, "handler", self.fuel.hook) {
+            let said = format!("a hook failed: {why}");
+            balthasar_model::noted!("lua: {said}");
+            self.logged.borrow_mut().push(said);
+            return None;
+        }
 
-        let mut out = None;
-        self.lua.enter(|ctx| {
-            out = convert::to_json(ctx, ctx.get_global_value(handler::ANSWER), 0);
+        let answer = self.lua.enter(|ctx| {
+            convert::to_json(ctx, ctx.get_global_value(handler::ANSWER), "the answer")
         });
-        out.filter(|value| !value.is_null())
+        match answer {
+            Ok(value) => Some(value).filter(|value| !value.is_null()),
+            Err(convert::Undescribable::Code(_)) => None,
+            Err(why) => {
+                let said = format!("a hook's answer was not read: {why}");
+                balthasar_model::noted!("lua: {said}");
+                self.logged.borrow_mut().push(said);
+                None
+            }
+        }
     }
 
     /// Call one function of a registered spec. `None` means the registrar, the identity, the
@@ -235,6 +294,7 @@ impl Engine {
     fn install(&mut self) {
         let config = Rc::clone(&self.config);
         let logged = Rc::clone(&self.logged);
+        let lent = Rc::clone(&self.lent);
         self.lua.enter(|ctx| {
             let balthasar = Table::new(&ctx);
 
@@ -250,12 +310,13 @@ impl Engine {
                         ));
                     };
                     let id = String::from_utf8_lossy(id.as_bytes()).into_owned();
-                    let Some(value) = convert::to_json(ctx, spec, 0) else {
-                        return Err(convert::raise(
+                    let said = format!("balthasar.{name}(\"{id}\")");
+                    let value = convert::to_json(ctx, spec, &said).map_err(|why| {
+                        convert::raise(
                             ctx,
-                            &format!("balthasar.{name}({id}): this table cannot be described"),
-                        ));
-                    };
+                            &format!("{said}: this table cannot be described: {why}"),
+                        )
+                    })?;
                     held.borrow_mut().registered.insert(name, &id, value);
 
                     // The whole table stays in the VM as well, functions and all; the JSON alone
@@ -312,93 +373,101 @@ impl Engine {
 
             ctx.set_global(SPECS, Table::new(&ctx));
             handler::install(ctx, balthasar);
-            helpers::install(ctx, balthasar, &logged);
+            helpers::install(ctx, balthasar, &logged, &lent);
             ctx.set_global("balthasar", balthasar);
         });
     }
-
     /// Everything a set of files declared, applied in order.
     ///
-    /// `trusted` decides whether a file may declare as well as choose. What a file names with
-    /// `balthasar.load` is run straight after it, before the next file.
+    /// A trusted file runs in this VM, and what it names with `balthasar.load` runs straight after
+    /// it. An untrusted one runs in a data-only VM of its own, and only what it may choose is
+    /// carried over; anything else it reached for is fatal.
     pub fn read(&mut self, files: &[(std::path::PathBuf, bool)]) -> Result<(), LuaError> {
         for (path, trusted) in files {
-            let before = self.snapshot();
-            // Cleared here so what the run records belongs to this file.
-            self.config.borrow_mut().registered.take_touched();
-            self.run_file(path)?;
-            if !trusted {
-                self.refuse_declarations(path, &before)?;
+            if *trusted {
+                let own = self.own.as_ref().is_some_and(|root| path.starts_with(root));
+                self.lent.set(own);
+                let ran = self
+                    .run_file(path)
+                    .and_then(|()| self.drain_loads(path.parent()));
+                self.lent.set(false);
+                ran?;
+            } else {
+                let chosen = Self::project_file(path)?;
+                self.adopt(&chosen);
             }
-            self.drain_loads(path.parent(), *trusted)?;
         }
         self.harvest();
         Ok(())
     }
 
-    /// What is declared right now, so an untrusted file's additions can be spotted.
-    fn snapshot(&mut self) -> (Registered, Vec<Option<serde_json::Value>>) {
-        let registered = self.config.borrow().registered.clone();
-        (registered, self.privileged_settings())
+    /// Name the directory whose files are the person's own: only they are lent `fs.read`.
+    pub fn own_config(&mut self, root: Option<std::path::PathBuf>) {
+        self.own = root;
     }
 
-    /// The settings a project file may not touch, as they stand. Read straight out of the VM
-    /// rather than the harvested config, because harvesting happens once at the end.
-    fn privileged_settings(&mut self) -> Vec<Option<serde_json::Value>> {
-        let mut out = Vec::new();
+    /// Run a project's own file in a data-only VM, and take what it chose.
+    fn project_file(path: &Path) -> Result<crate::project::Chosen, LuaError> {
+        let mut vm = Self::project();
+        vm.run(crate::project::prelude(), "project prelude")?;
+        let ran = vm.run_file(path);
+        let reached = vm.refused.borrow().first().cloned();
+        if let Some(what) = reached {
+            return Err(LuaError::Untrusted {
+                file: path.display().to_string(),
+                what,
+            });
+        }
+        ran?;
+        vm.refuse_declarations(path)
+    }
+
+    /// Refuse a project file that reached past what it may choose, by the first name it reached
+    /// for; otherwise answer what it chose.
+    fn refuse_declarations(&mut self, path: &Path) -> Result<crate::project::Chosen, LuaError> {
+        let config = self.config.borrow().clone();
+        crate::project::chosen(&mut self.lua, &config, &self.refused).map_err(|what| {
+            LuaError::Untrusted {
+                file: path.display().to_string(),
+                what,
+            }
+        })
+    }
+
+    /// Lay what a project file chose over this VM.
+    fn adopt(&mut self, chosen: &crate::project::Chosen) {
+        let config = Rc::clone(&self.config);
         self.lua.enter(|ctx| {
             let Value::Table(balthasar) = ctx.get_global_value("balthasar") else {
                 return;
             };
-            for name in PRIVILEGED_SETTINGS {
-                let held = balthasar
-                    .get::<_, Value>(ctx, *name)
-                    .ok()
-                    .and_then(|v| convert::to_json(ctx, v, 0))
-                    .filter(|v| !v.is_null());
-                out.push(held);
+            for (name, value) in &chosen.settings {
+                crate::project::merge(ctx, balthasar, name, value);
+            }
+            let Value::Table(specs) = ctx.get_global_value(SPECS) else {
+                return;
+            };
+            let slot = match specs.get::<_, Value>(ctx, "section") {
+                Ok(Value::Table(existing)) => existing,
+                _ => {
+                    let made = Table::new(&ctx);
+                    specs.set(ctx, "section", made).ok();
+                    made
+                }
+            };
+            for (id, spec) in &chosen.sections {
+                config
+                    .borrow_mut()
+                    .registered
+                    .insert("section", id, spec.clone());
+                let key = luna::String::from_slice(&ctx, id.as_bytes());
+                slot.set(ctx, key, convert::from_json(ctx, spec)).ok();
             }
         });
-        out
-    }
-
-    /// Refuse a project file that declared rather than chose. Such a file may set a floor or add
-    /// a section; it may not name a source, an extractor, a distiller or an embedder.
-    fn refuse_declarations(
-        &mut self,
-        path: &Path,
-        before: &(Registered, Vec<Option<serde_json::Value>>),
-    ) -> Result<(), LuaError> {
-        let (_, settings) = before;
-        // What the file touched, not what the result looks like afterwards: registration is keyed
-        // on `(registrar, id)` and callbacks stay in the VM, so a replacement changes neither the
-        // names nor the JSON in `entries`.
-        let touched = self.config.borrow_mut().registered.take_touched();
-        if let Some((registrar, id)) = touched
-            .iter()
-            .find(|(registrar, _)| PRIVILEGED.contains(&registrar.as_str()))
-        {
-            return Err(LuaError::Untrusted {
-                file: path.display().to_string(),
-                what: format!("balthasar.{registrar}(\"{id}\")"),
-            });
-        }
-        for (index, name) in PRIVILEGED_SETTINGS.iter().enumerate() {
-            let was = settings.get(index).and_then(Option::as_ref);
-            let is = self.privileged_settings();
-            let is = is.get(index).and_then(Option::as_ref);
-            if is != was {
-                return Err(LuaError::Untrusted {
-                    file: path.display().to_string(),
-                    what: format!("balthasar.{name}"),
-                });
-            }
-        }
-        Ok(())
     }
 
     /// Run whatever the last file asked for, relative to it.
-    fn drain_loads(&mut self, beside: Option<&Path>, trusted: bool) -> Result<(), LuaError> {
+    fn drain_loads(&mut self, beside: Option<&Path>) -> Result<(), LuaError> {
         loop {
             let next = {
                 let mut held = self.config.borrow_mut();
@@ -408,12 +477,41 @@ impl Engine {
                 held.loads.remove(0)
             };
             let path = beside.map_or_else(|| Path::new(&next).to_owned(), |dir| dir.join(&next));
-            let before = self.snapshot();
             self.run_file(&path)?;
-            if !trusted {
-                self.refuse_declarations(&path, &before)?;
-            }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl Engine {
+    /// What the VM holds once everything unreachable has been collected.
+    pub(crate) fn held(&mut self) -> usize {
+        self.lua.gc_collect();
+        self.lua.total_memory()
+    }
+
+    /// The ceiling the VM is held to.
+    pub(crate) fn ceiling(&self) -> Option<usize> {
+        self.lua.memory_limit()
+    }
+
+    /// Hold the VM to `bytes` instead.
+    pub(crate) fn hold_to(&mut self, bytes: usize) {
+        self.lua.set_memory_limit(Some(bytes));
+    }
+
+    /// Stop the collector pacing itself, so garbage stays until something collects it.
+    pub(crate) fn pause_collector(&mut self) {
+        self.lua.gc_stop();
+    }
+
+    /// `source` compiled and dumped as luna bytecode, left in the global `name`.
+    pub(crate) fn plant_dumped(&mut self, name: &'static str, source: &str) {
+        self.lua.enter(|ctx| {
+            let closure = Closure::load(ctx, Some("dumped"), source.as_bytes()).expect("compiles");
+            let bytes = luna::dump::dump(&closure.prototype(), false);
+            ctx.set_global(name, luna::String::from_slice(&ctx, &bytes));
+        });
     }
 }
