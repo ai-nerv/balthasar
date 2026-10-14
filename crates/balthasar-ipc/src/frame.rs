@@ -197,8 +197,8 @@ fn exactly(
     limit: Option<std::time::Duration>,
 ) -> Result<(), WireError> {
     let mut have = 0;
-    while have < into.len() {
-        match from.read(&mut into[have..]) {
+    while let Some(rest) = into.get_mut(have..).filter(|rest| !rest.is_empty()) {
+        match from.read(rest) {
             Ok(0) => return Err(WireError::Closed),
             Ok(n) => {
                 have += n;

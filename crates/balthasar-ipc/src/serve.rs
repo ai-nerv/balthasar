@@ -169,6 +169,8 @@ enum Heard {
 
 /// The sockets one instance is bound to, all of them reaching the one store behind them.
 pub struct Listener {
+    /// The first name bound, the role's own.
+    path: PathBuf,
     bound: Vec<crate::stale::Claimed>,
 }
 
@@ -199,13 +201,22 @@ impl Listener {
                 Err(_) => {}
             }
         }
-        Ok(Self { bound })
+        let Some(first) = bound.first() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "no directory to bind in",
+            ));
+        };
+        Ok(Self {
+            path: first.path.clone(),
+            bound,
+        })
     }
 
     /// Where it is listening: the role's own name.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.bound[0].path
+        &self.path
     }
 
     /// Every name it is listening under, the role's own first.
@@ -542,6 +553,12 @@ mod tests {
             vec![path],
             "and the refusal leaves no lock behind"
         );
+    }
+
+    #[test]
+    fn binding_in_no_directory_is_refused() {
+        let refused = Listener::bind_in(&[], "none").err().map(|why| why.kind());
+        assert_eq!(refused, Some(std::io::ErrorKind::InvalidInput));
     }
 
     #[test]
