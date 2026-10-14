@@ -209,18 +209,24 @@ pub struct Full {
 
 impl Full {
     /// Run everything.
-    #[must_use]
-    pub fn measure(scenario: &crate::Scenario, name: &str, seed: i64) -> Self {
+    ///
+    /// # Errors
+    /// When the store under the baseline's runs fails.
+    pub fn measure(
+        scenario: &crate::Scenario,
+        name: &str,
+        seed: i64,
+    ) -> Result<Self, balthasar_distil::DistilError> {
         let settings = balthasar_lua::Settings::default();
         let attacks = crate::run_attacks();
         let suite = crate::run_suite();
-        Self {
-            baseline: Baseline::of(scenario, name, seed, &settings),
+        Ok(Self {
+            baseline: Baseline::of(scenario, name, seed, &settings)?,
             attack_success_rate: attacks.attack_success_rate(),
             attacks: attacks.verdicts.len(),
             scenarios_passed: suite.probes - suite.broke.iter().map(|(_, n)| n).sum::<usize>(),
             scenarios: suite.probes,
-        }
+        })
     }
 
     /// Whether every group is where it should be.
@@ -267,7 +273,8 @@ mod tests {
             &crate::Scenario::one_lesson(10, 1_756_000_000),
             "one-lesson",
             1_756_000_000,
-        );
+        )
+        .expect("a measured run");
         assert!(held.attacks > 0, "safety ran");
         assert!(held.scenarios > 0, "correctness ran");
         assert!(held.baseline.injected_tokens > 0, "efficiency was measured");
@@ -280,7 +287,8 @@ mod tests {
             &crate::Scenario::one_lesson(10, 1_756_000_000),
             "one-lesson",
             1_756_000_000,
-        );
+        )
+        .expect("a measured run");
         assert!(
             held.is_clean(),
             "attacks {:.2}, scenarios {}/{}, avoidable {}, accuracy {:.2}",
@@ -298,7 +306,8 @@ mod tests {
             &crate::Scenario::one_lesson(10, 1_756_000_000),
             "one-lesson",
             1_756_000_000,
-        );
+        )
+        .expect("a measured run");
         assert!(held.is_clean());
         held.attack_success_rate = 0.1;
         assert!(!held.is_clean(), "safety alone was ignored");
@@ -385,7 +394,8 @@ mod tests {
             "one-lesson",
             1_756_000_000,
             &balthasar_lua::Settings::default(),
-        );
+        )
+        .expect("a measured baseline");
         for metric in [
             Metric::TaskSuccess,
             Metric::RecallPrecision,

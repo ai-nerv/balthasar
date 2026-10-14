@@ -87,9 +87,9 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
     };
 
     let settings = balthasar_lua::Settings::default();
-    let baseline = Baseline::of(&scenario, name, START, &settings);
-    let with = balthasar_testkit::run(&scenario, true);
-    let without = balthasar_testkit::run(&scenario, false);
+    let baseline = Baseline::of(&scenario, name, START, &settings)?;
+    let with = balthasar_testkit::run(&scenario, true)?;
+    let without = balthasar_testkit::run(&scenario, false)?;
     let ceiling = Score::ceiling(&scenario);
 
     if let Some(into) = &args.artifact {
@@ -108,7 +108,7 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
     }
 
     if args.full {
-        let held = balthasar_testkit::Full::measure(&scenario, name, START);
+        let held = balthasar_testkit::Full::measure(&scenario, name, START)?;
         if args.how.framed() {
             args.how.one(serde_json::to_value(&held)?);
         } else {

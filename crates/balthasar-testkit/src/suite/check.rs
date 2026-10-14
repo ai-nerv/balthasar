@@ -1,7 +1,7 @@
 //! Running the scenarios, and saying plainly what broke.
 
 use super::{Act, Case, Category, Expect, Probe, corpus};
-use balthasar_distil::{Observation, Role, consolidate, extract};
+use balthasar_distil::{DistilError, Observation, Role, consolidate, extract};
 use balthasar_lua::Settings;
 use balthasar_model::{Memory, ScopeId, SessionId, Tier, Timestamp, Witness, WitnessId, floor};
 use balthasar_store::{Recall, Store, mint};
@@ -76,21 +76,29 @@ pub fn run_suite() -> Report {
     report
 }
 
-/// Run one.
+/// Run one. A store that fails breaks every probe it was to answer, saying why.
 fn run_case(case: &Case, report: &mut Report) {
-    let mut store = Store::ephemeral().expect("a store");
     let settings = Settings::default();
     let scope = ScopeId::new(case.project);
 
     // What each run has already tried. The store no longer keeps a window ledger to read this
     // back out of, and it never should have: a scenario's own history is the scenario's.
     let mut ran: Vec<Ran> = Vec::new();
-    for act in &case.script {
-        perform(&mut store, &settings, &scope, act, &mut ran);
-    }
+    let staged = Store::ephemeral()
+        .map_err(DistilError::from)
+        .and_then(|mut store| {
+            for act in &case.script {
+                perform(&mut store, &settings, &scope, act, &mut ran)?;
+            }
+            Ok(store)
+        });
 
     for probe in &case.probes {
-        let verdict = check(&store, &scope, probe);
+        let verdict = match &staged {
+            Ok(store) => check(store, &scope, probe)
+                .unwrap_or_else(|why| (Verdict::Broke, format!("the store failed: {why}"))),
+            Err(why) => (Verdict::Broke, format!("the script failed: {why}")),
+        };
         let bucket = if verdict.0 == Verdict::Held {
             &mut report.held
         } else {
@@ -129,10 +137,16 @@ struct Running<'a> {
 }
 
 /// Do one thing, through the real pipeline.
-fn perform(store: &mut Store, settings: &Settings, scope: &ScopeId, act: &Act, ran: &mut Vec<Ran>) {
+fn perform(
+    store: &mut Store,
+    settings: &Settings,
+    scope: &ScopeId,
+    act: &Act,
+    ran: &mut Vec<Ran>,
+) -> Result<(), DistilError> {
     match act {
         Act::Said { session, at, text } => {
-            said(store, settings, scope, session, *at, text);
+            said(store, settings, scope, session, *at, text)?;
         }
         Act::Elsewhere {
             project,
@@ -140,7 +154,7 @@ fn perform(store: &mut Store, settings: &Settings, scope: &ScopeId, act: &Act, r
             at,
             text,
         } => {
-            said(store, settings, &ScopeId::new(*project), session, *at, text);
+            said(store, settings, &ScopeId::new(*project), session, *at, text)?;
         }
         Act::Tool {
             session,
@@ -159,13 +173,13 @@ fn perform(store: &mut Store, settings: &Settings, scope: &ScopeId, act: &Act, r
                 *at,
                 command,
                 *ok,
-            );
+            )?;
         }
         Act::Consolidate { at } => {
-            consolidate(store, None, settings, scope, *at, false).expect("consolidate");
+            consolidate(store, None, settings, scope, *at, false)?;
         }
         Act::Decay { at } => {
-            store.decay(*at).expect("decay");
+            store.decay(*at)?;
         }
         Act::Read {
             session,
@@ -173,10 +187,10 @@ fn perform(store: &mut Store, settings: &Settings, scope: &ScopeId, act: &Act, r
             origin,
             text,
         } => {
-            read(store, scope, session, *at, origin, text);
+            read(store, scope, session, *at, origin, text)?;
         }
         Act::Purged { at, matching } => {
-            purge_matching(store, scope, *at, matching);
+            purge_matching(store, scope, *at, matching)?;
         }
         Act::Used { at, query } => {
             // Reaching for something is what resists decay. Done through recall so the test
@@ -184,12 +198,13 @@ fn perform(store: &mut Store, settings: &Settings, scope: &ScopeId, act: &Act, r
             let mut ask = Recall::of(*query, *at);
             ask.floor = 0.0;
             ask.scope_name = scope.to_string();
-            let found = store.recall(&ask).expect("recall");
+            let found = store.recall(&ask)?;
             for hit in found.iter().take(1) {
-                store.touch(&hit.memory.id, *at).expect("touch");
+                store.touch(&hit.memory.id, *at)?;
             }
         }
     }
+    Ok(())
 }
 
 /// A person saying something, and whatever the ladder makes of it.
@@ -200,11 +215,9 @@ fn said(
     session: &str,
     at: Timestamp,
     text: &str,
-) {
+) -> Result<(), DistilError> {
     let id = SessionId::new(session);
-    store
-        .open_session(&id, scope, &scope.to_string(), "suite", at)
-        .expect("open");
+    store.open_session(&id, scope, &scope.to_string(), "suite", at)?;
 
     // Kept as scratch whatever happens: it is the session's own, and the ladder is what
     // carries it further.
@@ -217,7 +230,7 @@ fn said(
     );
     scratch.session = Some(id.clone());
     scratch.temporal = balthasar_model::Temporal::recalled(at, at);
-    store.keep_scratch(scratch).expect("scratch");
+    store.keep_scratch(scratch)?;
 
     let turn = Observation {
         cursor: Some(1),
@@ -226,11 +239,17 @@ fn said(
         at: Some(at),
         ..Observation::default()
     };
-    land(store, settings, scope, &id, at, &[turn]);
+    land(store, settings, scope, &id, at, &[turn])
 }
 
 /// A tool running, and whatever the ladder makes of it.
-fn tool(on: Running<'_>, session: &str, at: Timestamp, command: &str, ok: bool) {
+fn tool(
+    on: Running<'_>,
+    session: &str,
+    at: Timestamp,
+    command: &str,
+    ok: bool,
+) -> Result<(), DistilError> {
     let Running {
         store,
         settings,
@@ -238,9 +257,7 @@ fn tool(on: Running<'_>, session: &str, at: Timestamp, command: &str, ok: bool) 
         ran,
     } = on;
     let id = SessionId::new(session);
-    store
-        .open_session(&id, scope, &scope.to_string(), "suite", at)
-        .expect("open");
+    store.open_session(&id, scope, &scope.to_string(), "suite", at)?;
 
     // The repair path needs the failure that came before it, so the whole run is replayed.
     let mut turns = Vec::new();
@@ -272,7 +289,7 @@ fn tool(on: Running<'_>, session: &str, at: Timestamp, command: &str, ok: bool) 
         ok,
     });
 
-    land(store, settings, scope, &id, at, &turns);
+    land(store, settings, scope, &id, at, &turns)
 }
 
 /// Offer whatever the extractors found to the store.
@@ -283,7 +300,7 @@ fn land(
     session: &SessionId,
     at: Timestamp,
     turns: &[Observation],
-) {
+) -> Result<(), DistilError> {
     for candidate in extract(turns, &settings.imperatives).candidates {
         let score = candidate.score(|kind| settings.weight(kind));
         if score < settings.floors().promote {
@@ -313,12 +330,13 @@ fn land(
             scope.clone(),
             at,
         );
-        store.remember(memory, witness, at).expect("remember");
+        store.remember(memory, witness, at)?;
     }
+    Ok(())
 }
 
 /// Ask one question and judge the answer.
-fn check(store: &Store, scope: &ScopeId, probe: &Probe) -> (Verdict, String) {
+fn check(store: &Store, scope: &ScopeId, probe: &Probe) -> Result<(Verdict, String), DistilError> {
     let mut ask = Recall::of(probe.asks, probe.at);
     ask.limit = 20;
     ask.floor = 0.0;
@@ -328,7 +346,7 @@ fn check(store: &Store, scope: &ScopeId, probe: &Probe) -> (Verdict, String) {
     // asked. Assertion alone is query-independent by design, so on its own it would call a
     // confidently-held fact about staging an answer about production.
     ask.relevance = 0.55;
-    let found = store.recall(&ask).expect("recall");
+    let found = store.recall(&ask)?;
 
     let asserted: Vec<String> = found
         .iter()
@@ -348,8 +366,7 @@ fn check(store: &Store, scope: &ScopeId, probe: &Probe) -> (Verdict, String) {
         Expect::Silent => asserted.is_empty(),
         Expect::Findable(text) => {
             let anywhere: Vec<String> = store
-                .all()
-                .expect("export")
+                .all()?
                 .into_iter()
                 .filter(|m| m.scope == *scope)
                 .map(|m| m.text())
@@ -357,12 +374,7 @@ fn check(store: &Store, scope: &ScopeId, probe: &Probe) -> (Verdict, String) {
             holds(text, &anywhere) && !holds(text, &asserted)
         }
         Expect::Absent(text) => {
-            let anywhere: Vec<String> = store
-                .all()
-                .expect("export")
-                .into_iter()
-                .map(|m| m.text())
-                .collect();
+            let anywhere: Vec<String> = store.all()?.into_iter().map(|m| m.text()).collect();
             !holds(text, &anywhere)
         }
     };
@@ -372,14 +384,14 @@ fn check(store: &Store, scope: &ScopeId, probe: &Probe) -> (Verdict, String) {
     } else {
         format!("asserted: {}", asserted.join(" | "))
     };
-    (
+    Ok((
         if verdict {
             Verdict::Held
         } else {
             Verdict::Broke
         },
         got,
-    )
+    ))
 }
 
 /// Something arriving from outside.
@@ -394,11 +406,9 @@ fn read(
     at: Timestamp,
     origin: &str,
     text: &str,
-) {
+) -> Result<(), DistilError> {
     let id = SessionId::new(session);
-    store
-        .open_session(&id, scope, &scope.to_string(), "suite", at)
-        .expect("open");
+    store.open_session(&id, scope, &scope.to_string(), "suite", at)?;
 
     let mut held = Memory::new(
         mint(at),
@@ -428,23 +438,30 @@ fn read(
         balthasar_model::Channel::ExternalContent,
         Some(balthasar_model::Domain::external(origin)),
     );
-    store.remember(held, witness, at).expect("read");
+    store.remember(held, witness, at)?;
+    Ok(())
 }
 
 /// Removing whatever matches, the way `balthasar forget --purge` would.
-fn purge_matching(store: &mut Store, scope: &ScopeId, at: Timestamp, matching: &str) {
+fn purge_matching(
+    store: &mut Store,
+    scope: &ScopeId,
+    at: Timestamp,
+    matching: &str,
+) -> Result<(), DistilError> {
     let mut ask = Recall::of(matching, at);
     ask.floor = 0.0;
     ask.limit = 50;
     ask.include_archived = true;
     ask.scope_name = scope.to_string();
-    let found = store.recall(&ask).expect("recall");
+    let found = store.recall(&ask)?;
     let doomed: Vec<_> = found
         .into_iter()
         .filter(|hit| hit.memory.text().contains(matching))
         .map(|hit| hit.memory.id)
         .collect();
     for id in doomed {
-        balthasar_store::purge(store, &id).expect("purge");
+        balthasar_store::purge(store, &id)?;
     }
+    Ok(())
 }
