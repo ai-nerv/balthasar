@@ -231,6 +231,26 @@ make.recipe{ name = "build-debug", desc = "the binary, unoptimized and quick",
 make.recipe{ name = "family-path", desc = "the binary selected by build-host",
              run = function() print("NERV_BINARY=target/release/" .. NAME) end }
 
+make.recipe{ name = "nix-build", desc = "the static Nix package, into result/bin/" .. NAME,
+             run = function() sh.nix("build", "--accept-flake-config", ".#" .. NAME, "-L") end }
+
+make.recipe{ name = "nix-check", desc = "the flake's outputs and the package's install checks",
+             run = function() sh.nix("flake", "check", "--accept-flake-config", "-L") end }
+
+-- Substituted only: no local or remote builder may build it, so a cache miss fails here.
+make.recipe{
+  name = "nix-download-check",
+  desc = "fetch the package from the cache, building nothing, and run it",
+  run = function()
+    sh.nix("build", "--accept-flake-config", "--no-update-lock-file",
+           "--max-jobs", "0", "--builders", "", ".#" .. NAME)
+    local ran = oslo.run{ "result/bin/" .. NAME, "verbs", "--json", capture = true }
+    assert(ran.ok and (ran.out or ""):find('"ok":true', 1, true),
+           "result/bin/" .. NAME .. " verbs --json did not answer ok")
+    print(("%s answers verbs from the cache"):format(NAME))
+  end,
+}
+
 make.recipe{
   name = "run",
   desc = "run balthasar: --args='recall \"make test\"'",
