@@ -174,5 +174,17 @@ if [ -n "$unbudgeted" ]; then
   fail=1
 fi
 
+# ---- and under a memory ceiling, judged after every slice ----------------------------------------
+# luna enforces `set_memory_limit` only in its own `finish`, which nothing here calls.
+FUEL="$ROOT/balthasar-lua/src/fuel.rs"
+if ! bare "$ENGINE" | grep -q 'set_memory_limit(Some(crate::fuel::MEMORY))'; then
+  echo "gate-sandbox: a VM is built with no memory ceiling" >&2
+  fail=1
+fi
+if ! bare "$FUEL" | grep -q 'over_memory(lua)'; then
+  echo "gate-sandbox: nothing stops a chunk that holds more than the ceiling" >&2
+  fail=1
+fi
+
 [ "$fail" -eq 0 ] || { echo "gate-sandbox: failed" >&2; exit 1; }
 echo "gate-sandbox: ok"

@@ -466,4 +466,19 @@ impl Engine {
         self.lua.gc_collect();
         self.lua.total_memory()
     }
+
+    /// The ceiling the VM is held to.
+    pub(crate) fn ceiling(&self) -> Option<usize> {
+        self.lua.memory_limit()
+    }
+
+    /// Hold the VM to `bytes` instead.
+    pub(crate) fn hold_to(&mut self, bytes: usize) {
+        self.lua.set_memory_limit(Some(bytes));
+    }
+
+    /// Stop the collector pacing itself, so garbage stays until something collects it.
+    pub(crate) fn pause_collector(&mut self) {
+        self.lua.gc_stop();
+    }
 }
