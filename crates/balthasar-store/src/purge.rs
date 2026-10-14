@@ -202,7 +202,13 @@ fn descendants(store: &Store, root: &MemoryId) -> Result<Vec<MemoryId>, StoreErr
 /// One memory, and everything that points at it.
 fn purge_one(store: &mut Store, id: &MemoryId) -> Result<usize, StoreError> {
     let tx = store.db_mut().transaction()?;
+    let gone = remove(&tx, id)?;
+    tx.commit()?;
+    Ok(gone)
+}
 
+/// The rows of [`purge_one`], inside a transaction the caller holds.
+fn remove(tx: &rusqlite::Connection, id: &MemoryId) -> Result<usize, StoreError> {
     // Asserted edges, in both directions.
     tx.execute(
         "DELETE FROM link WHERE src = ?1 OR dst = ?1",
@@ -234,9 +240,7 @@ fn purge_one(store: &mut Store, id: &MemoryId) -> Result<usize, StoreError> {
     )?;
     tx.execute("DELETE FROM memory_fts WHERE id = ?1", params![id.as_str()])?;
 
-    let gone = tx.execute("DELETE FROM memory WHERE id = ?1", params![id.as_str()])?;
-    tx.commit()?;
-    Ok(gone)
+    Ok(tx.execute("DELETE FROM memory WHERE id = ?1", params![id.as_str()])?)
 }
 
 /// Everything one run left behind. Returns how many memories went. Memories a run merely
@@ -351,4 +355,286 @@ pub fn prune_layouts(
          AND ('L-' || n) NOT IN (SELECT layout FROM layout_effect WHERE done = 0)",
         params![before],
     )?)
+}
+
+/// Seconds in a day, the unit turn retention is counted in.
+pub const DAY: balthasar_model::Timestamp = 24 * 60 * 60;
+
+/// A session a retention pass would empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Expired {
+    pub session: balthasar_model::SessionId,
+    /// Turns it holds, of which `cited` are a note's evidence and stay.
+    pub turns: u64,
+    pub cited: u64,
+    /// When anything last happened in it.
+    pub last: balthasar_model::Timestamp,
+}
+
+/// What a retention pass removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Pruned {
+    pub sessions: usize,
+    pub turns: usize,
+    /// Scratch copies of what was said, in the runs' files and the project's store.
+    pub mirrors: usize,
+}
+
+/// When anything last happened in each session idle since `?1`.
+const IDLE: &str = "SELECT session, max(at) FROM ( \
+     SELECT session, at FROM turn UNION ALL SELECT session, at FROM trace \
+     UNION ALL SELECT session, max(at, COALESCE(applied, at)) FROM layout \
+     UNION ALL SELECT session, max(created, COALESCE(settled, created)) FROM job \
+     UNION ALL SELECT session, opened FROM run) \
+   GROUP BY session HAVING max(at) < ?1";
+
+/// Rows of the sessions named in the JSON list `?1`.
+const EXPIRED: &str = "session IN (SELECT j.value FROM json_each(?1) j)";
+
+/// Rows of those sessions at a cursor no `[session, cursor]` pair in `?2` names.
+const UNCITED: &str = "session IN (SELECT j.value FROM json_each(?1) j) AND (session, cursor) \
+     NOT IN (SELECT json_extract(j.value, '$[0]'), json_extract(j.value, '$[1]') \
+             FROM json_each(?2) j)";
+
+/// What a person or the model said, the turns a scratch copy is kept of.
+const SAID: &str = "role IN ('user', 'assistant') AND kind NOT IN ('tool', 'tool_result') \
+     AND text != ''";
+
+/// The sessions [`prune_turns`] would empty: idle since `before`, not in `live`, and holding a
+/// trace or a turn no note cites.
+pub fn expired(
+    scrollback: &crate::Transcript,
+    before: balthasar_model::Timestamp,
+    live: &[balthasar_model::SessionId],
+) -> Result<Vec<Expired>, StoreError> {
+    expired_in(scrollback.db(), before, live)
+}
+
+fn expired_in(
+    db: &rusqlite::Connection,
+    before: balthasar_model::Timestamp,
+    live: &[balthasar_model::SessionId],
+) -> Result<Vec<Expired>, StoreError> {
+    let cited = cited(db)?;
+    let idle = {
+        let mut statement = db.prepare(IDLE)?;
+        statement
+            .query_map(params![before], |r| Ok((r.get::<_, String>(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<(String, i64)>, _>>()?
+    };
+    let mut out = Vec::new();
+    for (session, last) in idle {
+        if live.iter().any(|held| held.as_str() == session) {
+            continue;
+        }
+        let mine: Vec<u64> = cited
+            .iter()
+            .filter(|(at, _)| *at == session)
+            .map(|(_, cursor)| *cursor)
+            .collect();
+        let (turns, kept, traces): (i64, i64, i64) = db.query_row(
+            "SELECT count(*), COALESCE(sum(cursor IN (SELECT j.value FROM json_each(?2) j)), 0), \
+                    (SELECT count(*) FROM trace WHERE session = ?1) \
+             FROM turn WHERE session = ?1",
+            params![session, serde_json::to_string(&mine)?],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        if turns > kept || traces > 0 {
+            out.push(Expired {
+                session: balthasar_model::SessionId::new(session),
+                turns: turns.max(0) as u64,
+                cited: kept.max(0) as u64,
+                last,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Every turn a note or a change to one cites as evidence, as `(session, cursor)`.
+fn cited(db: &rusqlite::Connection) -> Result<Vec<(String, u64)>, StoreError> {
+    let mut statement =
+        db.prepare("SELECT evidence FROM note UNION ALL SELECT evidence FROM note_change")?;
+    let held = statement
+        .query_map([], |r| r.get::<_, Option<String>>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut out = Vec::new();
+    for evidence in held.iter().flatten() {
+        let Ok(evidence) = serde_json::from_str::<serde_json::Value>(evidence) else {
+            continue;
+        };
+        let sources = evidence
+            .get("sources")
+            .and_then(serde_json::Value::as_array);
+        for source in sources.into_iter().flatten() {
+            let session = source.get("session").and_then(serde_json::Value::as_str);
+            let cursor = source.get("cursor").and_then(serde_json::Value::as_u64);
+            if let (Some(session), Some(cursor)) = (session, cursor) {
+                out.push((session.to_owned(), cursor));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Remove every turn of each session idle since `before` and not in `live`, with every copy of
+/// it: its search entry, revisions, chunks and traces, the layouts, summaries, generations and
+/// jobs made from it, and the scratch copies in `scratch` and `project` that no remaining turn of
+/// the run still says. A turn a note cites stays, and so does its session's record. One
+/// `IMMEDIATE` transaction on the scrollback, held while the scratch copies go.
+pub fn prune_turns(
+    scrollback: &crate::Transcript,
+    mut scratch: Option<&mut crate::Scratchpad>,
+    mut project: Option<&mut Store>,
+    before: balthasar_model::Timestamp,
+    live: &[balthasar_model::SessionId],
+) -> Result<Pruned, StoreError> {
+    let tx = rusqlite::Transaction::new_unchecked(
+        scrollback.db(),
+        rusqlite::TransactionBehavior::Immediate,
+    )?;
+    let expired = expired_in(&tx, before, live)?;
+    if expired.is_empty() {
+        return Ok(Pruned::default());
+    }
+    let sessions: Vec<&str> = expired.iter().map(|e| e.session.as_str()).collect();
+    let sessions = serde_json::to_string(&sessions)?;
+    let cited = serde_json::to_string(&cited(&tx)?)?;
+    let said = said_by_run(&tx, &sessions, &cited)?;
+
+    let mut pruned = Pruned {
+        sessions: expired.len(),
+        ..Pruned::default()
+    };
+    for table in ["turn_fts", "turn_revision", "chunk", "turn"] {
+        let gone = tx.execute(
+            &format!("DELETE FROM {table} WHERE {UNCITED}"),
+            params![sessions, cited],
+        )?;
+        if table == "turn" {
+            pruned.turns = gone;
+        }
+    }
+    for table in [
+        "trace",
+        "layout_effect",
+        "layout",
+        "summary",
+        "generation",
+        "job",
+    ] {
+        tx.execute(
+            &format!("DELETE FROM {table} WHERE {EXPIRED}"),
+            params![sessions],
+        )?;
+    }
+    // A session left holding a cited turn keeps its record.
+    for table in [
+        "extraction_progress",
+        "extraction_ack",
+        "prompt",
+        "counter",
+        "run_model",
+        "run",
+        "transcript_run",
+    ] {
+        tx.execute(
+            &format!(
+                "DELETE FROM {table} WHERE {EXPIRED} \
+                 AND NOT EXISTS (SELECT 1 FROM turn WHERE turn.session = {table}.session)"
+            ),
+            params![sessions],
+        )?;
+    }
+
+    for (run, mut hashes) in said {
+        let still = said_in_run(&tx, &run)?;
+        hashes.retain(|hash| !still.contains(hash));
+        if hashes.is_empty() {
+            continue;
+        }
+        if let Some(pad) = scratch.as_deref_mut() {
+            for agent in pad.agents_of(&balthasar_model::SessionId::new(&run)) {
+                let store = pad.of(&balthasar_model::SessionId::new(&run), &agent)?;
+                pruned.mirrors += forget_mirrors(store, &run, &hashes)?;
+            }
+        }
+        if let Some(store) = project.as_deref_mut() {
+            pruned.mirrors += forget_mirrors(store, &run, &hashes)?;
+        }
+    }
+    tx.commit()?;
+    Ok(pruned)
+}
+
+/// The content hash of each uncited said turn and revision of the sessions in `sessions`, by
+/// the run its scratch copy was kept under.
+fn said_by_run(
+    db: &rusqlite::Connection,
+    sessions: &str,
+    cited: &str,
+) -> Result<std::collections::BTreeMap<String, Vec<String>>, StoreError> {
+    let mut statement = db.prepare(&format!(
+        "SELECT COALESCE((SELECT run FROM transcript_run b WHERE b.session = t.session), \
+                t.session), t.text \
+         FROM (SELECT session, cursor, role, kind, text FROM turn UNION ALL \
+               SELECT session, cursor, role, kind, text FROM turn_revision) t \
+         WHERE {UNCITED} AND {SAID}"
+    ))?;
+    let rows = statement
+        .query_map(params![sessions, cited], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut out: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for (run, text) in rows {
+        let hashes = out.entry(run).or_default();
+        let hash = balthasar_model::content_hash(&text);
+        if !hashes.contains(&hash) {
+            hashes.push(hash);
+        }
+    }
+    Ok(out)
+}
+
+/// The content hash of everything still said in `run`, by any session bound to it.
+fn said_in_run(
+    db: &rusqlite::Connection,
+    run: &str,
+) -> Result<std::collections::HashSet<String>, StoreError> {
+    let mut statement = db.prepare(&format!(
+        "SELECT text FROM (SELECT session, role, kind, text FROM turn UNION ALL \
+                           SELECT session, role, kind, text FROM turn_revision) \
+         WHERE session IN (SELECT session FROM transcript_run WHERE run = ?1 UNION SELECT ?1) \
+         AND {SAID}"
+    ))?;
+    let texts = statement
+        .query_map(params![run], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(texts
+        .iter()
+        .map(|text| balthasar_model::content_hash(text))
+        .collect())
+}
+
+/// Remove the scratch memories `run` kept of what it said, each with its closure.
+fn forget_mirrors(store: &mut Store, run: &str, hashes: &[String]) -> Result<usize, StoreError> {
+    let tx = store.db_mut().transaction()?;
+    let mut gone = 0;
+    for hash in hashes {
+        let ids = {
+            let mut statement = tx.prepare_cached(
+                "SELECT id FROM memory WHERE session = ?1 AND tier = 'scratch' \
+                 AND content_hash = ?2",
+            )?;
+            statement
+                .query_map(params![run, hash], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for id in ids {
+            gone += remove(&tx, &MemoryId::new(id))?;
+        }
+    }
+    tx.commit()?;
+    Ok(gone)
 }

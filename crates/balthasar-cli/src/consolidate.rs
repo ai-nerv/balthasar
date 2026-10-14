@@ -57,6 +57,7 @@ pub fn run(
     for text in &report.promoted {
         loaded.tell("consolidate", &[serde_json::json!(text)]);
     }
+    let retired = retire(&held, &mut pad, &mut store, &settings, at, args.commit)?;
 
     if args.how.framed() {
         args.how.one(serde_json::json!({
@@ -68,12 +69,71 @@ pub fn run(
             "clusters": report.clusters,
             "promoted": report.promoted.len(),
             "reinforced": report.reinforced,
+            "retired": {
+                "sessions": retired.sessions,
+                "turns": retired.turns,
+                "mirrors": retired.mirrors,
+            },
         }));
         return Ok(());
     }
     say_read(&read);
     say(&report, args.explain);
+    say_retired(&retired, settings.retain_days, report.dry_run);
     Ok(())
+}
+
+/// Turns of quiet sessions past `retain_days`, removed with `commit` and otherwise only counted.
+/// Nothing at all when the setting is unset.
+fn retire(
+    held: &balthasar_store::Transcript,
+    pad: &mut balthasar_store::Scratchpad,
+    store: &mut balthasar_store::Store,
+    settings: &balthasar_lua::Settings,
+    at: balthasar_model::Timestamp,
+    commit: bool,
+) -> anyhow::Result<balthasar_store::Pruned> {
+    let Some(before) = settings.retained_since(at) else {
+        return Ok(balthasar_store::Pruned::default());
+    };
+    if commit {
+        return Ok(balthasar_store::prune_turns(
+            held,
+            Some(pad),
+            Some(store),
+            before,
+            &[],
+        )?);
+    }
+    let expired = balthasar_store::expired(held, before, &[])?;
+    Ok(balthasar_store::Pruned {
+        sessions: expired.len(),
+        turns: expired
+            .iter()
+            .map(|e| usize::try_from(e.turns.saturating_sub(e.cited)).unwrap_or(usize::MAX))
+            .sum(),
+        mirrors: 0,
+    })
+}
+
+/// What retention took, or would. Silent when it took nothing.
+fn say_retired(retired: &balthasar_store::Pruned, days: Option<u32>, dry_run: bool) {
+    let (Some(days), true) = (days, retired.sessions > 0) else {
+        return;
+    };
+    let verb = if dry_run { "would go" } else { "went" };
+    crate::say!();
+    crate::say!(
+        "{} turn(s) of {} session(s) quiet for over {days} days {verb}, every copy of each",
+        render::bold(&retired.turns.to_string()),
+        retired.sessions
+    );
+    if dry_run {
+        crate::say!(
+            "{}",
+            render::dim("nothing was written — `balthasar consolidate --now` to apply")
+        );
+    }
 }
 
 /// What reading this project's own runs turned up, when it turned up anything.

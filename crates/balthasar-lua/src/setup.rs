@@ -78,6 +78,7 @@ const SETTINGS: &[&str] = &[
     "scope",
     "window",
     "memory",
+    "retain_days",
 ];
 
 /// What balthasar wants to be told. Everything has a default.
@@ -152,6 +153,15 @@ pub fn needs() -> Vec<Need> {
             name: "memory".to_owned(),
             kind: Kind::Table,
             about: "how notes improve: review, extract_every, extract_bytes, tidy_every, checklist"
+                .to_owned(),
+            required: false,
+            default: None,
+        },
+        Need {
+            name: "retain_days".to_owned(),
+            kind: Kind::Number,
+            about: "days a quiet session's turns are kept before every copy is removed; unset \
+                    keeps them for good"
                 .to_owned(),
             required: false,
             default: None,
@@ -415,6 +425,13 @@ mod tests {
         assert!(applied.whole(), "{applied:?}");
         assert!(applied.set.contains(&"window".to_owned()), "{applied:?}");
         assert!(applied.set.contains(&"memory".to_owned()), "{applied:?}");
+    }
+
+    #[test]
+    fn how_long_turns_are_kept_can_be_said_by_whoever_coordinates() {
+        let path = mine("retain");
+        let applied = configure_into(&path, "balthasar.retain_days = 30").expect("runs");
+        assert_eq!(applied.set, vec!["retain_days".to_owned()], "{applied:?}");
     }
 
     #[test]

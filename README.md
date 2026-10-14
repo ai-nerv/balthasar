@@ -112,7 +112,9 @@ this in March, it may be stale" instead of stating it flatly.
 purpose — every one of those is a column. `balthasar forget --purge` is the single exception, and it
 exists so that "delete the key I pasted" can be answered with yes. What is not a memory is
 bounded: derived indexes are rebuilt, the recall ledger keeps what its retention says, and an
-applied layout goes after thirty days, keeping each run's newest.
+applied layout goes after thirty days, keeping each run's newest. Turns are kept for good unless
+`balthasar.retain_days` is set; then a session quiet that long loses every copy of its turns but
+those a note cites.
 
 **Diversity beats volume.** One session repeating something is a person being emphatic; the
 same thing surfacing in unrelated runs is a property of the world. Confidence counts sessions,
