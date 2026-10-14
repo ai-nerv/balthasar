@@ -100,7 +100,7 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
     }
 
     if args.with_utility {
-        say_utility_split();
+        say_utility_split()?;
     }
 
     if let Some(at) = &args.external {
@@ -329,7 +329,7 @@ fn say_external(at: &std::path::Path) {
 /// Not a benchmark of balthasar against something else — a demonstration that the two numbers are
 /// separable at all. A store that could not tell them apart would report identical figures here
 /// however much ledger machinery it carried.
-fn say_utility_split() {
+fn say_utility_split() -> Result<(), balthasar_store::StoreError> {
     use balthasar_model::{
         Attribution, Body, Memory, NoteKind, OutcomeKind, Presentation, ScopeId, SessionId, Tier,
         Witness, WitnessId, WitnessKind,
@@ -339,7 +339,7 @@ fn say_utility_split() {
     let at = START;
     let scope = ScopeId::new("/w/bench");
     let run = SessionId::new("01BENCH");
-    let mut store = Store::ephemeral().expect("store");
+    let mut store = Store::ephemeral()?;
 
     let mut kept = |text: &str, n: usize| {
         let held = Memory::new(
@@ -350,92 +350,82 @@ fn say_utility_split() {
             at,
         );
         let id = held.id.clone();
-        store
-            .remember(
-                held,
-                Witness::new(
-                    WitnessId::new(format!("w{n}")),
-                    WitnessKind::Imperative,
-                    run.clone(),
-                    scope.clone(),
-                    at,
-                ),
+        store.remember(
+            held,
+            Witness::new(
+                WitnessId::new(format!("w{n}")),
+                WitnessKind::Imperative,
+                run.clone(),
+                scope.clone(),
                 at,
-            )
-            .expect("remember");
-        id
+            ),
+            at,
+        )?;
+        Ok::<_, balthasar_store::StoreError>(id)
     };
-    let popular = kept("a memory every query happens to match", 0);
-    let useful = kept("the memory somebody actually followed", 1);
+    let popular = kept("a memory every query happens to match", 0)?;
+    let useful = kept("the memory somebody actually followed", 1)?;
 
     // Twenty retrievals for one, a single attributed success for the other.
     for n in 0..20 {
-        store
-            .note_recall(
-                &RecallRun {
-                    id: format!("r{n}"),
-                    scope: scope.clone(),
-                    session: Some(run.clone()),
-                    query_hash: "hash".to_owned(),
-                    requested_at: at + n,
-                    config_fingerprint: "cfg".to_owned(),
-                    vector_available: false,
-                    result_limit: 10,
-                    latency_us: 100,
-                },
-                &[Candidate {
-                    memory: popular.clone(),
-                    rank: 0,
-                    selected: true,
-                    score: 0.9,
-                    signals: Signals::default(),
-                }],
-            )
-            .expect("recall");
-    }
-    store
-        .note_injection(
-            &Injection {
-                id: "i1".to_owned(),
-                recall: None,
+        store.note_recall(
+            &RecallRun {
+                id: format!("r{n}"),
+                scope: scope.clone(),
                 session: Some(run.clone()),
-                created_at: at,
-                token_count: 10,
-                remote: false,
-                policy: "balanced".to_owned(),
+                query_hash: "hash".to_owned(),
+                requested_at: at + n,
+                config_fingerprint: "cfg".to_owned(),
+                vector_available: false,
+                result_limit: 10,
+                latency_us: 100,
             },
-            &[(useful.clone(), Presentation::Asserted)],
-        )
-        .expect("inject");
-    store
-        .note_use(&Use {
-            id: "a1".to_owned(),
-            injection: Some("i1".to_owned()),
-            session: Some(run),
-            reported_at: at,
-            tool: Some("shell".to_owned()),
-            action_hash: "h".to_owned(),
-            attribution: Attribution::Explicit,
-            memories: vec![useful.clone()],
-        })
-        .expect("use");
-    store
-        .note_outcome(&Verdict {
-            id: "o1".to_owned(),
-            action: "a1".to_owned(),
-            observed_at: at,
-            kind: OutcomeKind::Succeeded,
-            score: None,
-            evidence_cursor: None,
-            evaluator: "caller".to_owned(),
-            note: None,
-        })
-        .expect("outcome");
+            &[Candidate {
+                memory: popular.clone(),
+                rank: 0,
+                selected: true,
+                score: 0.9,
+                signals: Signals::default(),
+            }],
+        )?;
+    }
+    store.note_injection(
+        &Injection {
+            id: "i1".to_owned(),
+            recall: None,
+            session: Some(run.clone()),
+            created_at: at,
+            token_count: 10,
+            remote: false,
+            policy: "balanced".to_owned(),
+        },
+        &[(useful.clone(), Presentation::Asserted)],
+    )?;
+    store.note_use(&Use {
+        id: "a1".to_owned(),
+        injection: Some("i1".to_owned()),
+        session: Some(run),
+        reported_at: at,
+        tool: Some("shell".to_owned()),
+        action_hash: "h".to_owned(),
+        attribution: Attribution::Explicit,
+        memories: vec![useful.clone()],
+    })?;
+    store.note_outcome(&Verdict {
+        id: "o1".to_owned(),
+        action: "a1".to_owned(),
+        observed_at: at,
+        kind: OutcomeKind::Succeeded,
+        score: None,
+        evidence_cursor: None,
+        evaluator: "caller".to_owned(),
+        note: None,
+    })?;
 
     let (seen_popular, _) = store.times_retrieved(&popular).unwrap_or((0, 0));
     let (seen_useful, _) = store.times_retrieved(&useful).unwrap_or((0, 0));
-    let up = store.utility_of(&popular).expect("utility");
-    let uu = store.utility_of(&useful).expect("utility");
+    let up = store.utility_of(&popular)?;
+    let uu = store.utility_of(&useful)?;
 
     crate::say!("{}", render::bold("popularity against usefulness"));
     crate::say!();
@@ -467,4 +457,5 @@ fn say_utility_split() {
         );
     }
     crate::say!();
+    Ok(())
 }

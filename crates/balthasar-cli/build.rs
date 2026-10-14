@@ -6,7 +6,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../config");
     println!("cargo:rerun-if-changed={}", config.display());
 
@@ -19,13 +19,14 @@ fn main() {
          pub const SHIPPED: &[(&str, &str)] = &[\n",
     );
     for (name, path) in &found {
-        writeln!(out, "    ({name:?}, include_str!({path:?})),").expect("a string");
+        writeln!(out, "    ({name:?}, include_str!({path:?})),")?;
         println!("cargo:rerun-if-changed={path}");
     }
     out.push_str("];\n");
 
-    let into = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR")).join("shipped.rs");
-    std::fs::write(&into, out).expect("write the shipped list");
+    let into = PathBuf::from(std::env::var("OUT_DIR")?).join("shipped.rs");
+    std::fs::write(&into, out)?;
+    Ok(())
 }
 
 /// Every `.lua` under `root`, as (path relative to root, absolute path).

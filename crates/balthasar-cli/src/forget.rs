@@ -119,9 +119,9 @@ pub fn run(
 
 /// What happened, for a caller that asked in an encoding.
 fn went(what: &str, to: &serde_json::Value) -> serde_json::Value {
-    let mut said = to.clone();
-    said["forgotten"] = serde_json::json!(what);
-    said
+    let mut said = to.as_object().cloned().unwrap_or_default();
+    said.insert("forgotten".to_owned(), serde_json::json!(what));
+    serde_json::Value::Object(said)
 }
 
 /// Archive or purge a whole run.
