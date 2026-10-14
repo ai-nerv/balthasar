@@ -388,8 +388,9 @@ call is cancelled, and reaps it.
 **The uid is the boundary between people. Within one uid, the jail is the boundary.** A command a
 tool runs inside the jail reaches no family socket: the runtime directory is not in its mount
 namespace, the abstract socket namespace is scoped away, and on the path without bubblewrap it
-cannot open a Unix socket at all. Everything unjailed and running as this uid could edit the
-person's own configuration, and no protocol here pretends otherwise.
+cannot open a Unix socket at all. Every socket it opens is IPv4, IPv6, routing netlink or, under
+bubblewrap only, Unix; any other address family is refused. Everything unjailed and running as
+this uid could edit the person's own configuration, and no protocol here pretends otherwise.
 
 **Who a caller is, read from its environment, is attribution and never authority.** A program may
 read a peer's `/proc/<pid>/environ` to learn which session a call comes from, once, when the
