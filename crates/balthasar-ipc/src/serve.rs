@@ -201,16 +201,13 @@ impl Listener {
                 Err(_) => {}
             }
         }
-        let Some(first) = bound.first() else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "no directory to bind in",
-            ));
-        };
-        Ok(Self {
-            path: first.path.clone(),
-            bound,
-        })
+        let path = bound
+            .first()
+            .map(|first| first.path.clone())
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "no directory to bind in")
+            })?;
+        Ok(Self { path, bound })
     }
 
     /// Where it is listening: the role's own name.
