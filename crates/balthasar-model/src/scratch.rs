@@ -21,6 +21,7 @@ impl Scratch {
     /// # Panics
     /// If the directory cannot be created.
     #[must_use]
+    #[allow(clippy::expect_used)]
     pub fn new(prefix: &str, name: &str) -> Self {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("{prefix}-{}-{n}-{name}", std::process::id()));
