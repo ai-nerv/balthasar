@@ -91,6 +91,7 @@ fn peer() -> Door {
         pid: 4242,
         uid: 1000,
         program: Some("/usr/bin/some-harness".to_owned()),
+        agent: None,
     })
 }
 

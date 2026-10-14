@@ -74,6 +74,7 @@ impl Harness {
                 pid: 42,
                 uid: 1000,
                 program: Some("/usr/bin/some-harness".to_owned()),
+                agent: None,
             }),
             &Request {
                 call: name.to_owned(),
