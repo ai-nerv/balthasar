@@ -35,10 +35,10 @@ impl Default for Engine {
 }
 
 impl Engine {
-    /// The one place a VM is built, sandboxed before anything is installed in it.
-    fn bare_vm() -> Self {
+    /// The one place a VM is built, from the allowlist for `surface`, before anything is installed.
+    fn bare_vm(surface: crate::sandbox::Surface) -> Self {
         let mut engine = Self {
-            lua: Lua::full(),
+            lua: crate::sandbox::vm(surface),
             config: Rc::new(RefCell::new(Config::default())),
             logged: Rc::new(RefCell::new(Vec::new())),
             fuel: crate::fuel::Budget::default(),
@@ -47,15 +47,13 @@ impl Engine {
             own: None,
         };
         engine.lua.set_memory_limit(Some(crate::fuel::MEMORY));
-        // Before anything is installed and long before anything is read -- see `sandbox`.
-        crate::sandbox::apply(&mut engine.lua);
         engine
     }
 
     /// A VM with the `balthasar` module installed and nothing declared.
     #[must_use]
     pub fn new() -> Self {
-        let mut engine = Self::bare_vm();
+        let mut engine = Self::bare_vm(crate::sandbox::Surface::Owner);
         engine.install();
         engine
     }
@@ -64,7 +62,7 @@ impl Engine {
     /// environment, `load` or hook; it may set only [`crate::PROJECT_SETTINGS`] and add sections.
     #[must_use]
     pub fn project() -> Self {
-        let mut engine = Self::bare_vm();
+        let mut engine = Self::bare_vm(crate::sandbox::Surface::Project);
         crate::project::install(&mut engine.lua, &engine.config, &engine.refused);
         engine
     }

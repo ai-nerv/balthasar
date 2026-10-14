@@ -70,13 +70,6 @@ end
 /// Install the data-only module into a sandboxed VM.
 pub fn install(lua: &mut Lua, config: &Rc<RefCell<Config>>, refused: &Refused) {
     lua.enter(|ctx| {
-        for name in ["load", "loadstring"] {
-            ctx.set_global(name, Value::Nil);
-        }
-        if let Value::Table(os) = ctx.get_global_value("os") {
-            os.set(ctx, "getenv", Value::Nil).ok();
-        }
-
         let balthasar = Table::new(&ctx);
         for name in NESTED {
             balthasar.set(ctx, *name, Table::new(&ctx)).ok();

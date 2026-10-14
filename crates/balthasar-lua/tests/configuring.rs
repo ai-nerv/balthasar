@@ -435,7 +435,7 @@ mod trust {
         let file = write(
             &dir,
             ".balthasar.lua",
-            "if os.getenv == nil and load == nil then balthasar.live_floor = 0.2 end\n",
+            "if os == nil and load == nil then balthasar.live_floor = 0.2 end\n",
         );
         let mut engine = Engine::new();
         engine.read(&[(file, false)]).expect("data only");
