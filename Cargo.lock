@@ -51,7 +51,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "balthasar"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "balthasar-cli",
  "balthasar-ipc",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-buffer"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "balthasar-store",
  "serde",
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "balthasar-distil",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-distil"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "balthasar-embed",
  "balthasar-lua",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-embed"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -118,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-host"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "balthasar-buffer",
  "balthasar-ipc",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-ipc"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "balthasar-model",
  "ciborium",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-lua"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "balthasar-model",
  "luna",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-model"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "rustix",
  "serde",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-recall"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "balthasar-lua",
  "balthasar-model",
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-store"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "balthasar-model",
  "rusqlite",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-testkit"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "balthasar-distil",
  "balthasar-lua",
