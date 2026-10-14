@@ -218,3 +218,43 @@ fn applied_layouts_are_pruned_by_age_but_not_the_newest_or_one_still_owed_effect
         "the run's newest"
     );
 }
+
+#[test]
+fn a_retention_pass_empties_every_table_of_a_quiet_session_and_nothing_else() {
+    const NOW: i64 = 1_800_000_000;
+    let dir = Scratch::new("balthasar-purge-every", "retained");
+    let path = dir.join("transcript.db");
+    let scrollback = Transcript::open(&path).expect("open");
+    let raw = Connection::open(&path).expect("raw");
+    raw.pragma_update(None, "foreign_keys", false)
+        .expect("placeholders point at nothing");
+    let mut n = 0;
+    for session in ["quiet", "live", "recent"] {
+        fill(&raw, session, &mut n);
+    }
+    raw.execute(
+        "INSERT INTO turn (session, cursor, at, role, kind) \
+         VALUES ('recent', 9999, ?1, 'user', 'prose')",
+        [NOW],
+    )
+    .expect("a turn this month");
+    let every = keyed(&raw).len();
+
+    let live = [SessionId::new("live")];
+    let before = NOW - 30 * balthasar_store::DAY;
+    let pruned =
+        balthasar_store::prune_turns(&scrollback, None, None, before, &live).expect("pruned");
+
+    assert_eq!(pruned.sessions, 1);
+    assert_eq!(
+        left(&raw, "quiet"),
+        vec!["note_change".to_owned()],
+        "only the notes' own change log outlives the session"
+    );
+    assert_eq!(left(&raw, "live").len(), every, "the live session");
+    assert_eq!(
+        left(&raw, "recent").len(),
+        every,
+        "a session active this month"
+    );
+}

@@ -58,8 +58,8 @@ pub use paths::{
 };
 pub use placed::{SCOPED, SCOPED_SCROLLBACK};
 pub use purge::{
-    Closure, LAYOUT_KEPT, closure_of, prune_layouts, purge, purge_domain, purge_run, purge_scratch,
-    purge_session,
+    Closure, DAY, Expired, LAYOUT_KEPT, Pruned, closure_of, expired, prune_layouts, prune_turns,
+    purge, purge_domain, purge_run, purge_scratch, purge_session,
 };
 pub use read::{Cluster, Recall};
 pub use relate::Reach;
