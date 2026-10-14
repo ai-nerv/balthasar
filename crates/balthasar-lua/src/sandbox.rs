@@ -4,9 +4,13 @@
 //! person's own configuration is given `os` as well. Every global, and every field of a library
 //! table, that is not named below is then taken out, before anything is installed, so a name a
 //! later luna adds is unreachable until it is listed here. `io`, `package` and `debug` are never
-//! loaded at all.
+//! loaded at all. No object is ever enrolled for a finalizer: `setmetatable` refuses a metatable
+//! carrying `__gc`, and `getmetatable` hands out no userdata's metatable.
 
-use luna::{Lua, Table, Value};
+use luna::{Callback, CallbackReturn, Context, Lua, MetaMethod, Table, Value};
+
+/// What a metatable carrying `__gc` is told: no finalizer ever runs here.
+const FINALIZED: &str = "a metatable with __gc is refused: finalizers never run here";
 
 /// Which VM is being built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,8 +152,55 @@ pub fn vm(surface: Surface) -> Lua {
                 prune(ctx, library, |field| fields.contains(&field));
             }
         }
+        guard(ctx, globals, "setmetatable", finalized);
+        hide_userdata_metatables(ctx, globals);
     });
     lua
+}
+
+/// `getmetatable`, answering `nil` for a userdata: luna re-attaches one shared metatable to every
+/// error it raises as a userdata, and `__gc` set on it would enrol each later error.
+fn hide_userdata_metatables<'gc>(ctx: Context<'gc>, globals: Table<'gc>) {
+    let Value::Function(original) = globals.get_value(ctx, "getmetatable") else {
+        return;
+    };
+    let hidden = Callback::from_fn_with(&ctx, original, |original, ctx, _exec, mut stack| {
+        if matches!(stack.get(0), Value::UserData(_)) {
+            stack.replace(ctx, Value::Nil);
+            return Ok(CallbackReturn::Return);
+        }
+        Ok(CallbackReturn::Call {
+            function: *original,
+            then: None,
+        })
+    });
+    globals.set(ctx, "getmetatable", hidden).ok();
+}
+
+/// A check on a call's first two arguments, naming why it refuses them.
+type Refusal = for<'gc> fn(Context<'gc>, Value<'gc>, Value<'gc>) -> Option<&'static str>;
+
+/// Put `refuses` in front of the function at `table[name]`, which then runs as it did.
+fn guard<'gc>(ctx: Context<'gc>, table: Table<'gc>, name: &'static str, refuses: Refusal) {
+    let Value::Function(original) = table.get_value(ctx, name) else {
+        return;
+    };
+    let guarded = Callback::from_fn_with(&ctx, original, move |original, ctx, _exec, stack| {
+        if let Some(why) = refuses(ctx, stack.get(0), stack.get(1)) {
+            return Err(crate::convert::raise(ctx, why));
+        }
+        Ok(CallbackReturn::Call {
+            function: *original,
+            then: None,
+        })
+    });
+    table.set(ctx, name, guarded).ok();
+}
+
+/// A metatable carrying `__gc`, which would enrol its object for a finalizer.
+fn finalized<'gc>(ctx: Context<'gc>, _: Value<'gc>, metatable: Value<'gc>) -> Option<&'static str> {
+    matches!(metatable, Value::Table(metatable) if !metatable.get_value(ctx, MetaMethod::Gc).is_nil())
+        .then_some(FINALIZED)
 }
 
 /// Take every key out of `table` that `keep` does not name. In place, so the string metatable's
@@ -357,5 +408,65 @@ mod tests {
             .run(crate::project::prelude(), "project prelude")
             .expect("prelude");
         holds_exactly(engine, &[CORE, PROJECT]);
+    }
+
+    /// What `body` left in `balthasar.answer`, run in a project file's VM.
+    fn in_project(body: &str) -> String {
+        let mut engine = Engine::project();
+        engine
+            .run(crate::project::prelude(), "project prelude")
+            .expect("prelude");
+        engine.run(body, "probe.lua").expect("run");
+        engine.harvest();
+        engine
+            .config()
+            .string("answer")
+            .unwrap_or("<absent>")
+            .to_owned()
+    }
+
+    #[test]
+    fn a_metatable_carrying_gc_is_refused_and_any_other_is_taken() {
+        let refused = "select(2, pcall(setmetatable, {}, { __gc = function() end }))";
+        assert!(probe(refused).contains("__gc"), "{}", probe(refused));
+        let said = in_project(&format!("balthasar.answer = {refused}"));
+        assert!(said.contains("__gc"), "{said}");
+        assert_eq!(probe("setmetatable({}, { __index = { x = 7 } }).x"), "7");
+        let locked = "setmetatable(setmetatable({}, { __metatable = 1 }), {})";
+        assert!(probe(&format!("select(2, pcall(function() {locked} end))")).contains("protected"));
+    }
+
+    #[test]
+    fn no_route_enrols_an_object_for_a_finalizer() {
+        let mut engine = Engine::new();
+        let before = engine.held();
+        engine
+            .run(
+                "local gc = function() end
+                 local took = 0
+                 local _, raised = pcall(string.rep)
+                 local shared = getmetatable(raised)
+                 if type(shared) == 'table' then shared.__gc = gc end
+                 for i = 1, 20000 do
+                   local big = string.rep('x', 256) .. i
+                   if pcall(setmetatable, { big }, { __gc = gc }) then took = took + 1 end
+                   if pcall(rawget(_G, 'setmetatable'), { big }, { __gc = gc }) then
+                     took = took + 1
+                   end
+                   local late = {}
+                   setmetatable({ big }, late)
+                   late.__gc = gc
+                   pcall(string.rep)
+                 end
+                 balthasar.took = took
+                 balthasar.shared = type(shared)",
+                "enrol.lua",
+            )
+            .expect("runs");
+        engine.harvest();
+        assert_eq!(engine.config().number("took"), Some(0.0));
+        assert_eq!(engine.config().string("shared"), Some("nil"));
+        let after = engine.held();
+        assert!(after < before + (1 << 20), "{before} bytes -> {after}");
     }
 }

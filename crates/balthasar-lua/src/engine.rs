@@ -458,3 +458,12 @@ impl Engine {
         Ok(())
     }
 }
+
+#[cfg(test)]
+impl Engine {
+    /// What the VM holds once everything unreachable has been collected.
+    pub(crate) fn held(&mut self) -> usize {
+        self.lua.gc_collect();
+        self.lua.total_memory()
+    }
+}

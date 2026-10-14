@@ -133,6 +133,27 @@ for lent in '"fs"' '"git"' '"stream"' 'stream::table' 'helpers::install('; do
   fi
 done
 
+# ---- no finalizer is ever enrolled, so none is ever run ------------------------------------------
+# luna runs a `__gc` handler as Lua outside any budget. `setmetatable` refuses a metatable that
+# carries one, and `getmetatable` keeps the metatable luna shares between its error objects out of
+# reach; with nothing enrolled, nothing here calls `run_finalizers`.
+if ! printf '%s\n' "$listed" | grep -q 'guard(ctx, globals, "setmetatable", finalized)'; then
+  echo "gate-sandbox: setmetatable no longer refuses a metatable carrying __gc" >&2
+  fail=1
+fi
+if ! printf '%s\n' "$listed" | grep -q 'hide_userdata_metatables(ctx, globals)'; then
+  echo "gate-sandbox: getmetatable hands out a userdata's metatable again" >&2
+  fail=1
+fi
+finalizing=$(find "$ROOT" -name '*.rs' -not -path '*/target/*' | sort | while IFS= read -r file; do
+  bare "$file" | grep -n 'run_finalizers(' | sed "s|^|$file:|" || true
+done)
+if [ -n "$finalizing" ]; then
+  echo "gate-sandbox: a finalizer is run, outside any budget:" >&2
+  printf '%s\n' "$finalizing" | sed 's/^/  /' >&2
+  fail=1
+fi
+
 # ---- fs.read is lent to the person's own files only ----------------------------------------------
 if ! bare "$HELPERS" | grep -q 'lent.get()'; then
   echo "gate-sandbox: balthasar.fs.read no longer asks whether it is lent" >&2

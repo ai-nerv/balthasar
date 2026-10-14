@@ -56,7 +56,6 @@ pub fn drive(lua: &mut Lua, executor: &StashedExecutor, fuel: u64) -> Result<(),
                 "stopped after spending its budget of {fuel} instructions"
             ));
         }
-        lua.run_finalizers();
         if lua.total_memory() > MEMORY {
             lua.gc_collect();
             if lua.total_memory() > MEMORY {
