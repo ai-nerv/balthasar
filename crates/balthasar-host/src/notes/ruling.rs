@@ -123,12 +123,8 @@ pub(super) fn rule_text(line: &str) -> Option<&str> {
     let lower = line.to_lowercase();
     for prefix in MARKERS {
         if lower.starts_with(prefix) {
-            return Some(
-                line[prefix.len()..]
-                    .trim()
-                    .strip_prefix("we ")
-                    .unwrap_or(line[prefix.len()..].trim()),
-            );
+            let rest = line.get(prefix.len()..).unwrap_or_default().trim();
+            return Some(rest.strip_prefix("we ").unwrap_or(rest));
         }
     }
     let body = line

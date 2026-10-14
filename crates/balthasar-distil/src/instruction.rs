@@ -157,11 +157,12 @@ fn substantive(claim: &str) -> (String, bool) {
         if POINTING.contains(&head) || SWEARING.contains(&head) {
             // Unless it is half of a contraction: stripping the "it" out of "it's make test"
             // leaves "s make test".
-            let after = rest[head.len().min(rest.len())..].chars().next();
+            let skip = rest.floor_char_boundary(head.len());
+            let after = rest[skip..].chars().next();
             if matches!(after, Some('\'' | '\u{2019}')) {
                 break;
             }
-            rest = rest[head.len().min(rest.len())..]
+            rest = rest[skip..]
                 .trim_start_matches(|c: char| !c.is_alphanumeric())
                 .trim();
             continue;
@@ -343,8 +344,8 @@ fn within_one_edit(a: &str, b: &str) -> bool {
 /// The window covers the marker itself: in "I can never remember" the marker is "never" and the
 /// phrase that settles it is "can never".
 fn is_reported(text: &str, at: usize, len: usize) -> bool {
-    let from = at.saturating_sub(24);
-    let to = (at + len).min(text.len());
+    let from = text.floor_char_boundary(at.saturating_sub(24));
+    let to = text.ceil_char_boundary((at + len).min(text.len()));
     let window = &text[from..to];
     REPORTED.iter().any(|phrase| window.contains(phrase))
 }
@@ -374,6 +375,25 @@ mod tests {
 
     fn read_it(text: &str) -> Option<Instruction> {
         read(text, &[])
+    }
+
+    #[test]
+    fn a_window_that_starts_inside_a_wide_character_does_not_panic() {
+        let text = format!("{}ab never", "é".repeat(20));
+        let at = text.find("never").expect("there");
+        assert_eq!(
+            at.saturating_sub(24) % 2,
+            1,
+            "the raw window starts mid-character"
+        );
+        let _ = is_reported(&text, at, "never".len());
+        let _ = read_it(&format!("{} REMEMBER we deploy with fly", "ü".repeat(30)));
+    }
+
+    #[test]
+    fn a_pointing_word_folded_wider_than_written_does_not_panic() {
+        let _ = substantive("İt's make test");
+        let _ = read_it("remember: İt ünd so weiter");
     }
 
     #[test]

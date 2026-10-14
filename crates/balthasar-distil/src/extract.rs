@@ -191,7 +191,7 @@ pub fn correction(text: &str) -> Option<String> {
     let claim = if *marker == "not " {
         first_sentence(trimmed)
     } else {
-        first_sentence(trimmed[marker.len()..].trim_start())
+        first_sentence(trimmed.get(marker.len()..).unwrap_or_default().trim_start())
     };
     (claim.len() >= 8).then_some(claim)
 }

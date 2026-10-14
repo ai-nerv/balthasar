@@ -132,7 +132,7 @@ impl Distil for Spawned {
         written?;
 
         let mut answer = String::from_utf8_lossy(&out.stdout).into_owned();
-        answer.truncate(budget.max_bytes);
+        answer.truncate(answer.floor_char_boundary(budget.max_bytes));
         let answer = answer.trim().to_owned();
         if answer.is_empty() {
             return Err(DistilFailure::Refused(
