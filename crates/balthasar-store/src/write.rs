@@ -108,7 +108,7 @@ impl Store {
             .filter(|l| !l.is_empty());
         let body = serde_json::to_string(&memory.body)?;
         let text = memory.text();
-        let tx = self.db_mut().transaction()?;
+        let tx = self.db_mut().savepoint()?;
         tx.execute(
             "INSERT INTO memory \
              (id, tier, scope, session, subject, predicate, object, body, text, content_hash, \
@@ -173,7 +173,7 @@ impl Store {
         now: Timestamp,
     ) -> Result<f64, StoreError> {
         {
-            let tx = self.db_mut().transaction()?;
+            let tx = self.db_mut().savepoint()?;
             write_witness(&tx, id, &witness)?;
             tx.commit()?;
         }
@@ -205,7 +205,35 @@ impl Store {
     /// The new memory inherits the old one's confidence as a floor. Being a correction of
     /// something established is itself evidence about the correction, and starting a
     /// replacement from zero is why systems oscillate between a stale fact and its fix.
+    ///
+    /// All of it is one transaction: a failure part-way leaves the old answer standing.
     fn supersede(
+        &mut self,
+        old: &MemoryId,
+        new: Memory,
+        witness: Witness,
+        now: Timestamp,
+    ) -> Result<Landing, StoreError> {
+        let outer = self.db().is_autocommit();
+        self.db().execute_batch(if outer {
+            "BEGIN IMMEDIATE"
+        } else {
+            "SAVEPOINT supersede"
+        })?;
+        let landed = self.superseding(old, new, witness, now);
+        let end = match (&landed, outer) {
+            (Ok(_), true) => "COMMIT",
+            (Err(_), true) => "ROLLBACK",
+            (Ok(_), false) => "RELEASE supersede",
+            (Err(_), false) => "ROLLBACK TO supersede; RELEASE supersede",
+        };
+        let ended = self.db().execute_batch(end);
+        let landed = landed?;
+        ended?;
+        Ok(landed)
+    }
+
+    fn superseding(
         &mut self,
         old: &MemoryId,
         new: Memory,
@@ -226,7 +254,7 @@ impl Store {
         let new_id = self.insert(new, &witness, now)?;
 
         {
-            let tx = self.db_mut().transaction()?;
+            let tx = self.db_mut().savepoint()?;
             write_link(&tx, &new_id, old.as_str(), LinkRelation::Supersedes, now)?;
             write_link(&tx, old, new_id.as_str(), LinkRelation::Contradicts, now)?;
             tx.commit()?;
@@ -489,7 +517,7 @@ impl Store {
 
 /// One witness row. Idempotent by id, so re-ingesting the same transcript adds nothing.
 fn write_witness(
-    tx: &rusqlite::Transaction<'_>,
+    tx: &rusqlite::Connection,
     memory: &MemoryId,
     witness: &Witness,
 ) -> Result<(), StoreError> {
@@ -516,7 +544,7 @@ fn write_witness(
 
 /// One edge. Idempotent, because a relation drawn twice is one relation.
 fn write_link(
-    tx: &rusqlite::Transaction<'_>,
+    tx: &rusqlite::Connection,
     src: &MemoryId,
     dst: &str,
     rel: LinkRelation,
