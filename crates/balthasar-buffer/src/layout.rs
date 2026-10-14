@@ -269,7 +269,9 @@ pub fn lay(rules: &Rules, ask: &Ask, rows: &[Row], held: &Held, factor: f64) -> 
                 let goal = of(rules.compact_to * scale);
                 let (mut freed, mut first, mut last) = (0, None, None);
                 for unit in &units {
-                    let head = unit[0].cursor;
+                    let Some(head) = unit.first().map(|r| r.cursor) else {
+                        continue;
+                    };
                     let guarded = unit.iter().any(|r| protected.contains(&r.cursor));
                     if first.is_none() {
                         match held.summary {
@@ -455,7 +457,9 @@ fn arrange(
 /// the newest row.
 fn protected(shown: &[&Row], keep_turns: usize, keep_results: usize) -> HashSet<u64> {
     let users: Vec<u64> = shown.iter().filter(|r| r.user).map(|r| r.cursor).collect();
-    let recent = &users[users.len().saturating_sub(keep_turns)..];
+    let recent = users
+        .get(users.len().saturating_sub(keep_turns)..)
+        .unwrap_or(&[]);
     // Results the recent prompts work with: one from a prompt long finished is history, and holding
     // it kept every summary at the turn before it.
     let since = recent.first().copied().unwrap_or(0);
@@ -465,7 +469,11 @@ fn protected(shown: &[&Row], keep_turns: usize, keep_results: usize) -> HashSet<
         .map(|r| r.cursor)
         .collect();
     let mut held: HashSet<u64> = recent.iter().copied().collect();
-    held.extend(&results[results.len().saturating_sub(keep_results)..]);
+    held.extend(
+        results
+            .iter()
+            .skip(results.len().saturating_sub(keep_results)),
+    );
     held.extend(shown.last().map(|r| r.cursor));
     held
 }
@@ -475,8 +483,8 @@ fn units<'a>(shown: &[&'a Row]) -> Vec<Vec<&'a Row>> {
     let mut order: Vec<Vec<&Row>> = Vec::new();
     let mut at: HashMap<u64, usize> = HashMap::new();
     for row in shown {
-        if let Some(&index) = at.get(&row.unit) {
-            order[index].push(row);
+        if let Some(group) = at.get(&row.unit).and_then(|&index| order.get_mut(index)) {
+            group.push(row);
         } else {
             at.insert(row.unit, order.len());
             order.push(vec![row]);

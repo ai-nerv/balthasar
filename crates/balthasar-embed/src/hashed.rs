@@ -62,7 +62,9 @@ fn add(out: &mut [f32], token: &str, weight: f32) {
     let hash = fnv(token.as_bytes());
     let at = (hash % DIMENSIONS as u64) as usize;
     let sign = if hash & (1 << 63) == 0 { 1.0 } else { -1.0 };
-    out[at] += weight * sign;
+    if let Some(slot) = out.get_mut(at) {
+        *slot += weight * sign;
+    }
 }
 
 /// FNV-1a. Small, fast, well-spread, and no dependency.

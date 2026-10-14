@@ -164,7 +164,10 @@ fn text_table<'gc>(ctx: luna::Context<'gc>) -> Table<'gc> {
         };
         let body = String::from_utf8_lossy(text.as_bytes()).into_owned();
         let lines: Vec<&str> = body.lines().collect();
-        let kept = lines[lines.len().saturating_sub(wanted)..].join("\n");
+        let kept = lines
+            .get(lines.len().saturating_sub(wanted)..)
+            .unwrap_or(&[])
+            .join("\n");
         stack.replace(ctx, luna::String::from_slice(&ctx, kept.as_bytes()));
         Ok(CallbackReturn::Return)
     });
