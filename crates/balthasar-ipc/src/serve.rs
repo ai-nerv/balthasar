@@ -176,7 +176,7 @@ impl Listener {
     /// Bind, replacing only a socket nothing answers on.
     ///
     /// Each name is taken under its `.lock`, and an existing socket is cleared only when connecting
-    /// to it is refused outright — see [`crate::stale`]. Two names for one process, so a caller
+    /// to it is refused outright. Two names for one process, so a caller
     /// looking under either finds *this* store: the role's own name must bind, the old one is a
     /// courtesy, and a live program on the old one refuses the instance outright.
     pub fn bind(instance: &str) -> std::io::Result<Self> {
@@ -222,7 +222,7 @@ impl Listener {
     /// [`frame::WireError::Closed`] — not on quiet.
     ///
     /// A stop signal ends this the way running out of callers would, when the caller called
-    /// [`crate::hold_stop_signals`] first, so that [`Listener::drop`] and whatever the answering
+    /// [`crate::hold_stop_signals`] first, so that the sockets are removed and whatever the answering
     /// closure holds still run on the way out.
     ///
     /// # Errors

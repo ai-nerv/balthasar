@@ -137,7 +137,7 @@ const STOPWORDS: &[&str] = &[
 pub const MOST_TERMS: usize = 64;
 
 /// A person's words as something FTS5 will accept: every term quoted and joined with `OR`,
-/// stopwords and repeats dropped, at most [`MOST_TERMS`] of them. Unquoted input is a syntax the
+/// stopwords and repeats dropped, at most `MOST_TERMS` of them. Unquoted input is a syntax the
 /// user did not ask to be writing.
 pub fn fts_query(query: &str) -> String {
     let mut seen = std::collections::HashSet::new();

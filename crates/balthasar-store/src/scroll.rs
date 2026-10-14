@@ -251,7 +251,7 @@ impl Transcript {
     }
 
     /// Turns mentioning every term, found through the search index: each term a word or the
-    /// start of one. At most [`MOST_TERMS`] terms are used.
+    /// start of one. At most `MOST_TERMS` terms are used.
     fn matching(
         &self,
         session: &SessionId,
