@@ -498,7 +498,9 @@ make.recipe{
   run = function()
     local where = "target/x86_64-unknown-linux-musl/release/balthasar"
     if not oslo.fs.exists(where) then where = "target/release/balthasar" end
-    local ran = oslo.run{ "scripts/gate-family.sh", where  }
+    -- `serve` is probed live: bound in the gate's own runtime directory, its key handed first.
+    local ran = oslo.run{ "env", "GATE_SERVE_STDIN=" .. ("5e"):rep(32), "scripts/gate-family.sh",
+                          where, "serve", "--instance", "gate", "--scope", "project" }
     assert(ran.ok, "gate-family failed")
   end,
 }
