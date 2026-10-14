@@ -552,8 +552,9 @@ fn fingerprint() -> i64 {
     for (table, name, declared) in crate::notes::ADDED {
         digest.update(format!("{table}.{name} {declared};").as_bytes());
     }
-    let bytes = digest.finalize();
-    i64::from(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) & 0x7fff_ffff) | 1
+    let bytes: [u8; 32] = digest.finalize().into();
+    let [a, b, c, d, ..] = bytes;
+    i64::from(u32::from_be_bytes([a, b, c, d]) & 0x7fff_ffff) | 1
 }
 
 /// The scrollback, as first written. Columns added later are in [`ADDED`] as well, so a file
