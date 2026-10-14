@@ -232,7 +232,7 @@ fn a_tool_that_said_what_it_was_is_stubbed_in_its_own_words() {
         turn(&mut harness, n);
     }
     let reply = harness.ask(&Request {
-        call: "observe".into(),
+        call: "amend".into(),
         args: vec![
             serde_json::json!(SESSION),
             serde_json::json!({

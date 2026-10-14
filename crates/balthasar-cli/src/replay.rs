@@ -122,7 +122,7 @@ pub fn run(
 
     if args.resume {
         let next = held.next_cursor(&session)?;
-        let turns = held.replay(&session)?.len();
+        let turns = held.count(&session)?;
         let where_ = serde_json::json!({ "next": next, "turns": turns });
         if args.how.framed() {
             args.how.one(where_);
@@ -167,6 +167,12 @@ pub fn run(
         return Ok(());
     }
 
+    let noticed = match (turns.first(), turns.last()) {
+        (Some(first), Some(last)) if !args.raw => {
+            held.noticed(&session, first.cursor, last.cursor)?
+        }
+        _ => Vec::new(),
+    };
     for turn in &turns {
         if args.raw {
             // Exactly what the harness wrote. A turn with no record is skipped, not invented.
@@ -185,6 +191,16 @@ pub fn run(
             crate::say!(
                 "{}",
                 render::dim(&format!("        revised {}×", turn.revisions))
+            );
+        }
+        for seen in noticed.iter().filter(|seen| seen.cursor == turn.cursor) {
+            crate::say!(
+                "{}",
+                render::dim(&format!(
+                    "        {} {}",
+                    seen.kind,
+                    render::clip(&seen.text, 80)
+                ))
             );
         }
     }

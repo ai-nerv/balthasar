@@ -84,7 +84,7 @@ fn a_purged_target_is_not_replaced_by_new_memory_with_the_same_text() {
     assert_eq!(distillations(&harness, &memories[0]), 1);
     balthasar_store::purge(&mut harness.store, &memories[0]).expect("purge original");
     harness
-        .observe(json!({"cursor":0,"role":"user","kind":"user","text":"The parser has stage 0."}));
+        .observe(json!({"cursor":2,"role":"user","kind":"user","text":"The parser has stage 0."}));
     let replacement = harness
         .store
         .scratch_for(
@@ -237,7 +237,7 @@ fn a_resolved_missing_target_cannot_acquire_a_later_replacement() {
         balthasar_store::LayoutTarget::Missing
     );
     harness
-        .observe(json!({"cursor":0,"role":"user","kind":"user","text":"The parser has stage 0."}));
+        .observe(json!({"cursor":2,"role":"user","kind":"user","text":"The parser has stage 0."}));
     let replacement = harness
         .store
         .scratch_for(
@@ -340,7 +340,7 @@ fn pending_effects_use_the_captured_source_not_a_later_amendment() {
     faults.execute_batch("CREATE TRIGGER fail_source BEFORE INSERT ON witness BEGIN SELECT RAISE(ABORT, 'witness failed'); END;").expect("fault");
     assert!(!apply(&mut harness, &id).ok);
     harness.observe(
-        json!({"cursor":0,"role":"user","kind":"user","text":"Replacement parser source"}),
+        json!({"cursor":2,"role":"user","kind":"user","text":"Replacement parser source"}),
     );
     let replacement = harness
         .store

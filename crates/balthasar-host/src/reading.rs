@@ -161,8 +161,16 @@ pub fn scroll(at: &mut Answering<'_>, request: &Request) -> Reply {
                     row
                 })
                 .collect();
+            // What was noticed across the same cursors, beside the turns and never among them.
+            let traces = match (held.turns.first(), held.turns.last()) {
+                (Some(first), Some(last)) => scrollback
+                    .noticed(&session, first.cursor, last.cursor)
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            };
             Reply::one(serde_json::json!({
                 "turns": turns,
+                "traces": traces,
                 "tokens": held.tokens,
                 "omitted": held.omitted,
                 "next": held.next,

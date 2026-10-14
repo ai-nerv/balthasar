@@ -229,7 +229,13 @@ fn legacy_transcripts_keep_their_scratch_identity() {
     let mut held = Held::new();
     let session = SessionId::new("legacy");
     held.transcript
-        .write(&session, &balthasar_store::Turn::default())
+        .write(
+            &session,
+            &balthasar_store::Turn {
+                cursor: 9,
+                ..balthasar_store::Turn::default()
+            },
+        )
         .expect("legacy turn");
     assert!(held.observe("parent", "legacy", "legacy").ok);
     assert!(!held.observe("parent", "legacy", "new").ok);
@@ -310,4 +316,46 @@ fn concurrent_agents_bind_without_read_to_write_lock_failures() {
             .collect();
         assert!(failures.is_empty(), "binding failures: {failures:?}");
     });
+}
+
+#[test]
+fn a_turn_is_recorded_even_when_every_later_step_fails() {
+    let dir = Scratch::new("binding", "later-steps");
+    let mut held = Held {
+        store: Store::open(&dir.join("memory.db")).expect("store"),
+        transcript: Transcript::open(&dir.join("transcript.db")).expect("transcript"),
+        scratch: Scratchpad::at(dir.join("runs")),
+        _dir: Scratch::new("binding", "unused"),
+    };
+    let faults = rusqlite::Connection::open(dir.join("memory.db")).expect("faults");
+    faults
+        .execute_batch(
+            "CREATE TRIGGER fail_session BEFORE INSERT ON session \
+             BEGIN SELECT RAISE(ABORT, 'project store failed'); END;",
+        )
+        .expect("fault");
+    let reply = held.observe("parent", "kept", "kept");
+    assert!(reply.ok, "the scrollback took it: {:?}", reply.error);
+    let rows = held.ask("parent", "replay", vec![json!("kept")]);
+    assert_eq!(rows.result.len(), 1, "and it is there to replay");
+}
+
+#[test]
+fn a_turn_the_scrollback_did_not_take_is_failed_not_refused() {
+    let mut held = Held::new();
+    let faults = rusqlite::Connection::open(held.transcript.path()).expect("faults");
+    faults
+        .execute_batch(
+            "CREATE TRIGGER fail_turn BEFORE INSERT ON turn \
+             BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+        )
+        .expect("fault");
+    let reply = held.observe("parent", "lost", "lost");
+    assert!(!reply.ok);
+    assert_eq!(
+        reply.fault,
+        Some(balthasar_ipc::Fault::Failed),
+        "{:?}",
+        reply.error
+    );
 }
