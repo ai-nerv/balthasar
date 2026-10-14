@@ -406,3 +406,21 @@ stops being answered.
 `.make.lua` and `.env.lua` are read by [oslo](https://github.com/termworks/oslo), which provides
 both the `make` task runner and the directory environment. Without it, `cargo` does everything
 `make` does.
+
+## Nix
+
+Each release tag publishes a static build for x86_64 and aarch64 Linux to the `ai-nerv` cache,
+with `config/` under `share/balthasar/`.
+
+```sh
+cachix use ai-nerv
+nix run github:ai-nerv/balthasar -- verbs
+nix build github:ai-nerv/balthasar
+```
+
+The flake names the cache itself, so `--accept-flake-config` does the same as `cachix use`. In
+another flake, take `inputs.balthasar.packages.${system}.default`, and configure the cache on the
+consuming machine: an input's `nixConfig` is not inherited.
+
+Here, `make nix-build` builds it into `result/`, `make nix-check` checks the flake, and
+`make nix-download-check` fetches it from the cache without building anything.
