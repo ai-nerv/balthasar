@@ -7,9 +7,6 @@
 //! Nothing here is required. With no backend reachable, extraction is extractive and
 //! consolidation is clustering. Every memory records which backend produced it.
 
-use std::io::Write;
-use std::process::{Command, Stdio};
-
 /// What went wrong reaching a model.
 #[derive(Debug, thiserror::Error)]
 pub enum DistilFailure {
@@ -89,31 +86,22 @@ impl Distil for Spawned {
     }
 
     fn complete(&self, prompt: &str, budget: Budget) -> Result<String, DistilFailure> {
-        let Some((program, args)) = self.argv.split_first() else {
+        let Some(program) = self.argv.first() else {
             return Err(DistilFailure::Unreachable("an empty command".to_owned()));
         };
-
-        let mut child = Command::new(program)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|why| DistilFailure::Unreachable(format!("{program}: {why}")))?;
-
-        // A backend that refuses outright says why on stderr and exits before it ever reads
-        // stdin, so the write loses its race and reports a broken pipe. What the child said
-        // comes first; the write is checked after.
-        let mut written = Ok(());
-        if let Some(mut stdin) = child.stdin.take() {
-            written = stdin
-                .write_all(prompt.as_bytes())
-                .map_err(|why| DistilFailure::Refused(self.name(), why.to_string()));
-        }
-
-        let out = child
-            .wait_with_output()
-            .map_err(|why| DistilFailure::Refused(self.name(), why.to_string()))?;
+        let timeout = std::time::Duration::from_millis(budget.timeout_ms);
+        let out = crate::child::run(&self.argv, prompt.as_bytes(), timeout, budget.max_bytes)
+            .map_err(|why| match why {
+                crate::child::Stopped::Spawn(why) => {
+                    DistilFailure::Unreachable(format!("{program}: {why}"))
+                }
+                other => DistilFailure::Refused(self.name(), other.to_string()),
+            })?;
+        // A backend that refuses outright says why on stderr and exits before it reads stdin, so
+        // what the child said comes first and the write is checked after.
+        let written = out
+            .written
+            .map_err(|why| DistilFailure::Refused(self.name(), why.to_string()));
 
         if !out.status.success() {
             let said = String::from_utf8_lossy(&out.stderr);
@@ -249,6 +237,30 @@ mod tests {
         };
         let answer = backend.complete("anything", budget).expect("answers");
         assert!(answer.len() <= 1024, "{}", answer.len());
+    }
+
+    #[test]
+    fn an_answer_of_wide_characters_is_cut_on_a_character() {
+        let backend = spawned(&["sh", "-c", "for i in $(seq 1 400); do printf 'é'; done"]);
+        let budget = Budget {
+            max_bytes: 101,
+            ..Budget::default()
+        };
+        let answer = backend.complete("anything", budget).expect("answers");
+        assert_eq!(answer.chars().count(), 50, "{answer}");
+    }
+
+    #[test]
+    fn a_backend_that_hangs_is_stopped_at_its_deadline() {
+        let backend = spawned(&["sleep", "1000"]);
+        let budget = Budget {
+            timeout_ms: 200,
+            ..Budget::default()
+        };
+        let started = std::time::Instant::now();
+        let why = backend.complete("anything", budget).expect_err("stopped");
+        assert!(why.to_string().contains("deadline"), "{why}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]

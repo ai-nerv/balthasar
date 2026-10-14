@@ -7,15 +7,17 @@
 # between that and a command line is one `Command::new` somebody adds in a hurry.
 #
 # The distiller's shell-out backend is the one place balthasar runs anything, and it runs a
-# CONFIGURED command against text — never a stored procedure. It is named here rather than
-# exempted by silence.
+# CONFIGURED command against text — never a stored procedure. It and the runner it uses are named
+# here rather than exempted by silence.
 set -eu
 
 ALLOWED='crates/balthasar-distil/src/distil.rs'
+RUNNER='crates/balthasar-distil/src/child.rs'
 
 fail=0
 found=$(grep -rn 'Command::new\|process::Command' crates --include='*.rs' \
         | grep -v "^$ALLOWED:" \
+        | grep -v "^$RUNNER:" \
         | grep -v '/tests/' \
         | grep -v 'build.rs' || true)
 
