@@ -50,7 +50,7 @@ impl Roots {
             config: Some(PathBuf::from(crate::helpers::config_home()).join("balthasar")),
             site: Some(PathBuf::from(crate::helpers::data_home()).join("balthasar/site")),
             project: Some(cwd.to_owned()),
-            given: Some(crate::setup::given()),
+            given: crate::setup::given(),
         }
     }
 }
@@ -107,14 +107,22 @@ pub fn runtimepath(roots: &Roots) -> Vec<(PathBuf, bool)> {
         }
     }
 
-    // What a coordinator said, last of all and trusted like the owner's own. Absent is the
-    // ordinary case.
+    // What a coordinator said, last of all and trusted like the owner's own: a regular file of this
+    // uid's, never one reached through a symlink. Absent is the ordinary case.
     if let Some(given) = &roots.given
-        && given.is_file()
+        && ours(given)
     {
         out.push((given.clone(), true));
     }
     out
+}
+
+/// Whether `path` is a regular file this uid owns, looked at without following a symlink.
+fn ours(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path).is_ok_and(|meta| {
+        meta.file_type().is_file() && meta.uid() == balthasar_model::runtime::uid()
+    })
 }
 
 /// Whether a project directory is one the owner vouched for.
@@ -362,5 +370,27 @@ mod installed_tests {
         let installed = installed(&roots);
         assert_eq!(installed.len(), 1, "{installed:?}");
         assert!(installed[0].ends_with("theirs.lua"));
+    }
+}
+
+#[cfg(test)]
+mod given_tests {
+    use super::*;
+    use balthasar_model::scratch::Scratch;
+
+    #[test]
+    fn a_given_file_reached_through_a_symlink_is_not_run() {
+        let root = Scratch::new("balthasar-rtp", "given-link");
+        let planted = root.join("planted.lua");
+        std::fs::write(&planted, "-- nothing\n").expect("write");
+        let given = root.join("balthasar.lua");
+        std::os::unix::fs::symlink(&planted, &given).expect("symlink");
+        let files = runtimepath(&Roots {
+            config: None,
+            site: None,
+            project: None,
+            given: Some(given),
+        });
+        assert!(files.is_empty(), "{files:?}");
     }
 }
