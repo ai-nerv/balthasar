@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.0] - 2026-10-14
+
+### <!-- 3 -->📚 Documentation
+
+- Image as a tools extension
+
 ## [0.6.1] - 2026-10-14
 
 ### <!-- 0 -->⛰️  Features
