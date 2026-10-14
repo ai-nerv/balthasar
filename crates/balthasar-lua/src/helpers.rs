@@ -316,14 +316,18 @@ fn common_dir(from: &std::path::Path) -> Option<std::path::PathBuf> {
             return Some(at.to_owned());
         }
         if dot.is_file() {
+            // A worktree's gitdir is `<repo>/.git/worktrees/<name>`; anything else, a submodule's
+            // `../.git/modules/<name>` included, is a repository of its own.
             let pointer = std::fs::read_to_string(&dot).ok()?;
-            let target = pointer.trim().strip_prefix("gitdir:")?.trim();
-            return std::path::PathBuf::from(target)
-                .ancestors()
-                .find(|a| a.file_name().is_some_and(|n| n == ".git"))
+            let target = at.join(pointer.trim().strip_prefix("gitdir:")?.trim());
+            let target = target.canonicalize().unwrap_or(target);
+            let repository = target
+                .parent()
+                .filter(|dir| dir.file_name().is_some_and(|n| n == "worktrees"))
                 .and_then(std::path::Path::parent)
-                .map(std::path::Path::to_owned)
-                .or_else(|| Some(at.to_owned()));
+                .filter(|git| git.file_name().is_some_and(|n| n == ".git"))
+                .and_then(std::path::Path::parent);
+            return Some(repository.map_or_else(|| at.to_owned(), std::path::Path::to_owned));
         }
         at = at.parent()?;
     }
@@ -387,5 +391,30 @@ mod tests {
         assert!(!looks_like_secret("we deploy with fly, never heroku"));
         assert!(!looks_like_secret("the sk- prefix means a secret key"));
         assert!(!looks_like_secret("run make test before pushing"));
+    }
+}
+
+#[cfg(test)]
+mod git_tests {
+    use super::common_dir;
+    use balthasar_model::scratch::Scratch;
+
+    #[test]
+    fn a_submodule_is_its_own_repository_and_a_worktree_is_its_repositorys() {
+        let root = Scratch::new("balthasar-git", "pointers");
+        let sup = root.join("sup");
+        std::fs::create_dir_all(sup.join(".git/modules/lib")).expect("mkdir");
+        std::fs::create_dir_all(sup.join(".git/worktrees/side")).expect("mkdir");
+        std::fs::create_dir_all(sup.join("lib")).expect("mkdir");
+        std::fs::write(sup.join("lib/.git"), "gitdir: ../.git/modules/lib\n").expect("write");
+        let side = root.join("side");
+        std::fs::create_dir_all(&side).expect("mkdir");
+        std::fs::write(
+            side.join(".git"),
+            format!("gitdir: {}/.git/worktrees/side\n", sup.display()),
+        )
+        .expect("write");
+        assert_eq!(common_dir(&sup.join("lib")), Some(sup.join("lib")));
+        assert_eq!(common_dir(&side), Some(sup.clone()));
     }
 }

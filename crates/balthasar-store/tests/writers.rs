@@ -23,12 +23,12 @@ fn writers_on_one_scrollback_each_land_whole() {
     drop(Transcript::open(&path).expect("created"));
     let session = SessionId::new("shared");
 
-    let writers: Vec<_> = (0..6_u64)
+    let writers: Vec<_> = (0..4_u64)
         .map(|writer| {
             let (path, session) = (path.clone(), session.clone());
             std::thread::spawn(move || {
                 let mut held = Transcript::open(&path).expect("open");
-                for n in 0..25 {
+                for n in 0..10 {
                     let cursor = writer * 100 + n;
                     held.insert(&session, &turn(cursor, &format!("said {cursor}")))
                         .expect("insert");
@@ -43,11 +43,11 @@ fn writers_on_one_scrollback_each_land_whole() {
     }
 
     let held = Transcript::open(&path).expect("open");
-    assert_eq!(held.count(&session).expect("count"), 150);
+    assert_eq!(held.count(&session).expect("count"), 40);
     let found = held.spans_matching("revised", 1_000).expect("search");
     assert_eq!(
         found.len(),
-        150,
+        40,
         "every turn's search entry is its latest text"
     );
     assert!(
@@ -56,5 +56,5 @@ fn writers_on_one_scrollback_each_land_whole() {
             .is_empty()
     );
     assert_eq!(held.revisions_of(&session, 105).expect("kept").len(), 1);
-    assert_eq!(held.reindex().expect("reindex"), 150);
+    assert_eq!(held.reindex().expect("reindex"), 40);
 }

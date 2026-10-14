@@ -1,4 +1,8 @@
 use super::*;
+
+fn is_shared(dir: &Path) -> bool {
+    is_shared_under(dir, env_home().as_deref())
+}
 use balthasar_model::scratch::Scratch;
 
 /// A scratch directory nothing else is using, named after the test rather than shared.
@@ -406,4 +410,48 @@ fn a_real_checkout_is_still_found() {
     let deep = root.join("crates/thing/src");
     std::fs::create_dir_all(&deep).expect("mkdir");
     assert_eq!(git_common_dir(&deep).as_deref(), Some(&*root));
+}
+
+#[test]
+fn a_submodule_is_a_repository_of_its_own() {
+    // Its `.git` is a file with a gitdir relative to itself, into the superproject's modules.
+    let root = scratch("submodule");
+    for project in ["one", "two"] {
+        let sup = root.join(project);
+        std::fs::create_dir_all(sup.join(".git/modules/lib")).expect("mkdir");
+        std::fs::create_dir_all(sup.join("lib/src")).expect("mkdir");
+        std::fs::write(sup.join("lib/.git"), "gitdir: ../.git/modules/lib\n").expect("write");
+    }
+    let one = scope_of(&root.join("one/lib/src"));
+    let two = scope_of(&root.join("two/lib/src"));
+    assert_eq!(one.as_str(), root.join("one/lib").to_string_lossy());
+    assert_ne!(one, two, "two submodules elsewhere are not one scope");
+    assert_ne!(one, scope_of(&root.join("one")), "nor the superproject's");
+}
+
+#[test]
+fn a_home_directory_with_a_repository_scopes_nothing_beneath_it() {
+    // A dotfiles checkout at `$HOME`, and a store left there by an older build.
+    let root = scratch("dotfiles");
+    let home = root.join("you");
+    let notes = home.join("notes/deep");
+    std::fs::create_dir_all(home.join(".git")).expect("mkdir");
+    std::fs::create_dir_all(&notes).expect("mkdir");
+    make_home(&home.join(HOME)).expect("a store from before");
+    let ceiling = |dir: &Path| too_broad_under(dir, Some(&home));
+    assert_eq!(home_below(&notes, ceiling), None);
+    assert_eq!(git_common_dir_under(&notes, &ceiling), None);
+    assert!(too_broad_under(&home, Some(&home)));
+}
+
+#[test]
+fn a_shared_directory_gets_no_store_home() {
+    let shared = std::env::temp_dir();
+    assert_eq!(
+        project_home(&ScopeId::new(shared.to_string_lossy().into_owned())),
+        None
+    );
+    let refused = make_home(&shared.join(HOME)).expect_err("too broad");
+    assert!(refused.to_string().contains("too broad"), "{refused}");
+    assert!(!shared.join(HOME).exists());
 }
