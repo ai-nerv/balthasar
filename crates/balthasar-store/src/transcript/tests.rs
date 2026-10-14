@@ -226,3 +226,22 @@ fn what_was_noticed_sits_beside_the_turn_in_arrival_order() {
     assert_eq!(seen[1].kind, "retry");
     assert_eq!(t.at(&s, 3).expect("at").expect("there").text, "the call");
 }
+
+#[test]
+fn opening_a_prepared_scrollback_takes_no_write_lock() {
+    let dir = balthasar_model::scratch::Scratch::new("balthasar-transcript", "lockless");
+    let path = dir.join("transcript.db");
+    drop(Transcript::open(&path).expect("first open prepares"));
+    let writer = rusqlite::Connection::open(&path).expect("writer");
+    writer
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("hold the write lock");
+    let started = std::time::Instant::now();
+    let again = Transcript::open(&path);
+    assert!(again.is_ok(), "{:?}", again.err());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "it waited on a lock it had no need of"
+    );
+    writer.execute_batch("ROLLBACK").expect("release");
+}

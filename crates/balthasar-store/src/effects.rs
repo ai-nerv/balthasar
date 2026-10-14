@@ -132,34 +132,36 @@ impl Transcript {
     }
 }
 
+/// Columns added after the first release, and how each is declared.
+pub(crate) const ADDED: &[(&str, &str)] = &[
+    (
+        "resolved",
+        "INTEGER NOT NULL DEFAULT 0 CHECK (resolved IN (0, 1))",
+    ),
+    ("target", "TEXT"),
+];
+
+/// Create what is missing, inside the transaction the caller holds.
 pub(crate) fn prepare(connection: &rusqlite::Connection) -> Result<(), StoreError> {
-    let tx =
-        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)?;
-    tx.execute_batch(SCHEMA)?;
+    connection.execute_batch(SCHEMA)?;
     let columns = {
-        let mut query = tx.prepare("SELECT name FROM pragma_table_info('layout_effect')")?;
+        let mut query =
+            connection.prepare("SELECT name FROM pragma_table_info('layout_effect')")?;
         query
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?
     };
-    for (name, declaration) in [
-        (
-            "resolved",
-            "INTEGER NOT NULL DEFAULT 0 CHECK (resolved IN (0, 1))",
-        ),
-        ("target", "TEXT"),
-    ] {
+    for (name, declaration) in ADDED {
         if !columns.iter().any(|column| column == name) {
-            tx.execute_batch(&format!(
+            connection.execute_batch(&format!(
                 "ALTER TABLE layout_effect ADD COLUMN {name} {declaration}"
             ))?;
         }
     }
-    tx.commit()?;
     Ok(())
 }
 
-const SCHEMA: &str = r"
+pub(crate) const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS layout_effect (
   layout TEXT NOT NULL,
   session TEXT NOT NULL,

@@ -299,32 +299,33 @@ fn json_of(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Value> {
     })
 }
 
+/// Columns added after the first release, by table, and how each is declared.
+pub(crate) const ADDED: &[(&str, &str, &str)] = &[
+    ("note", "evidence", "TEXT NOT NULL DEFAULT 'null'"),
+    ("note_change", "evidence", "TEXT NOT NULL DEFAULT 'null'"),
+    ("note_change", "reason", "TEXT"),
+];
+
+/// Create what is missing, inside the transaction the caller holds.
 pub(crate) fn prepare(connection: &rusqlite::Connection) -> Result<(), StoreError> {
-    let transaction =
-        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)?;
-    transaction.execute_batch(SCHEMA)?;
-    for (table, name, declaration) in [
-        ("note", "evidence", "TEXT NOT NULL DEFAULT 'null'"),
-        ("note_change", "evidence", "TEXT NOT NULL DEFAULT 'null'"),
-        ("note_change", "reason", "TEXT"),
-    ] {
-        let exists: bool = transaction.query_row(
+    connection.execute_batch(SCHEMA)?;
+    for (table, name, declaration) in ADDED {
+        let exists: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
             params![table, name],
             |row| row.get(0),
         )?;
         if !exists {
-            transaction.execute_batch(&format!(
+            connection.execute_batch(&format!(
                 "ALTER TABLE {table} ADD COLUMN {name} {declaration}"
             ))?;
         }
     }
-    transaction.commit()?;
     Ok(())
 }
 
 /// The notes, their change log, and the counts that pace the jobs keeping them.
-const SCHEMA: &str = r"
+pub(crate) const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS note (
   n            INTEGER PRIMARY KEY AUTOINCREMENT,
   title        TEXT NOT NULL,

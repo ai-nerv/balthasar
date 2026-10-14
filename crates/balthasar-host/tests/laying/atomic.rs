@@ -278,7 +278,7 @@ fn an_existing_witness_recovers_a_legacy_unbound_promoted_target() {
     );
     let previous = pending(&harness);
     let old = rusqlite::Connection::open(dir.join("transcript.db")).expect("legacy fixture");
-    old.execute_batch("ALTER TABLE layout_effect DROP COLUMN target; ALTER TABLE layout_effect DROP COLUMN resolved;").expect("pre-target schema");
+    old.execute_batch("ALTER TABLE layout_effect DROP COLUMN target; ALTER TABLE layout_effect DROP COLUMN resolved; PRAGMA user_version = 0;").expect("pre-target schema");
     drop(old);
     reopen(&mut harness, &dir);
     assert_eq!(pending(&harness), previous);

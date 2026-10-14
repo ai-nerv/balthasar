@@ -491,8 +491,27 @@ const ADDED: &[(&str, &str)] = &[
     ("error", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
-/// Create what is missing and bring an older file forward.
+/// Create what is missing and bring an older file forward, but only when the file was last
+/// prepared for a different schema: an open that changes nothing takes no write lock.
 fn prepare(connection: &Connection) -> Result<(), StoreError> {
+    let wanted = fingerprint();
+    let held: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if held == wanted {
+        return Ok(());
+    }
+    let tx =
+        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)?;
+    let held: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if held != wanted {
+        build(&tx)?;
+        tx.pragma_update(None, "user_version", wanted)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Every table and column the scrollback holds, created where missing.
+fn build(connection: &Connection) -> Result<(), StoreError> {
     connection.execute_batch(SCHEMA)?;
     let mut statement = connection.prepare("SELECT name FROM pragma_table_info('turn')")?;
     let held = statement
@@ -510,6 +529,31 @@ fn prepare(connection: &Connection) -> Result<(), StoreError> {
     connection.execute_batch(crate::generation::SCHEMA)?;
     crate::notes::prepare(connection)?;
     Ok(())
+}
+
+/// A positive 31-bit digest of everything [`build`] declares, kept as the file's `user_version`.
+fn fingerprint() -> i64 {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    for part in [
+        SCHEMA,
+        crate::laying::SCHEMA,
+        crate::jobs::SCHEMA,
+        crate::effects::SCHEMA,
+        crate::extraction::SCHEMA,
+        crate::generation::SCHEMA,
+        crate::notes::SCHEMA,
+    ] {
+        digest.update(part.as_bytes());
+    }
+    for (name, declared) in ADDED.iter().chain(crate::effects::ADDED) {
+        digest.update(format!("{name} {declared};").as_bytes());
+    }
+    for (table, name, declared) in crate::notes::ADDED {
+        digest.update(format!("{table}.{name} {declared};").as_bytes());
+    }
+    let bytes = digest.finalize();
+    i64::from(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) & 0x7fff_ffff) | 1
 }
 
 /// The scrollback, as first written. Columns added later are in [`ADDED`] as well, so a file
