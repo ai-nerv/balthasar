@@ -18,9 +18,12 @@ impl Bound {
         let listener = Listener::bind_in(&dirs, "c").expect("bind");
         let paths = listener.paths().into_iter().map(Path::to_owned).collect();
         std::thread::spawn(move || {
-            let _ = listener.serve(|_peer: &Peer, request: Request| {
-                Reply::one(serde_json::json!(format!("heard {}", request.call)))
-            });
+            let _ = listener.serve(
+                crate::key::for_tests().0,
+                |_peer: &Peer, request: Request| {
+                    Reply::one(serde_json::json!(format!("heard {}", request.call)))
+                },
+            );
         });
         Self { paths, _root: root }
     }
@@ -31,14 +34,20 @@ impl Bound {
     }
 }
 
+/// One call with the key, framed.
+fn keyed(call: &str) -> Vec<u8> {
+    let hex = crate::key::for_tests().1;
+    let body = serde_json::json!({ "call": call, "args": [], "key": hex });
+    let body = serde_json::to_vec(&body).expect("encode");
+    let mut framed = (body.len() as u32).to_be_bytes().to_vec();
+    framed.extend_from_slice(&body);
+    framed
+}
+
 /// Ask, taking a closed connection for an answer: over the ceiling, `connect` still succeeds
 /// and the write races the server's close.
 fn try_say(stream: &mut UnixStream, call: &str) -> Option<serde_json::Value> {
-    let body =
-        serde_json::to_vec(&serde_json::json!({ "call": call, "args": [] })).expect("encode");
-    let mut framed = (body.len() as u32).to_be_bytes().to_vec();
-    framed.extend_from_slice(&body);
-    stream.write_all(&framed).ok()?;
+    stream.write_all(&keyed(call)).ok()?;
     let mut header = [0_u8; 4];
     stream.read_exact(&mut header).ok()?;
     let mut answer = vec![0_u8; u32::from_be_bytes(header) as usize];
@@ -47,11 +56,7 @@ fn try_say(stream: &mut UnixStream, call: &str) -> Option<serde_json::Value> {
 }
 
 fn say(stream: &mut UnixStream, call: &str) -> serde_json::Value {
-    let body =
-        serde_json::to_vec(&serde_json::json!({ "call": call, "args": [] })).expect("encode");
-    let mut framed = (body.len() as u32).to_be_bytes().to_vec();
-    framed.extend_from_slice(&body);
-    stream.write_all(&framed).expect("write");
+    stream.write_all(&keyed(call)).expect("write");
 
     let mut header = [0_u8; 4];
     stream.read_exact(&mut header).expect("header");

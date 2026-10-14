@@ -1,5 +1,8 @@
 //! The family's wire corpus, against the real `serve`: every case answered as `cases.json` says,
 //! and the connection left open or closed as it says.
+//!
+//! The socket answers only with the key `serve` was started with. So a case whose body decodes as
+//! a call is re-framed in its own encoding with the key added; every other case goes as it is.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
@@ -9,8 +12,33 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
+const KEY: &str = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0";
+
 fn corpus() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/wire-corpus")
+}
+
+/// `bytes` as this socket takes it: a whole frame whose body is a call gets the key, in the
+/// body's own encoding. Anything else is returned as it is.
+fn keyed(bytes: &[u8]) -> Vec<u8> {
+    let Some((head, body)) = bytes.split_first_chunk::<4>() else {
+        return bytes.to_vec();
+    };
+    if body.is_empty() || u32::from_be_bytes(*head) as usize != body.len() {
+        return bytes.to_vec();
+    }
+    let wire = balthasar_ipc::Wire::of(body);
+    let Ok(serde_json::Value::Object(mut call)) = wire.read::<serde_json::Value>(body) else {
+        return bytes.to_vec();
+    };
+    call.insert("key".into(), KEY.into());
+    let body = wire.write(&call).expect("encode");
+    let mut framed = u32::try_from(body.len())
+        .expect("fits")
+        .to_be_bytes()
+        .to_vec();
+    framed.extend_from_slice(&body);
+    framed
 }
 
 /// A `serve` of this test's own, ended when the test ends.
@@ -28,16 +56,22 @@ impl Serving {
             .create(&run)
             .expect("mkdir");
         let instance = "wc".to_owned();
-        let child = Command::new(env!("CARGO_BIN_EXE_balthasar"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_balthasar"))
             .args(["serve", "--instance", &instance, "--scope", "project"])
             .current_dir(&*dir)
             .env("XDG_RUNTIME_DIR", &run)
             .env("XDG_DATA_HOME", dir.join("data"))
             .env("XDG_CONFIG_HOME", dir.join("config"))
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .expect("serve");
+        let mut stdin = child.stdin.take().expect("serve's stdin");
+        stdin
+            .write_all(format!("{KEY}\n").as_bytes())
+            .expect("the key");
+        drop(stdin);
         let socket = run.join("memory").join(format!("api@{instance}.sock"));
         for _ in 0..500 {
             if UnixStream::connect(&socket).is_ok() {
@@ -105,11 +139,11 @@ fn every_server_case_of_the_corpus_is_answered_as_it_says() {
     let cases: serde_json::Value =
         serde_json::from_slice(&std::fs::read(corpus().join("cases.json")).expect("cases"))
             .expect("parse");
-    let verbs = std::fs::read(corpus().join("server/verbs-json.frame")).expect("verbs");
+    let verbs = keyed(&std::fs::read(corpus().join("server/verbs-json.frame")).expect("verbs"));
     let serving = Serving::start();
     for case in cases["server"].as_array().expect("server cases") {
         let file = case["file"].as_str().expect("file");
-        let bytes = std::fs::read(corpus().join(file)).expect("case");
+        let bytes = keyed(&std::fs::read(corpus().join(file)).expect("case"));
         let mut stream = serving.connect();
         send(&mut stream, &bytes, case["split"] == "bytewise");
         let body = reply(&mut stream).unwrap_or_else(|| panic!("{file}: no answer"));
@@ -135,6 +169,19 @@ fn every_server_case_of_the_corpus_is_answered_as_it_says() {
             Some("closed") => assert!(reply(&mut stream).is_none(), "{file}: left open"),
             _ => {}
         }
+    }
+}
+
+#[test]
+fn a_corpus_call_as_it_is_carries_no_key_and_is_refused() {
+    let serving = Serving::start();
+    for file in ["server/verbs-json.frame", "server/verbs-cbor.frame"] {
+        let bytes = std::fs::read(corpus().join(file)).expect("case");
+        let mut stream = serving.connect();
+        send(&mut stream, &bytes, false);
+        let (said, _) = decoded(&reply(&mut stream).expect("a reply, not a close"));
+        assert_eq!(said["fault"], "refused", "{file}: {said}");
+        assert_eq!(said["error"], balthasar_ipc::KEY_REFUSED, "{file}: {said}");
     }
 }
 

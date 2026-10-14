@@ -25,13 +25,17 @@ struct Caller {
 }
 
 impl Caller {
-    /// Start a shell that starts `balthasar serve`, with whatever extra arguments are given.
+    /// Start a shell that starts `balthasar serve`, with whatever extra arguments are given and
+    /// its key on standard input.
     fn starting(dir: &Path, instance: &str, extra: &str) -> Self {
         let pids = dir.join("pid");
+        let key = dir.join("key");
+        std::fs::write(&key, format!("{}\n", "ab".repeat(32))).expect("the key");
         let script = format!(
             "{binary} serve --instance {instance} --scope project {extra} \
-             >/dev/null 2>&1 & echo $! > {pids}; wait",
+             <{key} >/dev/null 2>&1 & echo $! > {pids}; wait",
             binary = env!("CARGO_BIN_EXE_balthasar"),
+            key = key.display(),
             pids = pids.display(),
         );
         let shell = Command::new("sh")

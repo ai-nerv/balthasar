@@ -71,8 +71,8 @@ drawn wrong, and only running a program against it found out.
 The optional `run` field on an observed or amended turn identifies the scratch-memory run
 separately from the transcript key passed as the first argument. Transcripts may share a run,
 but their cursor spaces remain independent. The binding is durable and cannot be reassigned.
-Omitting `run` retains an existing binding or defaults to the transcript key. Agent identity
-remains connection-pinned; `run` never selects another agent's scratch. Implementations that
+Omitting `run` retains an existing binding or defaults to the transcript key. The agent is the
+one `serve` was started for; `run` never selects another agent's scratch. Implementations that
 do not support this extension may ignore the field.
 `resume` also returns the durable `run` for a transcript; a restarting coordinator retains it
 instead of rebinding the transcript to its new process's run. Without this field, the transcript
@@ -101,6 +101,15 @@ key is the scratch run.
 **The four model-facing verbs — `recall`, `remember`, `forget`, `why` — are declared
 independently.** magi declares a tool for each verb the role answers and omits the rest, so a
 memory layer that can search but not explain gets three tools and no `why`.
+
+**A memory layer's socket answers the session that started it.** magi starts one `serve` per
+session and writes a key on its standard input: one line of 64 lowercase hex characters, read
+before anything is bound, and a `serve` told none refuses to start. Every call on the socket
+carries it as `"key"`; a call without it, or with another, is refused (`fault: "refused"`,
+`a call to serve needs the key it was started with`) and the connection stays open. The agent a
+call is recorded for is the one `serve` was started for, `MAGI_MEMORY_AGENT` in its own
+environment; what a caller's environment names is attribution only. A `serve` started by hand
+reads its key the same way, and whoever started it hands the same key to its callers.
 
 ---
 

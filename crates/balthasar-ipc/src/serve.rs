@@ -237,9 +237,16 @@ impl Listener {
     /// [`crate::hold_stop_signals`] first, so that the sockets are removed and whatever the answering
     /// closure holds still run on the way out.
     ///
+    /// Only a call carrying `key` reaches `answer`; any other is refused on its connection.
+    ///
     /// # Errors
     /// When the listener cannot be handed to the thread that accepts on it.
-    pub fn serve(&self, mut answer: impl FnMut(&Peer, Request) -> Reply) -> std::io::Result<()> {
+    pub fn serve(
+        &self,
+        key: crate::Key,
+        mut answer: impl FnMut(&Peer, Request) -> Reply,
+    ) -> std::io::Result<()> {
+        let key = std::sync::Arc::new(key);
         // Duplicates rather than borrows, so a panic out of `answer` unwinds instead of joining.
         let mut listening = Vec::with_capacity(self.bound.len());
         for claimed in &self.bound {
@@ -258,8 +265,8 @@ impl Listener {
         // One accept thread per name, all feeding the queue the one answering thread reads: two
         // doors into one store, never two stores.
         for one in listening {
-            let asked = asked.clone();
-            std::thread::spawn(move || accept(&one, &asked));
+            let (asked, key) = (asked.clone(), std::sync::Arc::clone(&key));
+            std::thread::spawn(move || accept(&one, &asked, &key));
         }
         drop(asked);
 
@@ -292,7 +299,11 @@ impl Listener {
 /// Take callers, one thread each, and pass what they say to whoever is answering.
 ///
 /// Identity is settled per connection before a byte is read, and a caller has no say in it.
-fn accept(listening: &UnixListener, asked: &std::sync::mpsc::Sender<Heard>) {
+fn accept(
+    listening: &UnixListener,
+    asked: &std::sync::mpsc::Sender<Heard>,
+    key: &std::sync::Arc<crate::Key>,
+) {
     let crowd: Crowd = Crowd::default();
 
     for incoming in listening.incoming() {
@@ -334,12 +345,15 @@ fn accept(listening: &UnixListener, asked: &std::sync::mpsc::Sender<Heard>) {
             );
             continue;
         }
-        let asked = asked.clone();
+        let (asked, key) = (asked.clone(), std::sync::Arc::clone(key));
         std::thread::spawn(move || {
             let _seat = seat;
-            converse(&mut stream, &peer, &|peer: &Peer, request: Request| {
-                answering(&asked, peer, request)
-            });
+            converse(
+                &mut stream,
+                &peer,
+                &key,
+                &|peer: &Peer, request: Request| answering(&asked, peer, request),
+            );
         });
     }
 }
@@ -364,14 +378,20 @@ fn answering(asked: &std::sync::mpsc::Sender<Heard>, peer: &Peer, request: Reque
 /// Answer one connection's calls until it closes, goes quiet for too long, or stalls mid-frame.
 ///
 /// `answer` is a way to ask the one thread that answers, taken per call rather than per
-/// connection, so that holding a connection holds nothing.
-fn converse(stream: &mut UnixStream, peer: &Peer, answer: &impl Fn(&Peer, Request) -> Reply) {
-    converse_within(stream, peer, answer, PATIENCE);
+/// connection, so that holding a connection holds nothing. A call without `key` never reaches it.
+fn converse(
+    stream: &mut UnixStream,
+    peer: &Peer,
+    key: &crate::Key,
+    answer: &impl Fn(&Peer, Request) -> Reply,
+) {
+    converse_within(stream, peer, key, answer, PATIENCE);
 }
 
 fn converse_within(
     stream: &mut UnixStream,
     peer: &Peer,
+    key: &crate::Key,
     answer: &impl Fn(&Peer, Request) -> Reply,
     patience: Patience,
 ) {
@@ -394,10 +414,8 @@ fn converse_within(
         let reply = if body.is_empty() {
             Reply::refused("that is not a request: a frame of zero length is malformed")
         } else {
-            match wire.read::<Request>(&body) {
-                Ok(request) => answer(peer, request),
-                Err(why) => Reply::refused(format!("that is not a request: {why}")),
-            }
+            crate::key::admitted(key, wire, &body)
+                .map_or_else(|refusal| refusal, |request| answer(peer, request))
         };
         if say(stream, wire, &reply).is_err() {
             break;
@@ -475,15 +493,16 @@ mod tests {
             let (mut client, mut server) = UnixStream::pair().expect("pair");
             let peer = Peer::of(&server).expect("the kernel names us");
 
+            let (key, hex) = crate::key::for_tests();
             let serving = std::thread::spawn(move || {
                 let answer = |_p: &Peer, request: Request| {
                     Reply::one(serde_json::json!(format!("heard {}", request.call)))
                 };
-                converse(&mut server, &peer, &answer);
+                converse(&mut server, &peer, &key, &answer);
             });
 
             let asked = wire
-                .write(&serde_json::json!({ "call": "verbs", "args": [] }))
+                .write(&serde_json::json!({ "call": "verbs", "args": [], "key": hex }))
                 .expect("encode");
             let mut framed = (asked.len() as u32).to_be_bytes().to_vec();
             framed.extend_from_slice(&asked);
@@ -619,8 +638,9 @@ mod tests {
         let counted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let tally = std::sync::Arc::clone(&counted);
 
+        let (key, hex) = crate::key::for_tests();
         let serving = std::thread::spawn(move || {
-            let _ = listener.serve(move |_peer: &Peer, _request: Request| {
+            let _ = listener.serve(key, move |_peer: &Peer, _request: Request| {
                 let n = tally.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
                 Reply::one(serde_json::json!(n))
             });
@@ -628,8 +648,8 @@ mod tests {
 
         for path in &paths {
             let mut stream = UnixStream::connect(path).expect("connect");
-            let asked =
-                serde_json::to_vec(&serde_json::json!({ "call": "verbs", "args": [] })).expect("e");
+            let call = serde_json::json!({ "call": "verbs", "args": [], "key": hex });
+            let asked = serde_json::to_vec(&call).expect("e");
             let mut framed = (asked.len() as u32).to_be_bytes().to_vec();
             framed.extend_from_slice(&asked);
             use std::io::Read;

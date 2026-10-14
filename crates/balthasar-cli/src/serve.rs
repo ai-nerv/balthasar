@@ -75,6 +75,8 @@ pub fn serve(
     if let Some(caller) = args.tied {
         tie_to_caller(caller)?;
     }
+    // Before any socket exists: without its key, nothing could be answered on one.
+    let key = balthasar_ipc::Key::read(&mut std::io::stdin().lock()).map_err(anyhow::Error::msg)?;
     // Corpses in both directories, the old name's included.
     for dir in balthasar_ipc::socket_dirs() {
         balthasar_ipc::swept(&dir);
@@ -113,7 +115,8 @@ pub fn serve(
     // Read once at startup rather than per request, so a mid-session change cannot halve a ledger.
     let capture = loaded.settings().ledger().capture;
 
-    let served = listener.serve(|peer: &Peer, request: Request| {
+    let agent = agent_here();
+    let served = listener.serve(key, |peer: &Peer, request: Request| {
         let named = named_by_kernel(peer).unwrap_or_else(|| fallback.clone());
         if !has_room(opened.len(), opened.contains_key(&named), named == fallback) {
             return Reply::refused(format!(
@@ -153,7 +156,7 @@ pub fn serve(
             scrollback: Some(&mut held.scrollback),
             scratch: Some(&mut held.scratch),
             scope: scope.clone(),
-            agent: agent_of(peer),
+            agent: agent_of(peer, &agent),
             now: now(),
             inject_floor: floors.inject,
             live_floor: floors.live,
@@ -245,7 +248,7 @@ struct Opened {
     scratch: balthasar_store::Scratchpad,
 }
 
-/// What a harness names its agent in, in the environment of the process that connects.
+/// What a harness names its agent in, in the environment it starts `serve` with.
 ///
 /// The role's name, because the harness on the other end talks to a `memory` rather than to this
 /// program — see `ROLES.md`.
@@ -254,33 +257,34 @@ const AGENT: &str = "MAGI_MEMORY_AGENT";
 /// What that variable used to be called. Still read, for one release.
 const AGENT_WAS: &str = "BALTHASAR_AGENT";
 
-/// Say once that a caller is still naming its agent the old way.
+/// Say once that this process was named its agent the old way.
 fn the_old_name_was_used() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         balthasar_model::noted!(
-            "serve: a caller named its agent in ${AGENT_WAS}; ${AGENT} is what replaces it"
+            "serve: started with its agent in ${AGENT_WAS}; ${AGENT} is what replaces it"
         );
     });
 }
 
-/// Which agent inside a run a connection belongs to.
-///
-/// What the peer's environment named at accept, pinned to the connection; else this process's
-/// own, else [`AgentId::main`]. Attribution only.
-fn agent_of(peer: &Peer) -> balthasar_model::AgentId {
-    match &peer.agent {
-        Some((variable, named)) => {
-            if variable == AGENT_WAS {
-                the_old_name_was_used();
-            }
-            balthasar_model::AgentId::new(named)
-        }
-        None => agent_here(),
+/// Which agent inside a run a connection belongs to: `served`, the one this `serve` was started
+/// for. What the peer's environment named at accept is attribution, said once when it differs.
+fn agent_of(peer: &Peer, served: &balthasar_model::AgentId) -> balthasar_model::AgentId {
+    if let Some((_, named)) = &peer.agent
+        && named != served.as_str()
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            balthasar_model::noted!(
+                "serve: pid {} names agent {named}; its calls are recorded as {served}",
+                peer.pid
+            );
+        });
     }
+    served.clone()
 }
 
-/// Which agent this process itself is, and the fallback for a peer that named none.
+/// Which agent this process itself was started for, read from its own environment.
 fn agent_here() -> balthasar_model::AgentId {
     let said = |variable: &str| {
         std::env::var(variable)
@@ -334,26 +338,27 @@ mod agents {
     use super::*;
 
     #[test]
-    fn the_agent_pinned_at_accept_is_the_one_used_and_proc_is_not_read_again() {
-        // A pid nothing runs as: anything read from `/proc` now would find nothing.
+    fn a_peer_naming_another_agent_is_recorded_as_the_one_serve_was_started_for() {
+        let served = balthasar_model::AgentId::new("alpha-rho");
         let peer = Peer {
             pid: -1,
             uid: 0,
             program: None,
-            agent: Some((AGENT.to_owned(), "pinned".to_owned())),
+            agent: Some((AGENT.to_owned(), "intruder".to_owned())),
         };
-        assert_eq!(agent_of(&peer).to_string(), "pinned");
+        assert_eq!(agent_of(&peer, &served), served);
     }
 
     #[test]
-    fn a_peer_that_named_nothing_is_this_processs_own_agent() {
+    fn a_peer_that_named_nothing_is_the_one_serve_was_started_for() {
+        let served = balthasar_model::AgentId::new("alpha-rho");
         let peer = Peer {
             pid: -1,
             uid: 0,
             program: None,
             agent: None,
         };
-        assert_eq!(agent_of(&peer), agent_here());
+        assert_eq!(agent_of(&peer, &served), served);
     }
 }
 

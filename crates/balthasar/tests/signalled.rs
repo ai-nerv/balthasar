@@ -25,16 +25,21 @@ impl Serving {
     /// Spawned directly, never through a shell: a shell without job control sets `SIGINT` to
     /// `SIG_IGN` in every background job, and the disposition survives `exec`.
     fn starting(dir: &Path, instance: &str) -> Self {
-        let child = Command::new(env!("CARGO_BIN_EXE_balthasar"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_balthasar"))
             .args(["serve", "--instance", instance, "--scope", "project"])
             .current_dir(dir)
             .env("XDG_RUNTIME_DIR", dir.join("run"))
             .env("XDG_DATA_HOME", dir.join("data"))
             .env("XDG_CONFIG_HOME", dir.join("config"))
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("start a balthasar");
+        let mut stdin = child.stdin.take().expect("serve's stdin");
+        std::io::Write::write_all(&mut stdin, format!("{}\n", "ab".repeat(32)).as_bytes())
+            .expect("the key");
+        drop(stdin);
         // Both names, because both are bound and both are files somebody has to take away again.
         let sockets = names(dir, instance);
         let listening = Self { child, sockets };
@@ -168,10 +173,13 @@ fn a_tied_balthasar_leaves_no_socket_when_its_caller_is_killed() {
         .create(dir.join("run"))
         .expect("mkdir");
     let pids = dir.join("pid");
+    let key = dir.join("key");
+    std::fs::write(&key, format!("{}\n", "ab".repeat(32))).expect("the key");
     let script = format!(
-        "{binary} serve --instance tied --scope project --tied $$ >/dev/null 2>&1 & \
+        "{binary} serve --instance tied --scope project --tied $$ <{key} >/dev/null 2>&1 & \
          echo $! > {pids}; wait",
         binary = env!("CARGO_BIN_EXE_balthasar"),
+        key = key.display(),
         pids = pids.display(),
     );
     let mut tie = Tie {

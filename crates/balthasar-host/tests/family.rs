@@ -58,8 +58,9 @@ impl Serving {
         }
 
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let key = balthasar_ipc::Key::read(&mut format!("{KEY}\n").as_bytes()).expect("a key");
         let thread = std::thread::spawn(move || {
-            let _ = listener.serve(|peer: &Peer, request: Request| {
+            let _ = listener.serve(key, |peer: &Peer, request: Request| {
                 let mut at = Answering {
                     store: &mut store,
                     scrollback: None,
@@ -94,10 +95,24 @@ impl Drop for Serving {
     }
 }
 
+/// The key the socket in these tests is served with.
+const KEY: &str = "5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e";
+
+/// `body` with the key added, unless it already says which key it carries.
+fn keyed(body: &serde_json::Value) -> serde_json::Value {
+    let mut body = body.clone();
+    if let Some(fields) = body.as_object_mut() {
+        fields
+            .entry("key")
+            .or_insert_with(|| serde_json::json!(KEY));
+    }
+    body
+}
+
 /// Speak the wire by hand, the way the stub does.
 fn ask(path: &std::path::Path, body: &serde_json::Value) -> serde_json::Value {
     let mut stream = UnixStream::connect(path).expect("connect");
-    let encoded = serde_json::to_vec(body).expect("encode");
+    let encoded = serde_json::to_vec(&keyed(body)).expect("encode");
     stream
         .write_all(&(encoded.len() as u32).to_be_bytes())
         .expect("length");
@@ -132,7 +147,7 @@ fn one_connection_carries_many_calls() {
     let mut stream = UnixStream::connect(&serving.path).expect("connect");
 
     for verb in ["verbs", "status", "sessions"] {
-        let body = serde_json::json!({ "call": verb }).to_string();
+        let body = keyed(&serde_json::json!({ "call": verb })).to_string();
         stream
             .write_all(&(body.len() as u32).to_be_bytes())
             .expect("length");
@@ -146,6 +161,31 @@ fn one_connection_carries_many_calls() {
         let parsed: serde_json::Value = serde_json::from_slice(&reply).expect("decode");
         assert_eq!(parsed["ok"], serde_json::json!(true), "{verb} failed");
     }
+}
+
+#[test]
+fn a_call_without_the_key_is_refused_and_writes_nothing() {
+    let serving = Serving::start("keyless", &[]);
+    let wrong = KEY.replace('5', "6");
+    for key in [serde_json::Value::Null, serde_json::json!(wrong)] {
+        let reply = ask(
+            &serving.path,
+            &serde_json::json!({
+                "call": "remember", "args": ["an intruder's note"], "key": key,
+            }),
+        );
+        assert_eq!(reply["fault"], "refused", "{reply}");
+        assert_eq!(reply["error"], balthasar_ipc::KEY_REFUSED, "{reply}");
+    }
+    let found = ask(
+        &serving.path,
+        &serde_json::json!({ "call": "recall", "args": ["intruder"] }),
+    );
+    assert_eq!(found["ok"], true, "{found}");
+    assert_eq!(
+        found["n"], 0,
+        "nothing the refused calls said was kept: {found}"
+    );
 }
 
 #[test]

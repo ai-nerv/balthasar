@@ -9,7 +9,8 @@ use std::os::unix::net::UnixStream;
 fn served(answer: fn(&Peer, Request) -> Reply) -> UnixStream {
     let (client, mut server) = UnixStream::pair().expect("pair");
     let peer = Peer::of(&server).expect("the kernel names us");
-    std::thread::spawn(move || converse(&mut server, &peer, &answer));
+    let key = crate::key::for_tests().0;
+    std::thread::spawn(move || converse(&mut server, &peer, &key, &answer));
     client
         .set_read_timeout(Some(std::time::Duration::from_secs(10)))
         .expect("a deadline");
@@ -26,10 +27,58 @@ fn reply(stream: &mut UnixStream) -> Option<serde_json::Value> {
 }
 
 fn ask(stream: &mut UnixStream, call: &str) {
-    let body = serde_json::to_vec(&serde_json::json!({ "call": call })).expect("encode");
+    send(stream, &serde_json::json!({ "call": call, "key": HEX }));
+}
+
+/// The key every call in these tests carries, unless it is the one under test.
+const HEX: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+fn send(stream: &mut UnixStream, call: &serde_json::Value) {
+    let body = serde_json::to_vec(call).expect("encode");
     let mut framed = (body.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(&body);
     stream.write_all(&framed).expect("write");
+}
+
+#[test]
+fn a_call_without_the_key_or_with_the_wrong_one_is_refused_and_the_next_is_answered() {
+    let mut client = served(echo);
+    let wrong = HEX.replace('0', "1");
+    for call in [
+        serde_json::json!({ "call": "verbs" }),
+        serde_json::json!({ "call": "verbs", "key": wrong }),
+        serde_json::json!({ "call": "verbs", "key": 7 }),
+    ] {
+        send(&mut client, &call);
+        let told = reply(&mut client).expect("a refusal, not a close");
+        assert_eq!(told["fault"], "refused", "{call}: {told}");
+        assert_eq!(told["error"], crate::KEY_REFUSED, "{call}: {told}");
+    }
+    ask(&mut client, "verbs");
+    assert_eq!(reply(&mut client).expect("answered")["result"][0], "verbs");
+}
+
+#[test]
+fn a_call_in_a_newer_family_is_refused_by_name_and_the_next_is_answered() {
+    let mut client = served(echo);
+    send(
+        &mut client,
+        &serde_json::json!({ "call": "verbs", "family": 2, "key": HEX }),
+    );
+    let told = reply(&mut client).expect("a refusal, not a close");
+    assert_eq!(told["fault"], "refused", "{told}");
+    assert!(
+        told["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("family 2"),
+        "{told}"
+    );
+    send(
+        &mut client,
+        &serde_json::json!({ "call": "older", "family": 1, "key": HEX }),
+    );
+    assert_eq!(reply(&mut client).expect("answered")["result"][0], "older");
 }
 
 fn echo(_peer: &Peer, request: Request) -> Reply {
@@ -69,10 +118,12 @@ fn a_frame_of_zero_length_is_refused_and_the_connection_stays_in_step() {
 #[test]
 fn a_frame_at_the_cap_is_read() {
     let client = served(echo);
-    let shell = br#"{"call":"big","args":[""]}"#.len();
+    let shell = serde_json::json!({ "call": "big", "args": [""], "key": HEX })
+        .to_string()
+        .len();
     let padding = "x".repeat(MAX_FRAME - shell);
-    let body = serde_json::to_vec(&serde_json::json!({ "call": "big", "args": [padding] }))
-        .expect("encode");
+    let call = serde_json::json!({ "call": "big", "args": [padding], "key": HEX });
+    let body = serde_json::to_vec(&call).expect("encode");
     assert_eq!(body.len(), MAX_FRAME);
     let mut framed = (body.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(&body);
@@ -122,8 +173,9 @@ fn hurried(
         .expect("write deadline");
     let peer = Peer::of(&server).expect("the kernel names us");
     let (ended, ending) = std::sync::mpsc::channel();
+    let key = crate::key::for_tests().0;
     std::thread::spawn(move || {
-        super::converse_within(&mut server, &peer, &answer, patience);
+        super::converse_within(&mut server, &peer, &key, &answer, patience);
         let _ = ended.send(());
     });
     (client, ending)

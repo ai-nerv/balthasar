@@ -5,7 +5,9 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 
 fn say(stream: &mut UnixStream, call: &str) -> serde_json::Value {
-    let body = serde_json::to_vec(&serde_json::json!({ "call": call })).expect("encode");
+    let hex = crate::key::for_tests().1;
+    let body =
+        serde_json::to_vec(&serde_json::json!({ "call": call, "key": hex })).expect("encode");
     let mut framed = (body.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(&body);
     stream.write_all(&framed).expect("write");
@@ -26,10 +28,13 @@ fn a_panic_while_answering_is_a_failure_and_the_next_call_is_answered() {
         .map(std::path::Path::to_owned)
         .collect();
     std::thread::spawn(move || {
-        let _ = listener.serve(|_peer: &Peer, request: Request| {
-            assert!(request.call != "boom", "a bug in a verb");
-            Reply::one(serde_json::json!(request.call))
-        });
+        let _ = listener.serve(
+            crate::key::for_tests().0,
+            |_peer: &Peer, request: Request| {
+                assert!(request.call != "boom", "a bug in a verb");
+                Reply::one(serde_json::json!(request.call))
+            },
+        );
     });
     let mut stream = UnixStream::connect(&paths[0]).expect("connect");
     stream

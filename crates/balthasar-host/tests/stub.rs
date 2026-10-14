@@ -86,8 +86,9 @@ fn serving(name: &str, seed: &[&str]) -> Serving {
         );
     }
 
+    let key = balthasar_ipc::Key::read(&mut format!("{KEY}\n").as_bytes()).expect("a key");
     std::thread::spawn(move || {
-        let _ = listener.serve(|peer: &Peer, request: Request| {
+        let _ = listener.serve(key, |peer: &Peer, request: Request| {
             let mut at = Answering {
                 store: &mut store,
                 scrollback: None,
@@ -105,14 +106,27 @@ fn serving(name: &str, seed: &[&str]) -> Serving {
     Serving { paths, root }
 }
 
+/// The key the socket in these tests is served with.
+const KEY: &str = "5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e";
+
 /// Run a script with the stub loaded and connected, and take what it left in `balthasar.answer`.
 fn through_the_stub(path: &std::path::Path, script: &str) -> String {
     let mut engine = Engine::new();
     let source = format!(
         r#"
         local chunk = assert(load({CLIENT:?}, "balthasar.lua"))
-        -- Given nothing but the socket primitive, exactly as a sibling would hand it over.
-        local client = chunk(balthasar.stream)
+        -- The socket primitive, with the key added to each call by the host as a sibling's does.
+        local transport = {{ connect = function(path, timeout)
+          local h, why = balthasar.stream.connect(path, timeout)
+          if not h then return nil, why end
+          return {{
+            call = function(_, request, opts) request.key = {KEY:?}; return h:call(request, opts) end,
+            send = function(_, bytes) return h:send(bytes) end,
+            recv = function(_, n) return h:recv(n) end,
+            close = function() return h:close() end,
+          }}
+        end }}
+        local client = chunk(transport)
         local mem, why = client.connect({{ path = {:?} }})
         if not mem then balthasar.answer = "could not connect: " .. tostring(why) return end
         balthasar.answer = tostring({script})
@@ -172,6 +186,28 @@ fn the_stub_reports_a_refusal_rather_than_raising() {
         "select(2, mem:call(\"prompt\", \"rm -rf /\")) ~= nil",
     );
     assert_eq!(answer, "true");
+}
+
+#[test]
+fn the_stub_over_a_transport_without_the_key_is_turned_away() {
+    let path = serving("keyless", &["we deploy with fly"]);
+    let mut engine = Engine::new();
+    let source = format!(
+        r#"
+        local client = assert(load({CLIENT:?}, "balthasar.lua"))(balthasar.stream)
+        local mem, why = client.connect({{ path = {:?} }})
+        balthasar.answer = tostring(mem) .. "|" .. tostring(why)
+        "#,
+        path.to_string_lossy()
+    );
+    engine.run(&source, "stub.lua").expect("run");
+    engine.harvest();
+    let said = engine
+        .config()
+        .string("answer")
+        .unwrap_or_default()
+        .to_owned();
+    assert!(said.starts_with("nil|nothing answered"), "{said}");
 }
 
 #[test]

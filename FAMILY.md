@@ -310,7 +310,7 @@ the program's own tests.
 | magi | the floor | one per session, its own CBOR protocol for a front end | Coordinates rather than being coordinated: no `needs`, no `configure`. |
 | casper | the floor, plus `tools`, `run`, `surface`, `serve` | `tools` and `run`, kept open across a session | What `run` runs, it runs inside the jail `serve` was spawned with — the one the coordinator set in casper's environment, never one a call named — and only for a caller presenting the key the coordinator handed `serve` on its standard input. A peer of another user is turned away. With the jail off the socket runs commands as the person, which is what the person chose; it is a remote shell exactly as far as the person's own shell is. The command line stays the spawn-per-call door; the socket is the same surface, reached without a spawn each time. |
 | melchior | the floor, plus `models`, `ask`, `serve`, `fork`, `auth` | the session surface | The only one with a `tool` door: the coordination vocabulary a model calls, reached as `melchior tool --verb X`. `identity` and `tell` on the socket are `whoami` and `send` there, and are not aliases — one answers a program with a record, the other a model with a paragraph. |
-| balthasar | the floor, plus its own memory verbs | the same memory verbs | Some verbs are owner-only: a socket peer may propose but may not pin, write globally, or purge, and may not sign its report as the user's judgment. `export` and `dataset` answer `--json` as one object per line rather than framed: they are a corpus, not an answer, and `import` reads back what `export` writes. |
+| balthasar | the floor, plus its own memory verbs | the same memory verbs | Some verbs are owner-only: a socket peer may propose but may not pin, write globally, or purge, and may not sign its report as the user's judgment. The socket answers only a caller presenting the key the coordinator handed `serve` on its standard input, and records for the agent `serve` was spawned for, never one a caller's environment names. `export` and `dataset` answer `--json` as one object per line rather than framed: they are a corpus, not an answer, and `import` reads back what `export` writes. |
 
 ---
 
@@ -418,7 +418,7 @@ receives none of them.
 | `MAGI_GRANTS` | magi, for a forked child | magi | grants that narrow the child's own |
 | `MAGI_NO_SPAWN` | magi | magi | that a session may not start another |
 | `MAGI_MELCHIOR_PROJECT` / `_ID` / `_ROLE` / `_PARENT` / `_SESSION` | melchior, magi | melchior | which session a process belongs to (attribution) |
-| `MAGI_MEMORY_AGENT` / `BALTHASAR_AGENT` | magi | balthasar | which agent a transcript belongs to (attribution) |
+| `MAGI_MEMORY_AGENT` / `BALTHASAR_AGENT` | magi, on `serve`'s spawn | balthasar | which agent a `serve` records for; in a caller's environment, attribution only |
 | `NERV_GIVEN` | magi | balthasar, melchior | the per-session directory of settings a coordinator gave |
 | `MAGI_API_SOCKET` | the person | magi | a balthasar to use instead of starting one |
 | `MAGI_HOST_SOCKET` / `MAGI_PARENT_HOST_SOCKET` | magi | magi | where a session, or its parent, answers |
