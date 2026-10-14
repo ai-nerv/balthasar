@@ -19,7 +19,11 @@ oslo.direnv.path_add("./target/release")
 
 -- Where the checkout is, for scripts that need to find their way back to the top.
 oslo.env.set("TOP_HEAD", oslo.sys.pwd())
-oslo.env.set("TMPDIR", oslo.sys.pwd() .. "/.tmp")
+-- The temporary directory is made here as well as named: a TMPDIR that does not exist fails the
+-- build as a libsqlite3-sys error that says nothing about it.
+local scratch = oslo.sys.pwd() .. "/.tmp"
+if not oslo.fs.exists(scratch) then oslo.fs.mkdir(scratch) end
+oslo.env.set("TMPDIR", scratch)
 
 -- A token in the environment is a token in every child process, and nothing in here needs it.
 oslo.env.unset("GITHUB_TOKEN")
