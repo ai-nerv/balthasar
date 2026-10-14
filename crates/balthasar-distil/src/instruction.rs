@@ -255,7 +255,7 @@ fn is_insistent(raw: &str, normalised: &str) -> bool {
     raw.to_lowercase()
         .as_bytes()
         .windows(3)
-        .any(|three| three[0] == three[1] && three[1] == three[2] && three[0].is_ascii_alphabetic())
+        .any(|three| matches!(three, [a, b, c] if a == b && b == c && a.is_ascii_alphabetic()))
 }
 
 /// Enough to notice somebody is cross. Not a filter, and never used to refuse anything.
@@ -322,7 +322,7 @@ fn within_one_edit(a: &str, b: &str) -> bool {
     let mut j = 0;
     let mut slack = 1;
     while i < short.len() && j < long.len() {
-        if short[i] == long[j] {
+        if short.get(i) == long.get(j) {
             i += 1;
             j += 1;
             continue;
@@ -363,7 +363,7 @@ fn sentence(text: &str) -> String {
             _ => false,
         };
         if ends {
-            return chars[..i].iter().collect::<String>().trim().to_owned();
+            return chars.iter().take(i).collect::<String>().trim().to_owned();
         }
     }
     text.trim().to_owned()

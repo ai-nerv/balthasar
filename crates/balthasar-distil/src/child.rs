@@ -60,11 +60,11 @@ pub fn run(argv: &[String], input: &[u8], timeout: Duration, cap: usize) -> Resu
     // thread, so a child that writes before it reads cannot wedge the two of them.
     let (wrote, written) = mpsc::channel();
     let mut stdin = child.stdin.take();
-    let head = input.len().min(FRESH_PIPE);
-    let first = stdin
-        .as_mut()
-        .map_or(Ok(()), |pipe| pipe.write_all(&input[..head]));
-    let rest = input[head..].to_owned();
+    let (head, rest) = input
+        .split_at_checked(input.len().min(FRESH_PIPE))
+        .unwrap_or((input, &[]));
+    let first = stdin.as_mut().map_or(Ok(()), |pipe| pipe.write_all(head));
+    let rest = rest.to_owned();
     std::thread::spawn(move || {
         let done = first.and_then(|()| stdin.map_or(Ok(()), |mut pipe| pipe.write_all(&rest)));
         let _ = wrote.send(done);
@@ -129,7 +129,7 @@ fn drain(pipe: Option<impl Read + Send + 'static>, cap: usize) -> mpsc::Receiver
                     Ok(0) => break,
                     Ok(n) => {
                         let room = cap.saturating_sub(kept.len()).min(n);
-                        kept.extend_from_slice(&buffer[..room]);
+                        kept.extend(buffer.iter().take(room));
                     }
                     Err(why) if why.kind() == std::io::ErrorKind::Interrupted => {}
                     Err(_) => break,
