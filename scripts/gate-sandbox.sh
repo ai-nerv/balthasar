@@ -176,6 +176,26 @@ if [ -n "$elsewhere" ]; then
   fail=1
 fi
 
+# ---- Lua to JSON is one bounded walk --------------------------------------------------------------
+# It runs on the host, outside any fuel, so a value that holds itself, nests deep, fans out through
+# shared tables or carries a mountain of text is refused by its own budget.
+CONVERT="$ROOT/balthasar-lua/src/convert.rs"
+for bound in 'pub const DEEPEST' 'pub const NODES' 'pub const BYTES' 'self.open.insert(table)' \
+             'Undescribable::Wide' 'Undescribable::Long'; do
+  if ! bare "$CONVERT" | grep -q "$bound"; then
+    echo "gate-sandbox: Lua-to-JSON no longer holds \`$bound\`" >&2
+    fail=1
+  fi
+done
+walkers=$(find "$ROOT/balthasar-lua/src" -name '*.rs' ! -path "$CONVERT" | sort | while IFS= read -r file; do
+  bare "$file" | grep -n 'fn code_in(\|fn table_to_json(' | sed "s|^|$file:|" || true
+done)
+if [ -n "$walkers" ]; then
+  echo "gate-sandbox: a second, unbounded walk over Lua values:" >&2
+  printf '%s\n' "$walkers" | sed 's/^/  /' >&2
+  fail=1
+fi
+
 # ---- fs.read is lent to the person's own files only ----------------------------------------------
 if ! bare "$HELPERS" | grep -q 'lent.get()'; then
   echo "gate-sandbox: balthasar.fs.read no longer asks whether it is lent" >&2
