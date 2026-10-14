@@ -154,6 +154,8 @@ pub struct Settings {
     pub tool: Option<String>,
     /// Words that mark a user turn as an instruction to remember.
     pub imperatives: Vec<String>,
+    /// Days a session's turns are kept once it has gone quiet. `None` keeps them for good.
+    pub retain_days: Option<u32>,
 }
 
 impl Default for Settings {
@@ -266,7 +268,21 @@ impl Settings {
             tool: config.string("tool").map(str::to_owned),
             trusted: strings(config, "trusted"),
             imperatives: imperatives(config),
+            retain_days: config
+                .number("retain_days")
+                .filter(|days| *days >= 1.0)
+                .map(|days| days as u32),
         }
+    }
+
+    /// When turns stop being kept, as of `now`: `None` when nothing is ever pruned.
+    #[must_use]
+    pub fn retained_since(
+        &self,
+        now: balthasar_model::Timestamp,
+    ) -> Option<balthasar_model::Timestamp> {
+        let days = self.retain_days?;
+        Some(now.saturating_sub(i64::from(days).saturating_mul(24 * 60 * 60)))
     }
 
     /// A digest of every setting that changes what balthasar does.
@@ -444,6 +460,26 @@ mod tests {
         );
         let mine = with(serde_json::json!({ "imperatives": ["merk"] }));
         assert_eq!(mine.imperatives, ["merk"]);
+    }
+
+    #[test]
+    fn turns_are_kept_for_good_unless_a_number_of_days_is_set() {
+        let unset = with(serde_json::json!({}));
+        assert_eq!(unset.retain_days, None);
+        assert_eq!(unset.retained_since(1_000_000), None);
+        for nothing in [
+            serde_json::json!(0),
+            serde_json::json!(-3),
+            serde_json::json!("30"),
+        ] {
+            assert_eq!(
+                with(serde_json::json!({ "retain_days": nothing })).retain_days,
+                None
+            );
+        }
+        let month = with(serde_json::json!({ "retain_days": 30 }));
+        assert_eq!(month.retain_days, Some(30));
+        assert_eq!(month.retained_since(31 * 86_400), Some(86_400));
     }
 
     #[test]
