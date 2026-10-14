@@ -138,25 +138,16 @@ pub enum Arm {
 pub const WINDOW: usize = 900;
 
 /// Run a scenario against a store, consolidating between sessions.
-///
-/// # Errors
-/// When the store under the run fails.
 pub fn run(scenario: &Scenario, with_memory: bool) -> Result<Score, DistilError> {
     Ok(measure(scenario, with_memory)?.0)
 }
 
 /// Run one arm.
-///
-/// # Errors
-/// When the store under the run fails.
 pub fn run_arm(scenario: &Scenario, arm: Arm) -> Result<Score, DistilError> {
     Ok(measure_arm(scenario, arm)?.0)
 }
 
 /// The same run, with what it cost.
-///
-/// # Errors
-/// When the store under the run fails.
 pub fn measure(scenario: &Scenario, with_memory: bool) -> Result<(Score, Measured), DistilError> {
     measure_arm(
         scenario,
@@ -169,9 +160,6 @@ pub fn measure(scenario: &Scenario, with_memory: bool) -> Result<(Score, Measure
 }
 
 /// The same, for one named arm.
-///
-/// # Errors
-/// When the store under the run fails.
 pub fn measure_arm(scenario: &Scenario, arm: Arm) -> Result<(Score, Measured), DistilError> {
     let with_memory = arm == Arm::Memory;
     // The text an agent with no memory system would still have, oldest dropped first.
