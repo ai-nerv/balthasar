@@ -514,3 +514,51 @@ fn only_the_first_block_carries_the_record_to_restore_from() {
         .collect();
     assert_eq!(raws.len(), 1, "one record per message, not per block");
 }
+
+#[test]
+fn matching_reads_the_index_and_pages_what_it_found() {
+    let mut held = Transcript::ephemeral().expect("transcript");
+    for cursor in 0..6 {
+        let text = if cursor % 2 == 0 {
+            format!("we deployed build {cursor} with flyctl")
+        } else {
+            format!("nothing to see in {cursor}")
+        };
+        held.write(&run(), &turn(cursor, &text)).expect("write");
+    }
+    held.write(
+        &SessionId::new("other"),
+        &turn(9, "deploy flyctl elsewhere"),
+    )
+    .expect("another run");
+    let read = held
+        .read(
+            &run(),
+            &Want::Matching {
+                terms: vec!["Deploy".to_owned(), "\"flyctl".to_owned()],
+            },
+            &Budget {
+                tokens: 10_000,
+                turns: 2,
+            },
+        )
+        .expect("read");
+    let cursors: Vec<u64> = read.turns.iter().map(|t| t.cursor).collect();
+    assert_eq!(
+        cursors,
+        vec![0, 2],
+        "a word's start matches, and only this run"
+    );
+    assert_eq!(read.omitted, 1);
+    assert_eq!(read.next, Some(3));
+}
+
+#[test]
+fn a_flood_of_terms_is_cut_to_a_handful_rather_than_refused() {
+    let held = a_long_run(10);
+    let terms: Vec<String> = (0..5_000).map(|n| format!("w{n}")).collect();
+    let read = held
+        .read(&run(), &Want::Matching { terms }, &Budget::default())
+        .expect("read");
+    assert!(read.turns.is_empty());
+}

@@ -139,7 +139,7 @@ fn run_session(
         .map_or_else(|| balthasar_model::SessionId::new(&args.id), |s| s.id);
     let owned = store.owned_by(&session)?;
     let held = scrollback(store_path, scope, tool)?;
-    let turns = held.replay(&session)?.len();
+    let turns = held.count(&session)?;
     // A handle that names no run is a typo, and must not report a successful purge of nothing.
     anyhow::ensure!(
         !owned.is_empty() || turns > 0,

@@ -185,7 +185,7 @@ fn put(tx: &Transaction<'_>, session: &SessionId, turn: &Turn) -> Result<(), Sto
             i64::from(turn.error),
         ],
     )?;
-    index(tx, session, turn)
+    index(tx, session, turn, false)
 }
 
 /// Keep the row as it stands, then overwrite it, and its search entry.
@@ -225,15 +225,23 @@ fn revise(tx: &Transaction<'_>, session: &SessionId, turn: &Turn) -> Result<(), 
             i64::from(turn.error),
         ],
     )?;
-    index(tx, session, turn)
+    index(tx, session, turn, true)
 }
 
-/// The search entry for a turn, replaced.
-fn index(tx: &Transaction<'_>, session: &SessionId, turn: &Turn) -> Result<(), StoreError> {
-    tx.execute(
-        "DELETE FROM turn_fts WHERE session = ?1 AND cursor = ?2",
-        params![session.as_str(), clamp(turn.cursor)],
-    )?;
+/// The search entry for a turn; one already there is removed first when `replacing`. A fresh
+/// row has none, and the removal scans the index, so it is not paid for then.
+fn index(
+    tx: &Transaction<'_>,
+    session: &SessionId,
+    turn: &Turn,
+    replacing: bool,
+) -> Result<(), StoreError> {
+    if replacing {
+        tx.execute(
+            "DELETE FROM turn_fts WHERE session = ?1 AND cursor = ?2",
+            params![session.as_str(), clamp(turn.cursor)],
+        )?;
+    }
     if !turn.text.trim().is_empty() {
         tx.execute(
             "INSERT INTO turn_fts (text, session, cursor) VALUES (?1, ?2, ?3)",
