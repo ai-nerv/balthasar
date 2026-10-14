@@ -1,5 +1,110 @@
 # Changelog
 
+## [0.6.0] - 2026-10-14
+
+### <!-- 0 -->⛰️  Features
+
+- Require the key handed on stdin
+- Handle:call frames family calls
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Bound Lua-to-JSON by nodes, bytes, cycles
+- Refuse precompiled chunks
+- Hold every VM under a memory ceiling
+- Refuse __gc metatables
+- Build every VM from an allowlist
+- Key writes only; publish a minted key
+- Page the raw of a row over the cap
+- Keep serve.rs within its size gate
+- Keep run.rs in its comment budget
+- Uid from the host; check .tool owner
+- A failed claim leaves no lock file
+- Bad reply closes the line; wire corpus
+- Create .tmp in the make prelude
+- A moved project store takes its new scope
+- Write the prompt's first page at once
+- Create .tmp before naming it TMPDIR
+- Cap FTS terms, cache mask stubs
+- Ledger ids hash the real query
+- Page and count scrollback reads in SQL
+- Submodule and HOME scopes
+- Supersede in one transaction
+- Reindex the scrollback in one txn
+- Prepare the scrollback only on change
+- Migrate step by step in IMMEDIATE txns
+- Prune applied layouts after 30 days
+- Purge every session-keyed table
+- Runtime dirs safe, 0700, owner-checked
+- Given config only from NERV_GIVEN, no links
+- Store dirs 0700, databases and logs 0600
+- Read, idle and write deadlines; busy
+- Deadline, capped reads, kill and reap
+- A panicking verb answers failed
+- Slice text on character boundaries
+- Bind and sweep under flock, corpses only
+- Pin peer identity at accept, strip deleted
+- Scrollback first, insert-only, traces
+- Insert-only turns, kept revisions, traces
+- One 16 MiB frame cap, answered not dropped
+- Client checks frame length against cap
+- Project files are data, VMs run on fuel
+
+### <!-- 2 -->🚜 Refactor
+
+- Crowd tests in a file of their own
+- Store failures are errors
+- No panics on input
+- No panics on input
+- No panics on input
+- No panics on input
+- No panics on input
+- No panics on input
+- No panics on input
+
+### <!-- 3 -->📚 Documentation
+
+- Getmetatable in all three VMs
+- Name the new sandbox refusals
+- The memory key and socket families
+- One contract in all four
+- Install through Nix
+- A peer may forget only scratch
+- What is deleted; every gate named
+- One text across the family
+- Doc links that resolve
+- Identity is attribution, not kernel
+- Observe is insert-only, traces apart
+- Name hexe and oslo sockets
+- Frames, sockets, deadlines, callers
+
+### <!-- 6 -->🧪 Testing
+
+- One gate-family in all four
+- Wire gate checks the cap and dir rule
+- Probe a live serve for refusals
+- No shared directory in client tests
+- Bind in private dirs; drop only our lock
+- Race migrations in WAL, as stores open
+- No shared directory named in a model test
+- Keep the harness name out of Rust
+
+### <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Harden lua vms
+- Publish tagged builds to ai-nerv
+- Pin actions by commit
+
+### Build
+
+- Enable flakes for the dev shell
+- Cargo deny and audit in verify and CI
+- Read the version from Cargo.toml
+- Nix-build, nix-check, download check
+- A static package with its config
+- Deny expect and indexing outside tests
+- Overflow checks; audit and deny in verify
+
 ## [0.5.5] - 2026-09-29
 
 ## [0.5.4] - 2026-09-29
