@@ -132,9 +132,15 @@ const STOPWORDS: &[&str] = &[
     "which", "who", "why", "will", "with", "would", "you", "your",
 ];
 
-/// A person's words as something FTS5 will accept: every term quoted and joined with `OR`, and
-/// stopwords dropped. Unquoted input is a syntax the user did not ask to be writing.
+/// The most distinct terms a query is searched for. A pasted wall of text is a handful of words
+/// to look for, not thousands.
+pub const MOST_TERMS: usize = 64;
+
+/// A person's words as something FTS5 will accept: every term quoted and joined with `OR`,
+/// stopwords and repeats dropped, at most [`MOST_TERMS`] of them. Unquoted input is a syntax the
+/// user did not ask to be writing.
 pub fn fts_query(query: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
     let terms: Vec<String> = query
         .split_whitespace()
         .map(|term| term.replace('"', ""))
@@ -145,8 +151,9 @@ pub fn fts_query(query: &str) -> String {
                 .filter(|c| c.is_alphanumeric())
                 .collect::<String>()
                 .to_lowercase();
-            !STOPWORDS.contains(&bare.as_str())
+            !STOPWORDS.contains(&bare.as_str()) && seen.insert(term.to_lowercase())
         })
+        .take(MOST_TERMS)
         .map(|term| format!("\"{term}\""))
         .collect();
     if terms.is_empty() {
@@ -159,6 +166,7 @@ pub fn fts_query(query: &str) -> String {
 
 /// The words a query is actually asking about.
 pub(crate) fn terms_of(query: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
     query
         .split_whitespace()
         .map(|term| {
@@ -168,6 +176,8 @@ pub(crate) fn terms_of(query: &str) -> Vec<String> {
                 .to_lowercase()
         })
         .filter(|term| !term.is_empty() && !STOPWORDS.contains(&term.as_str()))
+        .filter(|term| seen.insert(term.clone()))
+        .take(MOST_TERMS)
         .collect()
 }
 
@@ -229,6 +239,21 @@ pub(crate) fn relative(rank: f64, best: f64) -> f64 {
 #[cfg(test)]
 mod scoring {
     use super::*;
+
+    #[test]
+    fn a_pasted_wall_of_text_is_searched_for_a_handful_of_words() {
+        let wall: String = (0..10_000)
+            .map(|n| format!("word{n} the word{n} "))
+            .collect();
+        let query = fts_query(&wall);
+        assert_eq!(
+            query.matches(" OR ").count() + 1,
+            MOST_TERMS,
+            "{}",
+            &query[..80]
+        );
+        assert_eq!(terms_of(&wall).len(), MOST_TERMS);
+    }
 
     const NOW: Timestamp = 1_756_000_000;
     const DAY: Timestamp = 86_400;
