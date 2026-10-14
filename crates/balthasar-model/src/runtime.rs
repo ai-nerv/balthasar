@@ -160,8 +160,8 @@ mod tests {
         let at = program_dir_in(None, "memory", 1234);
         assert_eq!(at, std::env::temp_dir().join("memory-1234"));
         assert_eq!(
-            program_dir_in(Some("/run/user/7".into()), "memory", 7),
-            PathBuf::from("/run/user/7/memory")
+            program_dir_in(Some("/w/runtime".into()), "memory", 7),
+            PathBuf::from("/w/runtime/memory")
         );
     }
 
