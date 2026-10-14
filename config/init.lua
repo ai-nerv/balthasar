@@ -47,6 +47,12 @@ balthasar.load("sections.lua")
 --
 -- balthasar.imperatives = { "remember", "always", "never", "from now on", "note that" }
 
+-- How many days a session's turns are kept once nothing has been said in it. Unset keeps them for
+-- good; set, every copy of them goes (scrollback, search index, traces, layouts, scratch) except
+-- a turn a note cites, once a day while serving and on `balthasar consolidate --now`.
+--
+-- balthasar.retain_days = 90
+
 -- ------------------------------------------------------------------ which memory
 
 -- Which store a directory belongs to. Nothing registered means the repository root, so five
