@@ -5,12 +5,23 @@
 //! table, that is not named below is then taken out, before anything is installed, so a name a
 //! later luna adds is unreachable until it is listed here. `io`, `package` and `debug` are never
 //! loaded at all. No object is ever enrolled for a finalizer: `setmetatable` refuses a metatable
-//! carrying `__gc`, and `getmetatable` hands out no userdata's metatable.
+//! carrying `__gc`, and `getmetatable` hands out no userdata's metatable. Only source is loaded:
+//! `load`, where it is kept, refuses a precompiled chunk, as the engine does.
 
 use luna::{Callback, CallbackReturn, Context, Lua, MetaMethod, Table, Value};
 
+/// What a precompiled chunk is told, wherever it is handed in.
+pub const PRECOMPILED: &str = "a precompiled chunk is refused: only Lua source is loaded";
+
 /// What a metatable carrying `__gc` is told: no finalizer ever runs here.
 const FINALIZED: &str = "a metatable with __gc is refused: finalizers never run here";
+
+/// Whether `source` is a precompiled chunk: luna's `\x1bLuna` and PUC-Rio's `\x1bLua` both open
+/// with an escape, and no source text does.
+#[must_use]
+pub fn precompiled(source: &[u8]) -> bool {
+    source.first() == Some(&0x1b)
+}
 
 /// Which VM is being built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,8 +165,14 @@ pub fn vm(surface: Surface) -> Lua {
         }
         guard(ctx, globals, "setmetatable", finalized);
         hide_userdata_metatables(ctx, globals);
+        guard(ctx, globals, "load", binary);
     });
     lua
+}
+
+/// `load` handed a precompiled chunk, whatever mode it names.
+fn binary<'gc>(_: Context<'gc>, chunk: Value<'gc>, _: Value<'gc>) -> Option<&'static str> {
+    matches!(chunk, Value::String(chunk) if precompiled(chunk.as_bytes())).then_some(PRECOMPILED)
 }
 
 /// `getmetatable`, answering `nil` for a userdata: luna re-attaches one shared metatable to every
@@ -423,6 +440,54 @@ mod tests {
             .string("answer")
             .unwrap_or("<absent>")
             .to_owned()
+    }
+
+    #[test]
+    fn load_refuses_a_precompiled_chunk_whatever_mode_it_names() {
+        let mut engine = Engine::new();
+        engine.plant_dumped("dumped", "return 'ran'");
+        engine
+            .run(
+                "local said, modes = {}, { 'b', 'bt', 't' }
+                 for _, chunk in ipairs({ dumped, '\\27Luna\\0', '\\27Lua\\84\\0' }) do
+                   for at = 1, #modes + 1 do
+                     local ok, why = pcall(load, chunk, 'chunk', modes[at])
+                     said[#said + 1] = tostring(ok) .. ': ' .. tostring(why)
+                   end
+                 end
+                 balthasar.said = said
+                 balthasar.source = load('return 41 + 1')()",
+                "probe.lua",
+            )
+            .expect("run");
+        engine.harvest();
+        let config = engine.config();
+        let said = config.get("said").and_then(|s| s.as_array()).expect("said");
+        assert_eq!(said.len(), 12, "{said:?}");
+        for one in said {
+            let one = one.as_str().unwrap_or_default();
+            assert!(
+                one.starts_with("false: ") && one.contains("precompiled"),
+                "{one}"
+            );
+        }
+        assert_eq!(config.number("source"), Some(42.0));
+    }
+
+    #[test]
+    fn a_precompiled_file_is_refused_before_it_is_compiled() {
+        for source in ["\u{1b}Luna\0", "\u{1b}Lua\u{54}\0"] {
+            let why = Engine::new().run(source, "init.lua").expect_err("refused");
+            assert!(why.to_string().contains("init.lua"), "{why}");
+            assert!(why.to_string().contains("precompiled"), "{why}");
+        }
+        let dir = balthasar_model::scratch::Scratch::new("balthasar-precompiled", "project");
+        let file = dir.join(".balthasar.lua");
+        std::fs::write(&file, "\u{1b}Luna\0").expect("write");
+        let why = Engine::new()
+            .read(&[(file, false)])
+            .expect_err("a project file is refused");
+        assert!(why.to_string().contains("precompiled"), "{why}");
     }
 
     #[test]

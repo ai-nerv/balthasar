@@ -91,6 +91,12 @@ impl Engine {
 
     /// Run one chunk, stopping it once it has spent `fuel` instructions.
     fn run_within(&mut self, source: &str, chunk: &str, fuel: u64) -> Result<(), LuaError> {
+        if crate::sandbox::precompiled(source.as_bytes()) {
+            return Err(LuaError::Syntax {
+                file: chunk.to_owned(),
+                message: crate::sandbox::PRECOMPILED.to_owned(),
+            });
+        }
         let executor = self
             .lua
             .try_enter(|ctx| {
@@ -480,5 +486,14 @@ impl Engine {
     /// Stop the collector pacing itself, so garbage stays until something collects it.
     pub(crate) fn pause_collector(&mut self) {
         self.lua.gc_stop();
+    }
+
+    /// `source` compiled and dumped as luna bytecode, left in the global `name`.
+    pub(crate) fn plant_dumped(&mut self, name: &'static str, source: &str) {
+        self.lua.enter(|ctx| {
+            let closure = Closure::load(ctx, Some("dumped"), source.as_bytes()).expect("compiles");
+            let bytes = luna::dump::dump(&closure.prototype(), false);
+            ctx.set_global(name, luna::String::from_slice(&ctx, &bytes));
+        });
     }
 }

@@ -154,6 +154,28 @@ if [ -n "$finalizing" ]; then
   fail=1
 fi
 
+# ---- only source is loaded ----------------------------------------------------------------------
+# luna's `Closure::load` undumps anything that opens with its binary signature, whatever asked.
+# The engine refuses an escape-led chunk before it compiles one, and `load` refuses it too.
+if ! printf '%s\n' "$listed" | grep -q 'guard(ctx, globals, "load", binary)'; then
+  echo "gate-sandbox: load no longer refuses a precompiled chunk" >&2
+  fail=1
+fi
+refused_at=$(bare "$ENGINE" | grep -n 'sandbox::precompiled(' | head -1 | cut -d: -f1)
+compiled_at=$(bare "$ENGINE" | grep -n 'Closure::load(' | head -1 | cut -d: -f1)
+if [ -z "$refused_at" ] || [ -z "$compiled_at" ] || [ "$refused_at" -gt "$compiled_at" ]; then
+  echo "gate-sandbox: the engine compiles a chunk before asking whether it is precompiled" >&2
+  fail=1
+fi
+elsewhere=$(find "$ROOT/balthasar-lua/src" -name '*.rs' ! -path "$ENGINE" | sort | while IFS= read -r file; do
+  bare "$file" | grep -n 'Closure::load(\|load_with_env(\|undump(' | sed "s|^|$file:|" || true
+done)
+if [ -n "$elsewhere" ]; then
+  echo "gate-sandbox: a chunk is loaded outside the engine's one path:" >&2
+  printf '%s\n' "$elsewhere" | sed 's/^/  /' >&2
+  fail=1
+fi
+
 # ---- fs.read is lent to the person's own files only ----------------------------------------------
 if ! bare "$HELPERS" | grep -q 'lent.get()'; then
   echo "gate-sandbox: balthasar.fs.read no longer asks whether it is lent" >&2
