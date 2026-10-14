@@ -241,7 +241,11 @@ mod tests {
 
     #[test]
     fn an_answer_of_wide_characters_is_cut_on_a_character() {
-        let backend = spawned(&["sh", "-c", "for i in $(seq 1 400); do printf 'é'; done"]);
+        let backend = spawned(&[
+            "sh",
+            "-c",
+            "cat > /dev/null; for i in $(seq 1 400); do printf 'é'; done",
+        ]);
         let budget = Budget {
             max_bytes: 101,
             ..Budget::default()

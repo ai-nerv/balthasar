@@ -67,7 +67,8 @@ pub fn family_dirs_in(runtime: Option<PathBuf>, tmp: &Path, uid: u32) -> Vec<Pat
 }
 
 /// Create `path` (and any missing parents) mode 0700, then require it to be a real directory,
-/// owned by this uid, closed to group and other.
+/// owned by this uid, closed to group and other. One of this uid's own left open by an older
+/// build is closed first.
 ///
 /// # Errors
 /// When it cannot be created, or when what is there fails the check. The error names the path.
@@ -77,6 +78,11 @@ pub fn private_dir(path: &Path) -> std::io::Result<()> {
         .mode(0o700)
         .create(path)
         .map_err(|why| named(path, &why.to_string()))?;
+    let meta = std::fs::symlink_metadata(path).map_err(|why| named(path, &why.to_string()))?;
+    if meta.is_dir() && meta.uid() == uid() && meta.mode() & 0o077 != 0 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|why| named(path, &why.to_string()))?;
+    }
     checked_dir(path, uid())
 }
 
@@ -172,10 +178,17 @@ mod tests {
     }
 
     #[test]
-    fn a_dir_open_to_others_is_refused_by_name() {
+    fn a_dir_of_ours_left_open_is_closed_and_one_open_to_others_is_refused_by_name() {
         let root = Scratch::new("balthasar-runtime", "loose");
         std::fs::set_permissions(&*root, std::fs::Permissions::from_mode(0o775)).expect("chmod");
-        let why = private_dir(&root).expect_err("refused");
+        private_dir(&root).expect("ours, so closed");
+        let mode = std::fs::metadata(&*root)
+            .expect("there")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+        std::fs::set_permissions(&*root, std::fs::Permissions::from_mode(0o775)).expect("chmod");
+        let why = checked_dir(&root, uid()).expect_err("refused");
         assert!(
             why.to_string().contains(&root.display().to_string()),
             "{why}"

@@ -125,7 +125,9 @@ fn signal(pid: u32, named: &str) {
 /// Both signals, one body: what is asserted is identical and the difference is the name.
 fn ends_cleanly(named: &str, instance: &str) {
     let dir = Scratch::new("balthasar-signalled", instance);
-    std::fs::create_dir_all(dir.join("run")).expect("mkdir");
+    std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+        .create(dir.join("run"))
+        .expect("mkdir");
     let mut serving = Serving::starting(&dir, instance);
     let sockets = serving.sockets.clone();
     for socket in &sockets {
@@ -160,7 +162,9 @@ fn a_balthasar_interrupted_takes_its_socket_with_it() {
 fn a_tied_balthasar_leaves_no_socket_when_its_caller_is_killed() {
     // The only case where the signal comes from the kernel rather than from this test.
     let dir = Scratch::new("balthasar-signalled", "tied");
-    std::fs::create_dir_all(dir.join("run")).expect("mkdir");
+    std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+        .create(dir.join("run"))
+        .expect("mkdir");
     let pids = dir.join("pid");
     let script = format!(
         "{binary} serve --instance tied --scope project --tied $$ >/dev/null 2>&1 & \

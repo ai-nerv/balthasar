@@ -33,13 +33,10 @@ pub fn socket_dirs() -> [PathBuf; 2] {
     [socket_dir(), legacy_socket_dir()]
 }
 
-/// One socket directory, under the runtime directory when there is one.
+/// One socket directory: `<runtime>/<name>` when the runtime directory is safe to use, otherwise
+/// `<tmp>/<name>-<uid>`. See [`balthasar_model::runtime`].
 fn named_dir(name: &str) -> PathBuf {
-    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
-        return PathBuf::from(runtime).join(name);
-    }
-    let uid = rustix::process::getuid().as_raw();
-    std::env::temp_dir().join(format!("{name}-{uid}"))
+    balthasar_model::runtime::program_dir(name)
 }
 
 /// The socket one named instance listens on.
@@ -69,12 +66,34 @@ pub fn tool_descriptor() -> std::io::Result<PathBuf> {
     let mut refused = None;
     for dir in socket_dirs() {
         let path = dir.join(format!("{PROGRAM}.tool"));
-        match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, body.to_string())) {
+        let wrote = balthasar_model::runtime::private_dir(&dir)
+            .and_then(|()| written_alone(&path, body.to_string().as_bytes()));
+        match wrote {
             Ok(()) => written = written.or(Some(path)),
             Err(why) => refused = refused.or(Some(why)),
         }
     }
     written.ok_or_else(|| refused.unwrap_or_else(|| std::io::Error::other("nowhere to write")))
+}
+
+/// Write `body` to `path` 0600, replacing what is there without following a symlink.
+fn written_alone(path: &Path, body: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut fresh = path.as_os_str().to_owned();
+    fresh.push(format!(".{}.new", std::process::id()));
+    let fresh = PathBuf::from(fresh);
+    let wrote = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&fresh)
+        .and_then(|mut file| file.write_all(body))
+        .and_then(|()| std::fs::rename(&fresh, path));
+    if wrote.is_err() {
+        let _ = std::fs::remove_file(&fresh);
+    }
+    wrote
 }
 
 /// How long a read waits before looking up.
@@ -164,10 +183,11 @@ impl Listener {
         let wanted = [socket_path(instance), legacy_socket_path(instance)];
         let mut bound = Vec::new();
         for path in wanted {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            match crate::stale::claim(&path) {
+            let taken = path
+                .parent()
+                .map_or(Ok(()), balthasar_model::runtime::private_dir)
+                .and_then(|()| crate::stale::claim(&path));
+            match taken {
                 Ok(claimed) => bound.push(claimed),
                 Err(why) if bound.is_empty() || why.kind() == std::io::ErrorKind::AddrInUse => {
                     return Err(why);
