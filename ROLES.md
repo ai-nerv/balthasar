@@ -46,7 +46,7 @@ send next.
 
 | verb | shape | what magi does with it |
 |---|---|---|
-| `observe` | `(session, turn) -> ok` | Streams every turn as it settles. Without this nothing is recorded and the session has no history at all. |
+| `observe` | `(session, turn) -> ok` | Streams every turn as it settles. Without this nothing is recorded and the session has no history at all. Insert-only: the same turn again at its cursor is a retry and answers ok; a different one is refused (`cursor N already holds a different turn`), and `amend` is how a turn changes. A missing or non-whole cursor is refused. A turn not made durable is `fault: "failed"`. A row with `role: "trace"` is kept beside the turns, never at one's place; `replay` does not return it, `scroll` carries it under `traces`. |
 | `replay` | `(session) -> [turn]` | Everything a run said, in order. This is what `--resume` reads back. |
 | `sessions` | `-> [session]` | The runs this project has had. `--resume` with no id asks this **first**, to find which run was newest, and only then replays it. |
 
@@ -80,7 +80,7 @@ key is the scratch run.
 
 | verb | shape | what magi loses without it |
 |---|---|---|
-| `amend` | `(session, turn) -> ok` | A turn revised after it settled keeps its first text. magi writes `observe` at a cursor that already has a row, and an implementation may treat that as an amend. |
+| `amend` | `(session, turn) -> ok` | A turn revised after it settled keeps its first text. The one verb that changes a turn; the revision it replaces is kept. |
 | `recall` | `(query, opts) -> [memory]` | The model's `recall` tool is not declared. |
 | `remember` | `(text, opts) -> landing` | The model's `remember` tool is not declared. |
 | `forget` | `(id, opts) -> ok` | The model's `forget` tool is not declared. |
