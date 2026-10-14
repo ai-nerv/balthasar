@@ -18,6 +18,9 @@
 --
 --   load(src)(transport)     transport.connect(path, timeout_ms) -> handle
 --                            handle:send(bytes) / handle:recv(n) / handle:close()
+--                            handle:call(request, { deadline_ms = N }) -> reply | nil, why
+--
+-- A handle with `call` frames, caps and decodes in the host; one without is framed here by hand.
 --
 -- Inside balthasar that is `balthasar.stream`, and it is found automatically when nothing is passed.
 --
@@ -355,12 +358,9 @@ Session.__index = Session
 --- The handle is held. balthasar serves many requests per connection, so a client that reconnected
 --- each time would pay for a connect per call on a socket it is about to use again -- and a
 --- memory layer is asked several times in a single turn.
-function Session:call(name, ...)
-  if not self.handle then return nil, "this connection is closed" end
-  local args = { ... }
-  local body = { call = name }
-  if #args > 0 then body.args = args end
-
+--- One call framed by hand, for a transport that lends no `call`: the reply table, or `nil, why`
+--- and a fault when nothing was sent.
+local function by_hand(self, body)
   -- A send that failed may still have put part of a frame on the wire, which the far end reads
   -- as the head of a call this side will never finish.
   -- Refused here, before a byte is sent: a call over the cap would only be refused at the far end.
@@ -388,6 +388,31 @@ function Session:call(name, ...)
   if not decoded or type(reply) ~= "table" then
     return nil, adrift(self, "balthasar sent a reply that will not decode: " .. tostring(reply))
   end
+  return reply
+end
+
+--- One call through the transport's own `call`, which frames, caps and decodes. A handle it
+--- closed answers a send of nothing with `nil`, and is dropped here; one it kept never sent.
+local function through_transport(self, body)
+  local reply, why = self.handle:call(body, { deadline_ms = self.timeout_ms })
+  if reply then return reply end
+  if not self.handle:send("") then return nil, adrift(self, why) end
+  return nil, why, "refused"
+end
+
+function Session:call(name, ...)
+  if not self.handle then return nil, "this connection is closed" end
+  local args = { ... }
+  local body = { call = name }
+  if #args > 0 then body.args = args end
+
+  local reply, why, fault
+  if type(self.handle.call) == "function" then
+    reply, why, fault = through_transport(self, body)
+  else
+    reply, why, fault = by_hand(self, body)
+  end
+  if not reply then return nil, why, fault end
   -- A third value, because the two failures a caller must tell apart look identical in the
   -- message. "refused" costs a feature and the caller carries on; "failed" means what it just
   -- handed over was not recorded, and the next turn would be written on top of a hole.
@@ -633,7 +658,8 @@ function M.connect(where)
     end
     local handle, why = transport.connect(candidate.path, timeout)
     if handle then
-      local session = attach(setmetatable({ handle = handle, path = candidate.path }, Session))
+      local session = attach(setmetatable(
+        { handle = handle, path = candidate.path, timeout_ms = timeout }, Session))
       -- **Connecting is not an answer.** A socket outlives the process that bound it, and the
       -- kernel accepts on behalf of a listener whose owner has stopped reading -- so a balthasar
       -- that was killed, or one left over from an older build, takes the connection and answers

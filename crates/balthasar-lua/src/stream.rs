@@ -6,7 +6,10 @@
 //! ```lua
 //! local h = balthasar.stream.connect(path, timeout_ms)
 //! h:send(bytes)   h:recv(n)   h:close()
+//! local reply, why = h:call({ call = "verbs" }, { deadline_ms = 2000 })
 //! ```
+
+mod call;
 
 use luna::{Callback, CallbackReturn, Context, Table, Value};
 use std::cell::RefCell;
@@ -111,7 +114,7 @@ pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
                     return Ok(CallbackReturn::Return);
                 }
                 let held: Handle = Rc::new(RefCell::new(Some(socket)));
-                stack.replace(ctx, handle_table(ctx, held));
+                stack.replace(ctx, handle_table(ctx, held, timeout));
             }
             Err(why) => {
                 let message = luna::String::from_slice(&ctx, why.to_string().as_bytes());
@@ -124,9 +127,48 @@ pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
     stream
 }
 
-/// One connection's methods.
-fn handle_table<'gc>(ctx: Context<'gc>, held: Handle) -> Table<'gc> {
+/// One connection's methods. `timeout` is what `send` and `recv` wait, and what `call` waits when
+/// it is given no deadline.
+fn handle_table<'gc>(ctx: Context<'gc>, held: Handle, timeout: Duration) -> Table<'gc> {
     let handle = Table::new(&ctx);
+
+    let calling = Rc::clone(&held);
+    let call = Callback::from_fn(&ctx, move |ctx, _exec, mut stack| {
+        let (_this, request, opts): (Value, Value, Value) = stack.consume(ctx)?;
+        let deadline = std::time::Instant::now() + call::patience(ctx, opts, timeout);
+        let frame = match call::framed(ctx, request) {
+            Ok(frame) => frame,
+            Err(why) => {
+                let message = luna::String::from_slice(&ctx, why.as_bytes());
+                stack.replace(ctx, (Value::Nil, message));
+                return Ok(CallbackReturn::Return);
+            }
+        };
+        let mut borrowed = calling.borrow_mut();
+        let Some(socket) = borrowed.as_mut() else {
+            stack.replace(ctx, (Value::Nil, "this connection is closed"));
+            return Ok(CallbackReturn::Return);
+        };
+        let answered = call::exchange(socket, &frame, deadline);
+        let restored = socket
+            .set_read_timeout(Some(timeout))
+            .and_then(|()| socket.set_write_timeout(Some(timeout)));
+        match (answered, restored) {
+            (Ok(reply), Ok(())) => stack.replace(ctx, crate::convert::from_json(ctx, &reply)),
+            (Ok(_), Err(why)) => {
+                borrowed.take();
+                let message = luna::String::from_slice(&ctx, why.to_string().as_bytes());
+                stack.replace(ctx, (Value::Nil, message));
+            }
+            (Err(why), _) => {
+                borrowed.take();
+                let message = luna::String::from_slice(&ctx, why.as_bytes());
+                stack.replace(ctx, (Value::Nil, message));
+            }
+        }
+        Ok(CallbackReturn::Return)
+    });
+    handle.set(ctx, "call", call).ok();
 
     let sending = Rc::clone(&held);
     let send = Callback::from_fn(&ctx, move |ctx, _exec, mut stack| {
