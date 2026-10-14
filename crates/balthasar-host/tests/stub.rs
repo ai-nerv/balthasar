@@ -35,6 +35,7 @@ impl Drop for Serving {
     fn drop(&mut self) {
         for path in &self.0 {
             let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(balthasar_ipc::lock_path(path));
         }
     }
 }

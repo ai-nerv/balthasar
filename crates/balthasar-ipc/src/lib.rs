@@ -17,4 +17,5 @@ pub use serve::{
     Listener, legacy_socket_dir, legacy_socket_path, socket_dir, socket_dirs, socket_path,
     tool_descriptor,
 };
+pub use stale::lock_path;
 pub use stop::hold as hold_stop_signals;

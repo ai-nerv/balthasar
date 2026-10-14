@@ -218,7 +218,14 @@ impl Listener {
                     request,
                     answered,
                 }) => {
-                    let _ = answered.send(answer(&peer, request));
+                    let call = request.call.clone();
+                    let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        answer(&peer, request)
+                    }))
+                    .unwrap_or_else(|_| {
+                        Reply::failed(format!("balthasar failed while answering `{call}`"))
+                    });
+                    let _ = answered.send(reply);
                 }
                 Heard::Stop(named) => {
                     eprintln!("balthasar: stopped on {named}");
@@ -516,6 +523,7 @@ mod tests {
         assert_eq!(counted.load(std::sync::atomic::Ordering::Acquire), 2);
         for path in &paths {
             let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(crate::stale::lock_path(path));
         }
         drop(serving);
     }
@@ -554,6 +562,7 @@ mod crowd {
         fn drop(&mut self) {
             for path in &self.0 {
                 let _ = std::fs::remove_file(path);
+                let _ = std::fs::remove_file(crate::stale::lock_path(path));
             }
         }
     }
@@ -665,3 +674,6 @@ mod crowd {
 
 #[cfg(test)]
 mod framing;
+
+#[cfg(test)]
+mod panics;

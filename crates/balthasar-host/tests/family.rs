@@ -92,8 +92,10 @@ impl Drop for Serving {
         // wait on an accept that never returns.
         let _ = self.thread.take();
         let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(balthasar_ipc::lock_path(&self.path));
         for path in &self.also {
             let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(balthasar_ipc::lock_path(path));
         }
     }
 }
