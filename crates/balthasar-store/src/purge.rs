@@ -335,3 +335,20 @@ pub fn purge_domain(
     }
     Ok(gone)
 }
+
+/// How long a layout is kept once a provider has taken it: thirty days.
+pub const LAYOUT_KEPT: balthasar_model::Timestamp = 30 * 24 * 60 * 60;
+
+/// Remove layouts applied before `before`, except each run's newest and any whose effects are
+/// still waiting to be carried out. Answers how many went.
+pub fn prune_layouts(
+    scrollback: &crate::Transcript,
+    before: balthasar_model::Timestamp,
+) -> Result<usize, StoreError> {
+    Ok(scrollback.db().execute(
+        "DELETE FROM layout WHERE applied IS NOT NULL AND applied < ?1 \
+         AND n NOT IN (SELECT max(n) FROM layout GROUP BY session) \
+         AND ('L-' || n) NOT IN (SELECT layout FROM layout_effect WHERE done = 0)",
+        params![before],
+    )?)
+}

@@ -169,3 +169,50 @@ fn purging_a_session_empties_every_session_keyed_table_in_the_memory_store() {
         "another run's rows went too"
     );
 }
+
+#[test]
+fn applied_layouts_are_pruned_by_age_but_not_the_newest_or_one_still_owed_effects() {
+    let scrollback = Transcript::ephemeral().expect("open");
+    let session = SessionId::new("s");
+    let body = serde_json::json!({ "slots": [] });
+    let laid = |at| {
+        scrollback
+            .propose(&session, "m", 10, &body, &body, at)
+            .expect("proposed")
+    };
+    let (old, owed, unsent, newest) = (laid(100), laid(200), laid(300), laid(400));
+    for id in [&old, &owed, &newest] {
+        assert!(scrollback.confirm(id, None, 500).expect("applied"));
+    }
+    scrollback
+        .queue_layout_effect(&balthasar_store::LayoutEffect {
+            layout: owed.clone(),
+            session: session.clone(),
+            run: session.clone(),
+            agent: balthasar_model::AgentId::main(),
+            scope: balthasar_model::ScopeId::new("/w"),
+            cursor: 0,
+            text: "owed".to_owned(),
+            at: 500,
+        })
+        .expect("queued");
+
+    let gone = balthasar_store::prune_layouts(&scrollback, 1_000).expect("pruned");
+    assert_eq!(gone, 1);
+    assert!(
+        scrollback.proposal(&old).expect("read").is_none(),
+        "old and sent"
+    );
+    assert!(
+        scrollback.proposal(&owed).expect("read").is_some(),
+        "its effect is still owed"
+    );
+    assert!(
+        scrollback.proposal(&unsent).expect("read").is_some(),
+        "never applied"
+    );
+    assert!(
+        scrollback.proposal(&newest).expect("read").is_some(),
+        "the run's newest"
+    );
+}

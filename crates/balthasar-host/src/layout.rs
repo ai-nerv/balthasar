@@ -42,7 +42,16 @@ pub fn applied(at: &mut Answering<'_>, request: &Request) -> Reply {
         return Reply::refused("applied needs the layout's id");
     };
     match crate::applying::confirm(at, &session, id, said.and_then(|s| s.get("usage"))) {
-        Ok(()) => Reply::none(),
+        Ok(()) => {
+            // Layouts long since sent go; one that cannot be pruned now is pruned next time.
+            if let Some(scrollback) = at.scrollback.as_ref() {
+                let before = at.now.saturating_sub(balthasar_store::LAYOUT_KEPT);
+                if let Err(why) = balthasar_store::prune_layouts(scrollback, before) {
+                    balthasar_model::noted!("applied: pruning old layouts failed: {why}");
+                }
+            }
+            Reply::none()
+        }
         Err(why) => Reply::refused(why.to_string()),
     }
 }

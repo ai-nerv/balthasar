@@ -56,7 +56,8 @@ pub use paths::{
     session_dir, session_dir_in, session_path, tools_in,
 };
 pub use purge::{
-    Closure, closure_of, purge, purge_domain, purge_run, purge_scratch, purge_session,
+    Closure, LAYOUT_KEPT, closure_of, prune_layouts, purge, purge_domain, purge_run, purge_scratch,
+    purge_session,
 };
 pub use read::{Cluster, Recall};
 pub use relate::Reach;
