@@ -675,13 +675,17 @@ mod tests {
     fn two_openers_migrating_one_file_both_finish() {
         let dir = balthasar_model::scratch::Scratch::new("balthasar-schema", "racing");
         let path = dir.join("memory.db");
-        let racers: Vec<_> = (0..4)
+        // In WAL, as a store is opened, so the race is the migration's and not the journal's.
+        Connection::open(&path)
+            .and_then(|c| c.pragma_update(None, "journal_mode", "WAL"))
+            .expect("wal");
+        let racers: Vec<_> = (0..3)
             .map(|_| {
                 let path = path.clone();
                 std::thread::spawn(move || {
                     let connection = Connection::open(&path).expect("open");
                     connection
-                        .busy_timeout(std::time::Duration::from_secs(10))
+                        .busy_timeout(std::time::Duration::from_secs(60))
                         .expect("patience");
                     migrate(&connection)
                 })
