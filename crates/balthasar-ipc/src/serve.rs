@@ -172,6 +172,16 @@ pub struct Listener {
     /// The first name bound, the role's own.
     path: PathBuf,
     bound: Vec<crate::stale::Claimed>,
+    /// The `<socket>.key` files this wrote, removed when it is dropped.
+    published: Vec<PathBuf>,
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        for path in &self.published {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 impl Listener {
@@ -207,7 +217,11 @@ impl Listener {
             .ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, "no directory to bind in")
             })?;
-        Ok(Self { path, bound })
+        Ok(Self {
+            path,
+            bound,
+            published: Vec::new(),
+        })
     }
 
     /// Where it is listening: the role's own name.
@@ -225,6 +239,34 @@ impl Listener {
             .collect()
     }
 
+    /// Write `key` to `<socket>.key` beside every name bound: created 0600 and new, inside the
+    /// private directory the socket is in, so a caller this did not start can read it. One left
+    /// by an instance that died is replaced, under the lock this holds on the name.
+    ///
+    /// # Errors
+    /// When a file cannot be written; any written before it are removed with the listener.
+    pub fn publish(&mut self, key: &crate::Key) -> std::io::Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        for claimed in &self.bound {
+            let mut path = claimed.path.as_os_str().to_owned();
+            path.push(".key");
+            let path = PathBuf::from(path);
+            match std::fs::remove_file(&path) {
+                Err(why) if why.kind() != std::io::ErrorKind::NotFound => return Err(why),
+                _ => {}
+            }
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)?;
+            self.published.push(path);
+            file.write_all(format!("{}\n", key.hex()).as_bytes())?;
+        }
+        Ok(())
+    }
+
     /// Serve until something stops us.
     ///
     /// Each connection gets a thread of its own to be read on, and every call those threads read
@@ -237,16 +279,17 @@ impl Listener {
     /// [`crate::hold_stop_signals`] first, so that the sockets are removed and whatever the answering
     /// closure holds still run on the way out.
     ///
-    /// Only a call carrying `key` reaches `answer`; any other is refused on its connection.
+    /// A call whose verb `guard` names reaches `answer` only carrying its key; without it, it is
+    /// refused on its connection.
     ///
     /// # Errors
     /// When the listener cannot be handed to the thread that accepts on it.
     pub fn serve(
         &self,
-        key: crate::Key,
+        guard: crate::Guard,
         mut answer: impl FnMut(&Peer, Request) -> Reply,
     ) -> std::io::Result<()> {
-        let key = std::sync::Arc::new(key);
+        let guard = std::sync::Arc::new(guard);
         // Duplicates rather than borrows, so a panic out of `answer` unwinds instead of joining.
         let mut listening = Vec::with_capacity(self.bound.len());
         for claimed in &self.bound {
@@ -265,8 +308,8 @@ impl Listener {
         // One accept thread per name, all feeding the queue the one answering thread reads: two
         // doors into one store, never two stores.
         for one in listening {
-            let (asked, key) = (asked.clone(), std::sync::Arc::clone(&key));
-            std::thread::spawn(move || accept(&one, &asked, &key));
+            let (asked, guard) = (asked.clone(), std::sync::Arc::clone(&guard));
+            std::thread::spawn(move || accept(&one, &asked, &guard));
         }
         drop(asked);
 
@@ -302,7 +345,7 @@ impl Listener {
 fn accept(
     listening: &UnixListener,
     asked: &std::sync::mpsc::Sender<Heard>,
-    key: &std::sync::Arc<crate::Key>,
+    guard: &std::sync::Arc<crate::Guard>,
 ) {
     let crowd: Crowd = Crowd::default();
 
@@ -345,13 +388,13 @@ fn accept(
             );
             continue;
         }
-        let (asked, key) = (asked.clone(), std::sync::Arc::clone(key));
+        let (asked, guard) = (asked.clone(), std::sync::Arc::clone(guard));
         std::thread::spawn(move || {
             let _seat = seat;
             converse(
                 &mut stream,
                 &peer,
-                &key,
+                &guard,
                 &|peer: &Peer, request: Request| answering(&asked, peer, request),
             );
         });
@@ -378,20 +421,21 @@ fn answering(asked: &std::sync::mpsc::Sender<Heard>, peer: &Peer, request: Reque
 /// Answer one connection's calls until it closes, goes quiet for too long, or stalls mid-frame.
 ///
 /// `answer` is a way to ask the one thread that answers, taken per call rather than per
-/// connection, so that holding a connection holds nothing. A call without `key` never reaches it.
+/// connection, so that holding a connection holds nothing. A call `guard` turns away never
+/// reaches it.
 fn converse(
     stream: &mut UnixStream,
     peer: &Peer,
-    key: &crate::Key,
+    guard: &crate::Guard,
     answer: &impl Fn(&Peer, Request) -> Reply,
 ) {
-    converse_within(stream, peer, key, answer, PATIENCE);
+    converse_within(stream, peer, guard, answer, PATIENCE);
 }
 
 fn converse_within(
     stream: &mut UnixStream,
     peer: &Peer,
-    key: &crate::Key,
+    guard: &crate::Guard,
     answer: &impl Fn(&Peer, Request) -> Reply,
     patience: Patience,
 ) {
@@ -414,7 +458,7 @@ fn converse_within(
         let reply = if body.is_empty() {
             Reply::refused("that is not a request: a frame of zero length is malformed")
         } else {
-            crate::key::admitted(key, wire, &body)
+            crate::key::admitted(guard, wire, &body)
                 .map_or_else(|refusal| refusal, |request| answer(peer, request))
         };
         if say(stream, wire, &reply).is_err() {
@@ -493,12 +537,12 @@ mod tests {
             let (mut client, mut server) = UnixStream::pair().expect("pair");
             let peer = Peer::of(&server).expect("the kernel names us");
 
-            let (key, hex) = crate::key::for_tests();
+            let (guard, hex) = (crate::key::guard_for_tests(), crate::key::for_tests().1);
             let serving = std::thread::spawn(move || {
                 let answer = |_p: &Peer, request: Request| {
                     Reply::one(serde_json::json!(format!("heard {}", request.call)))
                 };
-                converse(&mut server, &peer, &key, &answer);
+                converse(&mut server, &peer, &guard, &answer);
             });
 
             let asked = wire
@@ -596,6 +640,33 @@ mod tests {
     }
 
     #[test]
+    fn a_published_key_sits_beside_each_socket_for_its_owner_alone_and_goes_with_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_root, dirs) = aside("published");
+        let stale = dirs[0].join("api@k.sock.key");
+        std::fs::write(&stale, "left by a dead instance\n").expect("a stale key");
+        {
+            let mut listener = Listener::bind_in(&dirs, "k").expect("bind");
+            let key = crate::Key::mint().expect("mint");
+            listener.publish(&key).expect("publish");
+            for path in listener.paths() {
+                let mut named = path.as_os_str().to_owned();
+                named.push(".key");
+                let file = PathBuf::from(named);
+                let said = std::fs::read_to_string(&file).expect("published");
+                assert_eq!(said, format!("{}\n", key.hex()));
+                let mode = std::fs::metadata(&file).expect("stat").permissions().mode();
+                assert_eq!(mode & 0o777, 0o600, "{}", file.display());
+            }
+        }
+        assert_eq!(
+            left(&dirs),
+            Vec::<PathBuf>::new(),
+            "a key file outlived the listener"
+        );
+    }
+
+    #[test]
     fn a_lock_file_that_is_no_longer_ours_is_left_alone() {
         let (_root, dirs) = aside("relock");
         let listener = Listener::bind_in(&dirs, "r").expect("bind");
@@ -638,9 +709,9 @@ mod tests {
         let counted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let tally = std::sync::Arc::clone(&counted);
 
-        let (key, hex) = crate::key::for_tests();
+        let (guard, hex) = (crate::key::guard_for_tests(), crate::key::for_tests().1);
         let serving = std::thread::spawn(move || {
-            let _ = listener.serve(key, move |_peer: &Peer, _request: Request| {
+            let _ = listener.serve(guard, move |_peer: &Peer, _request: Request| {
                 let n = tally.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
                 Reply::one(serde_json::json!(n))
             });

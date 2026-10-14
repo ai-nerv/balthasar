@@ -102,14 +102,18 @@ key is the scratch run.
 independently.** magi declares a tool for each verb the role answers and omits the rest, so a
 memory layer that can search but not explain gets three tools and no `why`.
 
-**A memory layer's socket answers the session that started it.** magi starts one `serve` per
-session and writes a key on its standard input: one line of 64 lowercase hex characters, read
-before anything is bound, and a `serve` told none refuses to start. Every call on the socket
-carries it as `"key"`; a call without it, or with another, is refused (`fault: "refused"`,
-`a call to serve needs the key it was started with`) and the connection stays open. The agent a
-call is recorded for is the one `serve` was started for, `MAGI_MEMORY_AGENT` in its own
-environment; what a caller's environment names is attribution only. A `serve` started by hand
-reads its key the same way, and whoever started it hands the same key to its callers.
+**A memory layer's socket takes writes from the session that started it.** magi starts one
+`serve` per session and writes a key on its standard input: one line of 64 lowercase hex
+characters, read before anything is bound; a malformed line refuses the start. A `serve` handed no
+line (its input ends, or is a terminal) mints its own key and writes it beside its socket as
+`<socket>.key`, created 0600 and new in its 0700 runtime directory and removed when it exits; one
+handed a key writes no file. A call that writes or issues work carries the key as `"key"`; without
+it, or with another, it is refused (`fault: "refused"`, `a call to serve needs the key it was
+started with`) and the connection stays open. A call that only reads needs no key. A magi that did
+not start the `serve` it talks to reads `<socket>.key` with the owner and mode check it applies to
+its host's controller key, and reads it again once when a write is refused for the key. The agent
+a call is recorded for is the one `serve` was started for, `MAGI_MEMORY_AGENT` in its own
+environment; what a caller's environment names is attribution only.
 
 ---
 

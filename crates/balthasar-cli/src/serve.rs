@@ -75,13 +75,25 @@ pub fn serve(
     if let Some(caller) = args.tied {
         tie_to_caller(caller)?;
     }
-    // Before any socket exists: without its key, nothing could be answered on one.
-    let key = balthasar_ipc::Key::read(&mut std::io::stdin().lock()).map_err(anyhow::Error::msg)?;
+    // Before any socket exists: the key its coordinator wrote on stdin, else one of its own.
+    let told = told_key()?;
+    let minted = told.is_none();
+    let key = match told {
+        Some(key) => key,
+        None => balthasar_ipc::Key::mint()?,
+    };
     // Corpses in both directories, the old name's included.
     for dir in balthasar_ipc::socket_dirs() {
         balthasar_ipc::swept(&dir);
     }
-    let listener = Listener::bind(&args.instance)?;
+    let mut listener = Listener::bind(&args.instance)?;
+    if minted {
+        listener.publish(&key)?;
+        eprintln!(
+            "{}",
+            render::dim(&format!("key {}.key", listener.path().display()))
+        );
+    }
     // Written whether or not anybody connects: a caller that finds no socket spawns from this path.
     let descriptor = balthasar_ipc::tool_descriptor()?;
 
@@ -116,7 +128,8 @@ pub fn serve(
     let capture = loaded.settings().ledger().capture;
 
     let agent = agent_here();
-    let served = listener.serve(key, |peer: &Peer, request: Request| {
+    let guard = balthasar_ipc::Guard::new(key, needs_key);
+    let served = listener.serve(guard, |peer: &Peer, request: Request| {
         let named = named_by_kernel(peer).unwrap_or_else(|| fallback.clone());
         if !has_room(opened.len(), opened.contains_key(&named), named == fallback) {
             return Reply::refused(format!(
@@ -169,6 +182,23 @@ pub fn serve(
     drop(listener);
     served?;
     Ok(())
+}
+
+/// The key a coordinator wrote on standard input, or `None` when stdin is a terminal or ends
+/// before a line begins.
+fn told_key() -> anyhow::Result<Option<balthasar_ipc::Key>> {
+    use std::io::IsTerminal;
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return Ok(None);
+    }
+    balthasar_ipc::Key::read(&mut stdin.lock()).map_err(anyhow::Error::msg)
+}
+
+/// Whether a verb on the socket needs the key: one that changes the store or issues work does,
+/// one that only reads does not, and a verb this does not have is refused by name either way.
+fn needs_key(verb: &str) -> bool {
+    balthasar_host::known(verb).is_some_and(|known| known.writes)
 }
 
 /// Answer one question on standard output and exit successfully.

@@ -1,8 +1,9 @@
 //! The family's wire corpus, against the real `serve`: every case answered as `cases.json` says,
 //! and the connection left open or closed as it says.
 //!
-//! The socket answers only with the key `serve` was started with. So a case whose body decodes as
-//! a call is re-framed in its own encoding with the key added; every other case goes as it is.
+//! A write on the socket is answered only with the key `serve` was started with. So a case whose
+//! body decodes as a call is re-framed in its own encoding with the key added; every other case
+//! goes as it is.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
@@ -173,15 +174,14 @@ fn every_server_case_of_the_corpus_is_answered_as_it_says() {
 }
 
 #[test]
-fn a_corpus_call_as_it_is_carries_no_key_and_is_refused() {
+fn a_corpus_read_as_it_is_needs_no_key() {
     let serving = Serving::start();
     for file in ["server/verbs-json.frame", "server/verbs-cbor.frame"] {
         let bytes = std::fs::read(corpus().join(file)).expect("case");
         let mut stream = serving.connect();
         send(&mut stream, &bytes, false);
         let (said, _) = decoded(&reply(&mut stream).expect("a reply, not a close"));
-        assert_eq!(said["fault"], "refused", "{file}: {said}");
-        assert_eq!(said["error"], balthasar_ipc::KEY_REFUSED, "{file}: {said}");
+        assert_eq!(said["ok"], true, "{file}: {said}");
     }
 }
 

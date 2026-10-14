@@ -58,9 +58,14 @@ impl Serving {
         }
 
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let key = balthasar_ipc::Key::read(&mut format!("{KEY}\n").as_bytes()).expect("a key");
+        let key = balthasar_ipc::Key::read(&mut format!("{KEY}\n").as_bytes())
+            .expect("read")
+            .expect("a key");
+        let guard = balthasar_ipc::Guard::new(key, |verb| {
+            balthasar_host::known(verb).is_some_and(|known| known.writes)
+        });
         let thread = std::thread::spawn(move || {
-            let _ = listener.serve(key, |peer: &Peer, request: Request| {
+            let _ = listener.serve(guard, |peer: &Peer, request: Request| {
                 let mut at = Answering {
                     store: &mut store,
                     scrollback: None,
@@ -164,7 +169,7 @@ fn one_connection_carries_many_calls() {
 }
 
 #[test]
-fn a_call_without_the_key_is_refused_and_writes_nothing() {
+fn a_write_without_the_key_is_refused_and_a_read_without_it_is_answered() {
     let serving = Serving::start("keyless", &[]);
     let wrong = KEY.replace('5', "6");
     for key in [serde_json::Value::Null, serde_json::json!(wrong)] {
@@ -179,9 +184,9 @@ fn a_call_without_the_key_is_refused_and_writes_nothing() {
     }
     let found = ask(
         &serving.path,
-        &serde_json::json!({ "call": "recall", "args": ["intruder"] }),
+        &serde_json::json!({ "call": "recall", "args": ["intruder"], "key": null }),
     );
-    assert_eq!(found["ok"], true, "{found}");
+    assert_eq!(found["ok"], true, "a read needs no key: {found}");
     assert_eq!(
         found["n"], 0,
         "nothing the refused calls said was kept: {found}"

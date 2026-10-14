@@ -122,7 +122,7 @@ enum What {
     Init(init::Args),
     /// Install the shipped configuration into `$XDG_CONFIG_HOME/balthasar`.
     Configs(configs::Args),
-    /// Listen for other programs, with the key every call must carry read as one line on stdin.
+    /// Listen for other programs, a write's key read from stdin or published in `<socket>.key`.
     Serve(serve::ServeArgs),
     /// Answer one question, wire-shaped, and exit.
     Api(serve::ApiArgs),

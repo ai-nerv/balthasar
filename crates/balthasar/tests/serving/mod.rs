@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 pub const KEY: &str = "5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e5e7e";
 
 pub struct Serving {
-    child: Child,
+    pub child: Child,
     pub socket: PathBuf,
     _dir: Scratch,
 }

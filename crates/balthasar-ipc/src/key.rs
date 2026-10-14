@@ -1,5 +1,5 @@
-//! The key `serve` is handed on its standard input when it starts, and which every call on its
-//! socket must carry.
+//! The key `serve` is handed on its standard input when it starts, or mints and publishes beside
+//! its socket when it is handed none, and which every call that writes must carry.
 
 use std::io::{ErrorKind, Read};
 
@@ -20,18 +20,20 @@ impl std::fmt::Debug for Key {
 
 impl Key {
     /// One line of 64 lowercase hex characters and a newline, read byte by byte so nothing after
-    /// it is consumed and no closed stdin is waited on beyond the line.
+    /// it is consumed and no closed stdin is waited on beyond the line. `None` when the input ends
+    /// before its first byte.
     ///
     /// # Errors
-    /// When the line is missing, unterminated, or not 64 lowercase hex characters.
-    pub fn read(from: &mut impl Read) -> Result<Self, String> {
+    /// When a line arrives unterminated, or is not 64 lowercase hex characters.
+    pub fn read(from: &mut impl Read) -> Result<Option<Self>, String> {
         const WANTED: &str = "serve takes its key on standard input: one line of 64 lowercase \
                               hex characters";
         let mut line = Vec::with_capacity(LENGTH);
         let mut byte = [0_u8; 1];
         loop {
             match from.read(&mut byte) {
-                Ok(0) => return Err(format!("{WANTED}, and none arrived")),
+                Ok(0) if line.is_empty() => return Ok(None),
+                Ok(0) => return Err(format!("{WANTED}, and the line was never finished")),
                 Ok(_) if byte == [b'\n'] => break,
                 Ok(_) if line.len() == LENGTH => return Err(format!("{WANTED}; that is longer")),
                 Ok(_) => line.extend_from_slice(&byte),
@@ -44,8 +46,23 @@ impl Key {
             return Err(format!("{WANTED}; that is not one"));
         }
         String::from_utf8(line)
-            .map(Self)
+            .map(|line| Some(Self(line)))
             .map_err(|_| format!("{WANTED}; that is not one"))
+    }
+
+    /// A fresh key: 32 bytes from the kernel's random source, as lowercase hex.
+    ///
+    /// # Errors
+    /// When the random source cannot be read.
+    pub fn mint() -> std::io::Result<Self> {
+        let mut raw = [0_u8; LENGTH / 2];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut raw)?;
+        Ok(Self(raw.iter().map(|b| format!("{b:02x}")).collect()))
+    }
+
+    /// The key as it is written down, for the file it is published in.
+    pub(crate) fn hex(&self) -> &str {
+        &self.0
     }
 
     /// Whether `presented` is this key, compared without stopping at the first difference.
@@ -63,10 +80,26 @@ impl Key {
     }
 }
 
+/// What a socket holds its callers to: the key, and which verbs need it. A verb that changes the
+/// store or issues work needs it; one that only reads does not.
+pub struct Guard {
+    key: Key,
+    guarded: fn(&str) -> bool,
+}
+
+impl Guard {
+    /// `key`, asked of every call whose verb `guarded` names.
+    #[must_use]
+    pub fn new(key: Key, guarded: fn(&str) -> bool) -> Self {
+        Self { key, guarded }
+    }
+}
+
 /// The call in `body`, when it decodes, is written in a family this program reads, and carries
-/// `key`; otherwise the refusal to answer it with. The key is taken out before the call goes on.
+/// the key when its verb needs it; otherwise the refusal to answer it with. The key is taken out
+/// before the call goes on.
 pub(crate) fn admitted(
-    key: &Key,
+    guard: &Guard,
     wire: crate::Wire,
     body: &[u8],
 ) -> Result<crate::Request, crate::Reply> {
@@ -86,10 +119,16 @@ pub(crate) fn admitted(
         )));
     }
     let presented = fields.remove("key");
-    if !key.admits(presented.as_ref().and_then(serde_json::Value::as_str)) {
+    let request: crate::Request =
+        serde_json::from_value(call).map_err(|why| not_a_request(&why))?;
+    if (guard.guarded)(&request.call)
+        && !guard
+            .key
+            .admits(presented.as_ref().and_then(serde_json::Value::as_str))
+    {
         return Err(crate::Reply::refused(REFUSED));
     }
-    serde_json::from_value(call).map_err(|why| not_a_request(&why))
+    Ok(request)
 }
 
 /// A key and its hex, for tests that serve and call.
@@ -97,6 +136,12 @@ pub(crate) fn admitted(
 pub(crate) fn for_tests() -> (Key, &'static str) {
     const HEX: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     (Key(HEX.to_owned()), HEX)
+}
+
+/// The test key, asked of every verb but `verbs`, which stands in for a read.
+#[cfg(test)]
+pub(crate) fn guard_for_tests() -> Guard {
+    Guard::new(for_tests().0, |verb| verb != "verbs")
 }
 
 #[cfg(test)]
@@ -109,17 +154,29 @@ mod tests {
     fn one_line_of_lowercase_hex_is_a_key_and_nothing_after_it_is_read() {
         let fed = format!("{GOOD}\nleft");
         let mut reader = fed.as_bytes();
-        let key = Key::read(&mut reader).expect("a key");
+        let key = Key::read(&mut reader).expect("read").expect("a key");
         assert_eq!(reader, b"left");
         assert!(key.admits(Some(GOOD)));
     }
 
     #[test]
-    fn a_missing_or_malformed_key_is_refused_by_name() {
+    fn nothing_on_the_input_is_no_key_and_a_minted_one_is_fresh_hex() {
+        assert!(Key::read(&mut "".as_bytes()).expect("read").is_none());
+        let (one, two) = (Key::mint().expect("mint"), Key::mint().expect("mint"));
+        assert_eq!(one.hex().len(), 64);
+        assert!(
+            one.hex()
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
+        assert!(!one.admits(Some(two.hex())));
+    }
+
+    #[test]
+    fn a_malformed_key_is_refused_by_name() {
         let upper = GOOD.to_uppercase();
         let long = format!("{GOOD}0\n");
         for fed in [
-            "",
             GOOD,
             "abc\n",
             &format!("{upper}\n"),
@@ -133,7 +190,9 @@ mod tests {
 
     #[test]
     fn only_the_same_key_is_admitted_and_it_never_prints() {
-        let key = Key::read(&mut format!("{GOOD}\n").as_bytes()).expect("key");
+        let key = Key::read(&mut format!("{GOOD}\n").as_bytes())
+            .expect("read")
+            .expect("key");
         let other = GOOD.replace('0', "1");
         for wrong in [None, Some(""), Some(&GOOD[..63]), Some(other.as_str())] {
             assert!(!key.admits(wrong), "{wrong:?}");

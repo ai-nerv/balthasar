@@ -86,9 +86,14 @@ fn serving(name: &str, seed: &[&str]) -> Serving {
         );
     }
 
-    let key = balthasar_ipc::Key::read(&mut format!("{KEY}\n").as_bytes()).expect("a key");
+    let key = balthasar_ipc::Key::read(&mut format!("{KEY}\n").as_bytes())
+        .expect("read")
+        .expect("a key");
+    let guard = balthasar_ipc::Guard::new(key, |verb| {
+        balthasar_host::known(verb).is_some_and(|known| known.writes)
+    });
     std::thread::spawn(move || {
-        let _ = listener.serve(key, |peer: &Peer, request: Request| {
+        let _ = listener.serve(guard, |peer: &Peer, request: Request| {
             let mut at = Answering {
                 store: &mut store,
                 scrollback: None,
@@ -189,14 +194,16 @@ fn the_stub_reports_a_refusal_rather_than_raising() {
 }
 
 #[test]
-fn the_stub_over_a_transport_without_the_key_is_turned_away() {
+fn the_stub_without_the_key_reads_and_is_turned_away_from_writing() {
     let path = serving("keyless", &["we deploy with fly"]);
     let mut engine = Engine::new();
     let source = format!(
         r#"
         local client = assert(load({CLIENT:?}, "balthasar.lua"))(balthasar.stream)
-        local mem, why = client.connect({{ path = {:?} }})
-        balthasar.answer = tostring(mem) .. "|" .. tostring(why)
+        local mem = assert(client.connect({{ path = {:?} }}))
+        local found = mem.recall("deploy")
+        local kept, why = mem.remember("an intruder's note")
+        balthasar.answer = found[1].text .. "|" .. tostring(kept) .. "|" .. tostring(why)
         "#,
         path.to_string_lossy()
     );
@@ -207,7 +214,10 @@ fn the_stub_over_a_transport_without_the_key_is_turned_away() {
         .string("answer")
         .unwrap_or_default()
         .to_owned();
-    assert!(said.starts_with("nil|nothing answered"), "{said}");
+    assert_eq!(
+        said,
+        format!("we deploy with fly|nil|{}", balthasar_ipc::KEY_REFUSED)
+    );
 }
 
 #[test]

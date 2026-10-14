@@ -9,8 +9,8 @@ use std::os::unix::net::UnixStream;
 fn served(answer: fn(&Peer, Request) -> Reply) -> UnixStream {
     let (client, mut server) = UnixStream::pair().expect("pair");
     let peer = Peer::of(&server).expect("the kernel names us");
-    let key = crate::key::for_tests().0;
-    std::thread::spawn(move || converse(&mut server, &peer, &key, &answer));
+    let guard = crate::key::guard_for_tests();
+    std::thread::spawn(move || converse(&mut server, &peer, &guard, &answer));
     client
         .set_read_timeout(Some(std::time::Duration::from_secs(10)))
         .expect("a deadline");
@@ -41,21 +41,37 @@ fn send(stream: &mut UnixStream, call: &serde_json::Value) {
 }
 
 #[test]
-fn a_call_without_the_key_or_with_the_wrong_one_is_refused_and_the_next_is_answered() {
+fn a_write_without_the_key_or_with_the_wrong_one_is_refused_and_the_next_is_answered() {
     let mut client = served(echo);
     let wrong = HEX.replace('0', "1");
     for call in [
-        serde_json::json!({ "call": "verbs" }),
-        serde_json::json!({ "call": "verbs", "key": wrong }),
-        serde_json::json!({ "call": "verbs", "key": 7 }),
+        serde_json::json!({ "call": "observe" }),
+        serde_json::json!({ "call": "observe", "key": wrong }),
+        serde_json::json!({ "call": "observe", "key": 7 }),
     ] {
         send(&mut client, &call);
         let told = reply(&mut client).expect("a refusal, not a close");
         assert_eq!(told["fault"], "refused", "{call}: {told}");
         assert_eq!(told["error"], crate::KEY_REFUSED, "{call}: {told}");
     }
-    ask(&mut client, "verbs");
-    assert_eq!(reply(&mut client).expect("answered")["result"][0], "verbs");
+    ask(&mut client, "observe");
+    assert_eq!(
+        reply(&mut client).expect("answered")["result"][0],
+        "observe"
+    );
+}
+
+#[test]
+fn a_read_needs_no_key() {
+    let mut client = served(echo);
+    for call in [
+        serde_json::json!({ "call": "verbs" }),
+        serde_json::json!({ "call": "verbs", "key": "not it" }),
+    ] {
+        send(&mut client, &call);
+        let told = reply(&mut client).expect("answered");
+        assert_eq!(told["result"][0], "verbs", "{call}: {told}");
+    }
 }
 
 #[test]
@@ -173,9 +189,9 @@ fn hurried(
         .expect("write deadline");
     let peer = Peer::of(&server).expect("the kernel names us");
     let (ended, ending) = std::sync::mpsc::channel();
-    let key = crate::key::for_tests().0;
+    let guard = crate::key::guard_for_tests();
     std::thread::spawn(move || {
-        super::converse_within(&mut server, &peer, &key, &answer, patience);
+        super::converse_within(&mut server, &peer, &guard, &answer, patience);
         let _ = ended.send(());
     });
     (client, ending)

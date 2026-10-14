@@ -19,7 +19,7 @@ impl Bound {
         let paths = listener.paths().into_iter().map(Path::to_owned).collect();
         std::thread::spawn(move || {
             let _ = listener.serve(
-                crate::key::for_tests().0,
+                crate::key::guard_for_tests(),
                 |_peer: &Peer, request: Request| {
                     Reply::one(serde_json::json!(format!("heard {}", request.call)))
                 },

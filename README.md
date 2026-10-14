@@ -28,7 +28,7 @@ balthasar decay                   # what today's forgetting would take, before i
                           a harness
                               │
                       observe │  SO_PEERCRED: the kernel says which uid and program;
-                              │  the call carries the key serve was started with
+                              │  a write carries the key serve was started with
                               ▼
                      ┌────────────────────┐
                      │  api@default.sock  │
@@ -132,7 +132,7 @@ searching the spans, the control arm that can lose, and an erasure that reaches 
 derived from what. 1579 tests, fourteen gates.
 
 ```sh
-balthasar serve < key               # listen for a harness; its key is one line on stdin
+balthasar serve                     # listen for a harness; its key is in <socket>.key
 balthasar distil                    # read what this project's own runs said
 balthasar ingest --source magi      # or read transcripts that already exist
 balthasar consolidate               # carry what recurred into the project's memory
@@ -234,13 +234,14 @@ refuses a number it does not know and tolerates one it predates.
 <-  {"ok":true,"family":1,"n":1,"result":[[{"id":"…","text":"…","asserted":true,…}]]}
 ```
 
-**The socket answers whoever started `serve`.** `serve` reads one line from standard input before
-it binds: a key of 64 lowercase hex characters. Told none, it refuses to start. Every call carries
-that key as `"key"`; one without it, or with another, is refused as a reply and the connection
-stays open. magi mints a key for each session's `serve` and writes it there. Started by hand, it
-is the same: `(umask 077; openssl rand -hex 32 > key)`, then `balthasar serve < key`, and only a
-caller handed that key is answered. The agent a call is recorded for is `MAGI_MEMORY_AGENT` in
-`serve`'s own environment, never the caller's.
+**The socket takes writes from whoever started `serve`.** `serve` reads one line from standard
+input before it binds: a key of 64 lowercase hex characters. magi mints one for each session's
+`serve` and writes it there. Handed none — started by hand, from a terminal or with its input
+closed — `serve` mints its own and writes it beside the socket as `<socket>.key`, 0600, removed
+when it exits. A call that writes or issues work carries the key as `"key"`; one without it, or
+with another, is refused as a reply and the connection stays open. A call that only reads needs no
+key. The agent a call is recorded for is `MAGI_MEMORY_AGENT` in `serve`'s own environment, never
+the caller's.
 
 `asserted` is the distinction the whole design turns on, handed over rather than left for a
 caller to work out from a number and a threshold it would have to be told. Above the floor a

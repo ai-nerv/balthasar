@@ -29,7 +29,7 @@ fn a_panic_while_answering_is_a_failure_and_the_next_call_is_answered() {
         .collect();
     std::thread::spawn(move || {
         let _ = listener.serve(
-            crate::key::for_tests().0,
+            crate::key::guard_for_tests(),
             |_peer: &Peer, request: Request| {
                 assert!(request.call != "boom", "a bug in a verb");
                 Reply::one(serde_json::json!(request.call))
