@@ -228,6 +228,40 @@ fn what_was_noticed_sits_beside_the_turn_in_arrival_order() {
 }
 
 #[test]
+fn a_raw_record_comes_back_in_parts_cut_on_characters() {
+    let t = held();
+    let s = SessionId::new("s1");
+    let raw = "añb€c😀d".repeat(3);
+    let said = Turn {
+        raw: Some(raw.clone()),
+        ..turn(0, "x")
+    };
+    t.insert(&s, &said).expect("turn");
+    let mut whole = String::new();
+    let mut from = 0_u64;
+    loop {
+        let part = t.raw_part(&s, 0, from, 5).expect("part").expect("a raw");
+        assert_eq!(part.total, raw.len() as u64);
+        assert!(part.text.len() <= 5, "{:?}", part.text);
+        if part.text.is_empty() {
+            break;
+        }
+        from += part.text.len() as u64;
+        whole.push_str(&part.text);
+    }
+    assert_eq!(whole, raw);
+    assert!(t.raw_part(&s, 0, 2, 5).is_err(), "byte 2 is inside ñ");
+
+    let bare = Turn {
+        raw: None,
+        ..turn(1, "y")
+    };
+    t.insert(&s, &bare).expect("turn");
+    assert_eq!(t.raw_part(&s, 1, 0, 5).expect("read"), None);
+    assert_eq!(t.raw_part(&s, 9, 0, 5).expect("read"), None);
+}
+
+#[test]
 fn opening_a_prepared_scrollback_takes_no_write_lock() {
     let dir = balthasar_model::scratch::Scratch::new("balthasar-transcript", "lockless");
     let path = dir.join("transcript.db");

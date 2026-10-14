@@ -644,6 +644,21 @@ fn a_row_too_large_for_any_frame_comes_back_truncated_and_the_next_page_follows_
     assert_eq!(cut[0]["cursor"], 1);
     assert_eq!(cut[0]["truncated"], true, "marked so a reader can tell");
     assert!(cut[0].to_string().len() <= balthasar_ipc::MAX_FRAME);
+    let record = r#"{"type":"user"}"#;
+    assert_eq!(
+        cut[0]["raw_bytes"],
+        record.len(),
+        "and how much raw it left out"
+    );
+    let raw = Held::rows(&held.ask(
+        "replay",
+        vec![
+            serde_json::json!(S),
+            serde_json::json!({ "from": 1, "raw": 0 }),
+        ],
+    ));
+    assert_eq!(raw[0]["raw"], record, "which is read back after it");
+    assert!(raw[0].get("next").is_none(), "in one piece");
     assert_eq!(
         page(&mut held, 2)[0]["text"],
         "after",

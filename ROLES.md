@@ -47,7 +47,7 @@ send next.
 | verb | shape | what magi does with it |
 |---|---|---|
 | `observe` | `(session, turn) -> ok` | Streams every turn as it settles. Without this nothing is recorded and the session has no history at all. Insert-only: the same turn again at its cursor is a retry and answers ok; a different one is refused (`cursor N already holds a different turn`), and `amend` is how a turn changes. A missing or non-whole cursor is refused. A turn not made durable is `fault: "failed"`. A row with `role: "trace"` is kept beside the turns, never at one's place; `replay` does not return it, `scroll` carries it under `traces`. |
-| `replay` | `(session) -> [turn]` | Everything a run said, in order. This is what `--resume` reads back. |
+| `replay` | `(session, {from, bytes, raw}) -> [turn]` | Everything a run said, in order. This is what `--resume` reads back, a page at a time with `{from, bytes}`. A row too large for a frame comes back `truncated: true` with `raw_bytes`, the length of the raw record it left out, and the next page starts after it; `{from: cursor, raw: offset, bytes}` reads that record back a piece at a time, each piece carrying `offset` and, until the last, `next`. |
 | `sessions` | `-> [session]` | The runs this project has had. `--resume` with no id asks this **first**, to find which run was newest, and only then replays it. |
 
 Plus the family floor from `FAMILY.md` — `verbs` and `client` — which every program owes whatever

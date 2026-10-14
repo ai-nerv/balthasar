@@ -70,7 +70,7 @@ pub use scroll::{Budget, Read, Want, tokens_of};
 pub use session::{Session, name_for};
 pub use spans::Span;
 pub use transcript::{Run, State, Transcript, Turn, transcript_path};
-pub use turns::{Inserted, Noticed, same as same_turn};
+pub use turns::{Inserted, Noticed, RawPart, same as same_turn};
 pub use usage::{Candidate, Injection, RecallRun, Signals, Trace, TracedAction, Use, Verdict};
 pub use write::Landing;
 

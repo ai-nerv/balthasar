@@ -7,11 +7,18 @@ use balthasar_model::SessionId;
 /// What the rows of one reply may come to: the frame cap, less room for the reply around them.
 pub(crate) const ROOM: usize = MAX_FRAME - 64 * 1024;
 
+/// The least a page of a raw record is cut to, whatever budget was asked for.
+const RAW_PAGE_FLOOR: usize = 4 * 1024;
+
+/// Room in a row for everything but the piece of a raw record it carries.
+const RAW_SHELL: usize = 256;
+
 /// Everything a run said, in order.
 ///
 /// What a harness restores from. Turns come back as they finally stood. With `{from, bytes}` it
-/// comes a page at a time; a row too large for any page comes back truncated and marked, and the
-/// next page starts after it.
+/// comes a page at a time; a row too large for any page comes back truncated and marked, with
+/// `raw_bytes` saying how long its raw record is, and the next page starts after it. That record
+/// is read back with `{from: cursor, raw: offset, bytes}`, a piece at a time.
 pub fn replay(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(session) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("replay needs a session");
@@ -25,6 +32,12 @@ pub fn replay(at: &mut Answering<'_>, request: &Request) -> Reply {
     let budget = paging
         .and_then(|p| p["bytes"].as_u64())
         .and_then(|b| usize::try_from(b).ok());
+    if let Some(offset) = paging.and_then(|p| p.get("raw")) {
+        let Some(offset) = offset.as_u64() else {
+            return Reply::refused("raw is a byte offset: a whole number of zero or more");
+        };
+        return raw_page(scrollback, &session, from, offset, budget);
+    }
 
     let limit = budget.map_or(ROOM, |b| b.min(ROOM));
     let (mut rows, mut spent, mut over) = (Vec::new(), 0, false);
@@ -36,7 +49,13 @@ pub fn replay(at: &mut Answering<'_>, request: &Request) -> Reply {
             return false;
         }
         if rows.is_empty() && size > ROOM {
-            rows.push(fitted(&turn, ROOM));
+            let mut cut = fitted(&turn, ROOM);
+            if let Some(raw) = &turn.raw
+                && let Some(fields) = cut.as_object_mut()
+            {
+                fields.insert("raw_bytes".to_owned(), serde_json::json!(raw.len()));
+            }
+            rows.push(cut);
             return false;
         }
         if !rows.is_empty() && spent + size > limit {
@@ -56,6 +75,53 @@ pub fn replay(at: &mut Answering<'_>, request: &Request) -> Reply {
     }
 }
 
+/// One piece of the raw record at `cursor`, from byte `offset`: `{cursor, raw, offset, next,
+/// raw_bytes}`, with `next` absent once the record is done. Within `budget` when one is asked
+/// for, never under [`RAW_PAGE_FLOOR`], and always within a frame once escaped.
+fn raw_page(
+    scrollback: &balthasar_store::Transcript,
+    session: &SessionId,
+    cursor: u64,
+    offset: u64,
+    budget: Option<usize>,
+) -> Reply {
+    let room = budget.map_or(ROOM, |b| b.clamp(RAW_PAGE_FLOOR, ROOM));
+    let part = match scrollback.raw_part(session, cursor, offset, room - RAW_SHELL) {
+        Ok(Some(part)) => part,
+        Ok(None) => return Reply::refused(format!("turn {cursor} holds no raw record")),
+        Err(why) => return Reply::refused(why.to_string()),
+    };
+    let piece = within(&part.text, room - RAW_SHELL);
+    let end = offset + piece.len() as u64;
+    let mut row = serde_json::json!({
+        "cursor": cursor,
+        "raw": piece,
+        "offset": offset,
+        "raw_bytes": part.total,
+    });
+    if end < part.total
+        && let Some(fields) = row.as_object_mut()
+    {
+        fields.insert("next".to_owned(), serde_json::json!(end));
+    }
+    Reply::rows(vec![row])
+}
+
+/// The longest start of `text` that is at most `room` bytes once written as a JSON string, cut on
+/// a character boundary.
+fn within(text: &str, room: usize) -> &str {
+    let mut keep = room.min(text.len());
+    loop {
+        let end = text.floor_char_boundary(keep);
+        let kept = text.get(..end).unwrap_or_default();
+        let size = serde_json::Value::String(kept.to_owned()).to_string().len();
+        if size <= room || end == 0 {
+            return kept;
+        }
+        keep = end.saturating_sub(size - room);
+    }
+}
+
 /// A turn cut down to fit `room`: no `raw` and no `args`, its text shortened at a character
 /// boundary, and `"truncated": true` so a reader can tell.
 pub(crate) fn fitted(turn: &balthasar_store::Turn, room: usize) -> serde_json::Value {
@@ -64,18 +130,7 @@ pub(crate) fn fitted(turn: &balthasar_store::Turn, room: usize) -> serde_json::V
     cut.args = None;
     let text = std::mem::take(&mut cut.text);
     let shell = serde_json::json!(cut).to_string().len() + 64;
-    let mut keep = room.saturating_sub(shell).min(text.len());
-    loop {
-        let end = text.floor_char_boundary(keep);
-        let size = serde_json::Value::String(text[..end].to_owned())
-            .to_string()
-            .len();
-        if shell + size <= room || end == 0 {
-            cut.text = text[..end].to_owned();
-            break;
-        }
-        keep = end.saturating_sub(shell + size - room);
-    }
+    cut.text = within(&text, room.saturating_sub(shell)).to_owned();
     let mut row = serde_json::json!(cut);
     if let Some(fields) = row.as_object_mut() {
         fields.insert("truncated".to_owned(), serde_json::Value::Bool(true));

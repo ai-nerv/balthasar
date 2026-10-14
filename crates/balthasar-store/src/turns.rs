@@ -28,6 +28,15 @@ pub struct Noticed {
     pub text: String,
 }
 
+/// Part of a turn's raw record, read by byte range so a record over one frame comes back in pieces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawPart {
+    /// The bytes asked for, cut back to end on a character boundary.
+    pub text: String,
+    /// How long the whole record is, in bytes.
+    pub total: u64,
+}
+
 /// Whether two turns say the same thing. When they settled, and what has become of them in the
 /// window since, are not part of what was said.
 #[must_use]
@@ -88,6 +97,52 @@ impl Transcript {
             .query_map(params![session.as_str(), clamp(cursor)], read)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(found)
+    }
+
+    /// At most `most` bytes of the raw record at `cursor`, from byte `from`, ending on a character
+    /// boundary. `None` when the turn holds no raw record; refused when `from` is inside a
+    /// character. Only the range asked for is read out of the row.
+    pub fn raw_part(
+        &self,
+        session: &SessionId,
+        cursor: u64,
+        from: u64,
+        most: usize,
+    ) -> Result<Option<RawPart>, StoreError> {
+        let found: Option<(i64, Vec<u8>)> = self
+            .db()
+            .query_row(
+                "SELECT length(CAST(raw AS BLOB)), substr(CAST(raw AS BLOB), ?3, ?4) FROM turn \
+                 WHERE session = ?1 AND cursor = ?2 AND raw IS NOT NULL",
+                params![
+                    session.as_str(),
+                    clamp(cursor),
+                    clamp(from).saturating_add(1),
+                    clamp(most as u64).saturating_add(3),
+                ],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((total, mut bytes)) = found else {
+            return Ok(None);
+        };
+        let inside = |at: usize| bytes.get(at).is_some_and(|b| b & 0xC0 == 0x80);
+        if inside(0) {
+            return Err(StoreError::Unknown(format!(
+                "character starting at byte {from} of turn {cursor}'s raw record"
+            )));
+        }
+        let mut end = bytes.len().min(most);
+        while end > 0 && inside(end) {
+            end -= 1;
+        }
+        bytes.truncate(end);
+        let text = String::from_utf8(bytes)
+            .map_err(|_| StoreError::Foreign("raw record that is not UTF-8".to_owned()))?;
+        Ok(Some(RawPart {
+            text,
+            total: total.max(0) as u64,
+        }))
     }
 
     /// Keep what was noticed at a cursor, beside the turn there and never over it.
