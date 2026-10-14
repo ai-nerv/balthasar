@@ -27,8 +27,9 @@ pub(super) fn framed<'gc>(ctx: Context<'gc>, request: Value<'gc>) -> Result<Vec<
     if !matches!(request, Value::Table(_)) {
         return Err("call needs a request table".to_owned());
     }
-    let json = crate::convert::to_json(ctx, request, 0)
-        .ok_or_else(|| "this request cannot be written down as JSON; it was not sent".to_owned())?;
+    let json = crate::convert::to_json(ctx, request, "the request").map_err(|why| {
+        format!("this request cannot be written down as JSON ({why}); it was not sent")
+    })?;
     let body = serde_json::to_vec(&json).map_err(|why| format!("{why}; it was not sent"))?;
     let length = u32::try_from(body.len())
         .ok()

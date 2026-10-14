@@ -35,10 +35,10 @@ impl Default for Engine {
 }
 
 impl Engine {
-    /// The one place a VM is built, sandboxed before anything is installed in it.
-    fn bare_vm() -> Self {
+    /// The one place a VM is built, from the allowlist for `surface`, before anything is installed.
+    fn bare_vm(surface: crate::sandbox::Surface) -> Self {
         let mut engine = Self {
-            lua: Lua::full(),
+            lua: crate::sandbox::vm(surface),
             config: Rc::new(RefCell::new(Config::default())),
             logged: Rc::new(RefCell::new(Vec::new())),
             fuel: crate::fuel::Budget::default(),
@@ -47,15 +47,13 @@ impl Engine {
             own: None,
         };
         engine.lua.set_memory_limit(Some(crate::fuel::MEMORY));
-        // Before anything is installed and long before anything is read -- see `sandbox`.
-        crate::sandbox::apply(&mut engine.lua);
         engine
     }
 
     /// A VM with the `balthasar` module installed and nothing declared.
     #[must_use]
     pub fn new() -> Self {
-        let mut engine = Self::bare_vm();
+        let mut engine = Self::bare_vm(crate::sandbox::Surface::Owner);
         engine.install();
         engine
     }
@@ -64,7 +62,7 @@ impl Engine {
     /// environment, `load` or hook; it may set only [`crate::PROJECT_SETTINGS`] and add sections.
     #[must_use]
     pub fn project() -> Self {
-        let mut engine = Self::bare_vm();
+        let mut engine = Self::bare_vm(crate::sandbox::Surface::Project);
         crate::project::install(&mut engine.lua, &engine.config, &engine.refused);
         engine
     }
@@ -93,6 +91,12 @@ impl Engine {
 
     /// Run one chunk, stopping it once it has spent `fuel` instructions.
     fn run_within(&mut self, source: &str, chunk: &str, fuel: u64) -> Result<(), LuaError> {
+        if crate::sandbox::precompiled(source.as_bytes()) {
+            return Err(LuaError::Syntax {
+                file: chunk.to_owned(),
+                message: crate::sandbox::PRECOMPILED.to_owned(),
+            });
+        }
         let executor = self
             .lua
             .try_enter(|ctx| {
@@ -123,6 +127,7 @@ impl Engine {
     /// as plain fields so a config can read its own back and re-assign them.
     pub fn harvest(&mut self) {
         let config = Rc::clone(&self.config);
+        let logged = Rc::clone(&self.logged);
         self.lua.enter(|ctx| {
             let Value::Table(balthasar) = ctx.get_global_value("balthasar") else {
                 return;
@@ -132,8 +137,16 @@ impl Engine {
                 let Value::String(name) = key else { continue };
                 let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
                 // A registrar is a function and cannot be described, so it is skipped here.
-                if let Some(json) = convert::to_json(ctx, value, 0) {
-                    held.settings.insert(name, json);
+                match convert::to_json(ctx, value, &format!("balthasar.{name}")) {
+                    Ok(json) => {
+                        held.settings.insert(name, json);
+                    }
+                    Err(convert::Undescribable::Code(_)) => {}
+                    Err(why) => {
+                        let said = format!("balthasar.{name} was not read: {why}");
+                        balthasar_model::noted!("lua: {said}");
+                        logged.borrow_mut().push(said);
+                    }
                 }
             }
         });
@@ -165,11 +178,19 @@ impl Engine {
             return None;
         }
 
-        let mut out = None;
-        self.lua.enter(|ctx| {
-            out = convert::to_json(ctx, ctx.get_global_value(handler::ANSWER), 0);
+        let answer = self.lua.enter(|ctx| {
+            convert::to_json(ctx, ctx.get_global_value(handler::ANSWER), "the answer")
         });
-        out.filter(|value| !value.is_null())
+        match answer {
+            Ok(value) => Some(value).filter(|value| !value.is_null()),
+            Err(convert::Undescribable::Code(_)) => None,
+            Err(why) => {
+                let said = format!("a hook's answer was not read: {why}");
+                balthasar_model::noted!("lua: {said}");
+                self.logged.borrow_mut().push(said);
+                None
+            }
+        }
     }
 
     /// Call one function of a registered spec. `None` means the registrar, the identity, the
@@ -289,12 +310,13 @@ impl Engine {
                         ));
                     };
                     let id = String::from_utf8_lossy(id.as_bytes()).into_owned();
-                    let Some(value) = convert::to_json(ctx, spec, 0) else {
-                        return Err(convert::raise(
+                    let said = format!("balthasar.{name}(\"{id}\")");
+                    let value = convert::to_json(ctx, spec, &said).map_err(|why| {
+                        convert::raise(
                             ctx,
-                            &format!("balthasar.{name}({id}): this table cannot be described"),
-                        ));
-                    };
+                            &format!("{said}: this table cannot be described: {why}"),
+                        )
+                    })?;
                     held.borrow_mut().registered.insert(name, &id, value);
 
                     // The whole table stays in the VM as well, functions and all; the JSON alone
@@ -458,5 +480,38 @@ impl Engine {
             self.run_file(&path)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl Engine {
+    /// What the VM holds once everything unreachable has been collected.
+    pub(crate) fn held(&mut self) -> usize {
+        self.lua.gc_collect();
+        self.lua.total_memory()
+    }
+
+    /// The ceiling the VM is held to.
+    pub(crate) fn ceiling(&self) -> Option<usize> {
+        self.lua.memory_limit()
+    }
+
+    /// Hold the VM to `bytes` instead.
+    pub(crate) fn hold_to(&mut self, bytes: usize) {
+        self.lua.set_memory_limit(Some(bytes));
+    }
+
+    /// Stop the collector pacing itself, so garbage stays until something collects it.
+    pub(crate) fn pause_collector(&mut self) {
+        self.lua.gc_stop();
+    }
+
+    /// `source` compiled and dumped as luna bytecode, left in the global `name`.
+    pub(crate) fn plant_dumped(&mut self, name: &'static str, source: &str) {
+        self.lua.enter(|ctx| {
+            let closure = Closure::load(ctx, Some("dumped"), source.as_bytes()).expect("compiles");
+            let bytes = luna::dump::dump(&closure.prototype(), false);
+            ctx.set_global(name, luna::String::from_slice(&ctx, &bytes));
+        });
     }
 }

@@ -70,13 +70,6 @@ end
 /// Install the data-only module into a sandboxed VM.
 pub fn install(lua: &mut Lua, config: &Rc<RefCell<Config>>, refused: &Refused) {
     lua.enter(|ctx| {
-        for name in ["load", "loadstring"] {
-            ctx.set_global(name, Value::Nil);
-        }
-        if let Value::Table(os) = ctx.get_global_value("os") {
-            os.set(ctx, "getenv", Value::Nil).ok();
-        }
-
         let balthasar = Table::new(&ctx);
         for name in NESTED {
             balthasar.set(ctx, *name, Table::new(&ctx)).ok();
@@ -170,50 +163,26 @@ fn section<'gc>(
         };
         let id = String::from_utf8_lossy(id.as_bytes()).into_owned();
         let said = format!("balthasar.section(\"{id}\")");
-        let carried = code_in(ctx, spec, &said, 0);
-        if let Some(first) = carried.first() {
-            refusals.borrow_mut().push(first.clone());
-            return Err(convert::raise(
-                ctx,
-                &format!("{first} is not a project file's to use"),
-            ));
-        }
-        let Some(value) = convert::to_json(ctx, spec, 0) else {
-            return Err(convert::raise(
-                ctx,
-                &format!("{said}: this table cannot be described"),
-            ));
+        let value = match convert::data_to_json(ctx, spec, &said) {
+            Ok(value) => value,
+            Err(convert::Undescribable::Code(first)) => {
+                refusals.borrow_mut().push(first.clone());
+                return Err(convert::raise(
+                    ctx,
+                    &format!("{first} is not a project file's to use"),
+                ));
+            }
+            Err(why) => {
+                return Err(convert::raise(
+                    ctx,
+                    &format!("{said}: this table cannot be described: {why}"),
+                ));
+            }
         };
         held.borrow_mut().registered.insert("section", &id, value);
         stack.replace(ctx, ());
         Ok(CallbackReturn::Return)
     })
-}
-
-/// Every place under `value` that holds something other than data, named from `at`.
-pub fn code_in<'gc>(
-    ctx: luna::Context<'gc>,
-    value: Value<'gc>,
-    at: &str,
-    depth: usize,
-) -> Vec<String> {
-    match value {
-        Value::Function(_) | Value::Thread(_) | Value::UserData(_) => vec![at.to_owned()],
-        Value::Table(table) if depth < 32 => {
-            let mut found = Vec::new();
-            for (key, inner) in table.iter(ctx) {
-                let name = match key {
-                    Value::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-                    Value::Integer(i) => i.to_string(),
-                    _ => "?".to_owned(),
-                };
-                found.extend(code_in(ctx, inner, &format!("{at}.{name}"), depth + 1));
-            }
-            found
-        }
-        Value::Table(_) => vec![at.to_owned()],
-        _ => Vec::new(),
-    }
 }
 
 /// What a project file chose: settings it assigned, and sections it added.
@@ -253,11 +222,17 @@ pub fn chosen(lua: &mut Lua, config: &Config, refused: &Refused) -> Result<Chose
                 wrong = Some(format!("balthasar.{name}"));
                 return;
             }
-            if let Some(first) = code_in(ctx, value, &format!("balthasar.{name}"), 0).first() {
-                wrong = Some(first.clone());
-                return;
-            }
-            let json = convert::to_json(ctx, value, 0).unwrap_or(serde_json::Value::Null);
+            let json = match convert::data_to_json(ctx, value, &format!("balthasar.{name}")) {
+                Ok(json) => json,
+                Err(convert::Undescribable::Code(first)) => {
+                    wrong = Some(first);
+                    return;
+                }
+                Err(why) => {
+                    wrong = Some(format!("balthasar.{name} ({why})"));
+                    return;
+                }
+            };
             let empty = json.is_null() || json == serde_json::json!({});
             if !(NESTED.contains(&name.as_str()) && empty) {
                 out.settings.push((name, json));

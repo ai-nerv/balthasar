@@ -46,9 +46,8 @@ pub fn install_data<'gc>(ctx: luna::Context<'gc>, balthasar: Table<'gc>, logged:
         let message: Value = stack.consume(ctx)?;
         let text = match message {
             Value::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-            other => {
-                convert::to_json(ctx, other, 0).map_or_else(|| "?".to_owned(), |j| j.to_string())
-            }
+            other => convert::to_json(ctx, other, "the message")
+                .map_or_else(|why| format!("? ({why})"), |j| j.to_string()),
         };
         held.borrow_mut().push(text);
         stack.replace(ctx, ());
@@ -67,12 +66,12 @@ fn json_table<'gc>(ctx: luna::Context<'gc>) -> Table<'gc> {
 
     let encode = Callback::from_fn(&ctx, |ctx, _exec, mut stack| {
         let value: Value = stack.consume(ctx)?;
-        let Some(json) = convert::to_json(ctx, value, 0) else {
-            return Err(convert::raise(
+        let json = convert::to_json(ctx, value, "the value").map_err(|why| {
+            convert::raise(
                 ctx,
-                "balthasar.json.encode: cannot be written down",
-            ));
-        };
+                &format!("balthasar.json.encode: cannot be written down: {why}"),
+            )
+        })?;
         let text = luna::String::from_slice(&ctx, json.to_string().as_bytes());
         stack.replace(ctx, text);
         Ok(CallbackReturn::Return)
