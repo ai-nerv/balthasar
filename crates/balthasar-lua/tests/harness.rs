@@ -102,6 +102,13 @@ fn family_dir() -> PathBuf {
     dir
 }
 
+/// A socket path in the family dir that no other test in this run is using.
+fn socket(name: &str) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    family_dir().join(format!("bh-{name}-{}-{n}.sock", std::process::id()))
+}
+
 /// A socket whose file goes when the test ends, however the test ends.
 struct Bound(PathBuf);
 
@@ -116,7 +123,7 @@ impl Drop for Bound {
 fn slow_once() -> Bound {
     use std::io::{Read, Write};
 
-    let path = family_dir().join(format!("bh-{}.sock", std::process::id()));
+    let path = socket("slow");
     let _ = std::fs::remove_file(&path);
     let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
 
@@ -176,7 +183,7 @@ fn a_call_that_timed_out_costs_a_connect_and_not_the_session() {
 fn echoing() -> Bound {
     use std::io::{Read, Write};
 
-    let path = family_dir().join(format!("bh-echo-{}.sock", std::process::id()));
+    let path = socket("echo");
     let _ = std::fs::remove_file(&path);
     let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
 
@@ -240,7 +247,7 @@ fn observing_and_planning_reach_balthasar_rather_than_dying_in_the_client() {
 fn refusing() -> Bound {
     use std::io::{Read, Write};
 
-    let path = family_dir().join(format!("bh-no-{}.sock", std::process::id()));
+    let path = socket("no");
     let _ = std::fs::remove_file(&path);
     let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
 
@@ -286,4 +293,80 @@ fn a_refused_observation_says_the_turn_was_not_recorded() {
         path = bound.0.to_string_lossy()
     ));
     assert_eq!(answer, "false", "{answer}");
+}
+
+/// A peer that answers the handshake and then claims a reply far over the cap.
+fn oversized() -> Bound {
+    use std::io::{Read, Write};
+
+    let path = socket("big");
+    let _ = std::fs::remove_file(&path);
+    let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+
+    std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().expect("accept");
+        let mut first = true;
+        loop {
+            let mut head = [0_u8; 4];
+            if socket.read_exact(&mut head).is_err() {
+                return;
+            }
+            let mut body = vec![0_u8; u32::from_be_bytes(head) as usize];
+            if socket.read_exact(&mut body).is_err() {
+                return;
+            }
+            let out = if std::mem::take(&mut first) {
+                let row = r#"{"ok":true,"result":["verbs"],"n":1}"#;
+                let mut out = (row.len() as u32).to_be_bytes().to_vec();
+                out.extend_from_slice(row.as_bytes());
+                out
+            } else {
+                (64_u32 * 1024 * 1024).to_be_bytes().to_vec()
+            };
+            if socket.write_all(&out).is_err() {
+                return;
+            }
+        }
+    });
+    Bound(path)
+}
+
+#[test]
+fn a_reply_header_over_the_cap_drops_the_connection_before_the_body_is_read() {
+    let bound = oversized();
+    let answer = through(&format!(
+        "(function() \
+           local client = assert(load({CLIENT:?}))(balthasar.stream) \
+           local s = assert(client.connect({{ path = {path:?}, timeout_ms = 2000 }})) \
+           local ok, why = s:call('recall', 'x') \
+           local _, closed = s:call('recall', 'y') \
+           return tostring(ok) .. '|' .. tostring(why) .. '|' .. tostring(closed) \
+         end)()",
+        path = bound.0.to_string_lossy()
+    ));
+    assert!(answer.starts_with("nil|"), "{answer}");
+    assert!(answer.contains("cap"), "{answer}");
+    assert!(answer.ends_with("this connection is closed"), "{answer}");
+}
+
+#[test]
+fn a_call_over_the_cap_is_refused_before_a_byte_is_sent() {
+    let bound = echoing();
+    let answer = through(&format!(
+        "(function() \
+           local client = assert(load({CLIENT:?}))(balthasar.stream) \
+           local s = assert(client.connect({{ path = {path:?}, timeout_ms = 2000 }})) \
+           local ok, why, fault = s:call('remember', string.rep('x', 16777216)) \
+           local after = s:call('plan') \
+           return tostring(ok) .. '|' .. tostring(fault) .. '|' .. tostring(why) .. '|' \
+             .. tostring(after and after.heard) \
+         end)()",
+        path = bound.0.to_string_lossy()
+    ));
+    assert!(answer.starts_with("nil|refused|"), "{answer}");
+    assert!(answer.contains("frame cap"), "{answer}");
+    assert!(
+        answer.ends_with("|verbs,plan"),
+        "the big call never left: {answer}"
+    );
 }

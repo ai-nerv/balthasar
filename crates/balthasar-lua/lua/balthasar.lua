@@ -40,6 +40,9 @@ local transport = ...
 -- that an older reader ignores, which is what this field itself was.
 local FAMILY = 1
 
+-- The most one frame may carry, either way: the family's one cap, 16 MiB.
+local MAX_FRAME = 16777216
+
 -- Where the socket primitive comes from when the caller did not say. Inside balthasar the whole library
 -- is already there; elsewhere a host that named its own `__stream` is honoured too.
 if not transport then
@@ -286,12 +289,24 @@ function Session:call(name, ...)
 
   -- A send that failed may still have put part of a frame on the wire, which the far end reads
   -- as the head of a call this side will never finish.
-  local sent, why = self.handle:send(frame(encode(body)))
+  -- Refused here, before a byte is sent: a call over the cap would only be refused at the far end.
+  local encoded = encode(body)
+  if #encoded > MAX_FRAME then
+    return nil, "this call is " .. #encoded .. " bytes, over the " .. MAX_FRAME
+      .. "-byte frame cap", "refused"
+  end
+  local sent, why = self.handle:send(frame(encoded))
   if not sent then return nil, adrift(self, why) end
 
   local head, gone = exactly(self, 4)
   if not head then return nil, gone end
-  local reply_body, cut = exactly(self, be32(head))
+  -- Checked before a byte of the body is asked for: a length over the cap is a peer out of step.
+  local length = be32(head)
+  if length == 0 or length > MAX_FRAME then
+    return nil, adrift(self, "balthasar sent a frame of " .. length .. " bytes; the cap is "
+      .. MAX_FRAME .. " and zero is malformed")
+  end
+  local reply_body, cut = exactly(self, length)
   if not reply_body then return nil, cut end
 
   local reply = decode(reply_body)
