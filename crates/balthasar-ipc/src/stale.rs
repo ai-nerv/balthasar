@@ -93,9 +93,25 @@ fn in_use(path: &Path, why: &str) -> std::io::Error {
 /// `AddrInUse` when the lock is held or anything other than a refusal answers on the path;
 /// otherwise whatever opening, removing or binding said.
 pub fn claim(path: &Path) -> std::io::Result<Claimed> {
-    let Some(lock) = lock(path)? else {
+    let Some((held, lock)) = lock(path)? else {
         return Err(in_use(path, "another balthasar is taking this name"));
     };
+    let bound = bind_held(path);
+    if bound.is_err() {
+        // Still holding it, so nobody else can be relying on this lock file.
+        let _ = std::fs::remove_file(&lock);
+    }
+    let (listener, inode) = bound?;
+    Ok(Claimed {
+        listener,
+        path: path.to_owned(),
+        inode,
+        lock: Some((held, lock)),
+    })
+}
+
+/// Clear a corpse at `path` and bind there, the lock already held.
+fn bind_held(path: &Path) -> std::io::Result<(UnixListener, (u64, u64))> {
     if inode_of(path).is_some() {
         if !corpse(path, rustix::process::getuid().as_raw()) {
             return Err(in_use(path, "a balthasar is already listening here"));
@@ -105,12 +121,7 @@ pub fn claim(path: &Path) -> std::io::Result<Claimed> {
     let listener = UnixListener::bind(path)?;
     let inode =
         inode_of(path).ok_or_else(|| in_use(path, "the socket vanished as it was bound"))?;
-    Ok(Claimed {
-        listener,
-        path: path.to_owned(),
-        inode,
-        lock: Some(lock),
-    })
+    Ok((listener, inode))
 }
 
 #[cfg(test)]
@@ -138,6 +149,10 @@ mod tests {
         assert!(!corpse(&path, uid()));
         assert!(claim(&path).is_err(), "and is not removed to make room");
         assert!(path.exists());
+        assert!(
+            !lock_path(&path).exists(),
+            "a claim that failed leaves no lock file"
+        );
     }
 
     #[test]
