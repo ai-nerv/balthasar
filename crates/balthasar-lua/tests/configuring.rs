@@ -470,7 +470,7 @@ mod trust {
             refusal("balthasar.memory = { review = false }\n"),
             "balthasar.memory"
         );
-        assert_eq!(refusal("balthasar.tool = 'magi'\n"), "balthasar.tool");
+        assert_eq!(refusal("balthasar.tool = 'other'\n"), "balthasar.tool");
         assert_eq!(
             refusal("balthasar.outcome = { capture = true }\n"),
             "balthasar.outcome"

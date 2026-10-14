@@ -113,9 +113,12 @@ mod tests {
 
     #[test]
     fn a_binary_replaced_while_it_runs_is_still_the_same_program() {
-        let path = std::path::Path::new("/home/you/.local/bin/magi (deleted)");
-        assert_eq!(program_name(path), "magi");
-        assert_eq!(program_name(std::path::Path::new("/usr/bin/magi")), "magi");
+        let path = std::path::Path::new("/home/you/.local/bin/harness (deleted)");
+        assert_eq!(program_name(path), "harness");
+        assert_eq!(
+            program_name(std::path::Path::new("/usr/bin/harness")),
+            "harness"
+        );
     }
 
     fn environ(entries: &[&str]) -> Vec<u8> {

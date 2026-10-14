@@ -215,9 +215,9 @@ mod dialling {
     impl Runtime {
         fn new(name: &str) -> Self {
             let root = Scratch::new("balthasar-dial", name);
-            std::fs::create_dir_all(root.join("run/magi")).expect("mkdir");
+            std::fs::create_dir_all(root.join("run/melchior")).expect("mkdir");
             let held = vec![
-                UnixListener::bind(root.join("run/magi/host.sock")).expect("bind"),
+                UnixListener::bind(root.join("run/melchior/host.sock")).expect("bind"),
                 UnixListener::bind(root.join("run/bus")).expect("bind"),
             ];
             Self { root, _held: held }
@@ -232,7 +232,7 @@ mod dialling {
     #[test]
     fn a_family_socket_may_be_dialled() {
         let at = Runtime::new("family");
-        assert!(at.allowed(&at.root.join("run/magi/host.sock")));
+        assert!(at.allowed(&at.root.join("run/melchior/host.sock")));
     }
 
     #[test]
@@ -244,13 +244,13 @@ mod dialling {
     #[test]
     fn climbing_out_of_a_family_dir_is_not_inside_it() {
         let at = Runtime::new("climb");
-        assert!(!at.allowed(&at.root.join("run/magi/../bus")));
+        assert!(!at.allowed(&at.root.join("run/melchior/../bus")));
     }
 
     #[test]
     fn a_symlink_wearing_a_family_name_is_refused() {
         let at = Runtime::new("link");
-        let link = at.root.join("run/magi/bus.sock");
+        let link = at.root.join("run/melchior/bus.sock");
         std::os::unix::fs::symlink(at.root.join("run/bus"), &link).expect("symlink");
         assert!(!at.allowed(&link));
     }
@@ -268,15 +268,17 @@ mod dialling {
     #[test]
     fn a_regular_file_is_not_a_socket() {
         let at = Runtime::new("file");
-        std::fs::write(at.root.join("run/magi/plain"), "x").expect("write");
-        assert!(!at.allowed(&at.root.join("run/magi/plain")));
+        std::fs::write(at.root.join("run/melchior/plain"), "x").expect("write");
+        assert!(!at.allowed(&at.root.join("run/melchior/plain")));
     }
 
     #[test]
     fn a_socket_owned_by_another_uid_is_refused() {
         let at = Runtime::new("owner");
         let roots = family_dirs_in(Some(at.root.join("run")), &at.root.join("tmp"), uid());
-        assert!(dialable_under(&at.root.join("run/magi/host.sock"), &roots, uid() + 1).is_none());
+        assert!(
+            dialable_under(&at.root.join("run/melchior/host.sock"), &roots, uid() + 1).is_none()
+        );
     }
 
     #[test]
