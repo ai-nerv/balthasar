@@ -169,3 +169,60 @@ fn the_scrollback_lives_beside_the_memory_but_not_in_it() {
         scrollback.display()
     );
 }
+
+#[test]
+fn an_insert_never_overwrites() {
+    let t = held();
+    let s = SessionId::new("s1");
+    assert_eq!(
+        t.insert(&s, &turn(0, "a")).expect("first"),
+        crate::Inserted::Fresh
+    );
+    assert_eq!(
+        t.insert(&s, &turn(0, "a")).expect("retry"),
+        crate::Inserted::Same
+    );
+    assert_eq!(
+        t.insert(&s, &turn(0, "b")).expect("other"),
+        crate::Inserted::Different
+    );
+    assert_eq!(t.at(&s, 0).expect("at").expect("there").text, "a");
+}
+
+#[test]
+fn a_retry_that_settled_later_is_still_the_same_turn() {
+    let t = held();
+    let s = SessionId::new("s1");
+    t.insert(&s, &turn(0, "a")).expect("first");
+    let later = Turn {
+        at: 1_756_000_999,
+        ..turn(0, "a")
+    };
+    assert_eq!(t.insert(&s, &later).expect("retry"), crate::Inserted::Same);
+}
+
+#[test]
+fn a_revision_keeps_what_the_turn_said_before() {
+    let mut t = held();
+    let s = SessionId::new("s1");
+    t.write(&s, &turn(0, "running")).expect("write");
+    t.write(&s, &turn(0, "done")).expect("revise");
+    t.write(&s, &turn(0, "done")).expect("the same again");
+    let before = t.revisions_of(&s, 0).expect("revisions");
+    assert_eq!(before.len(), 1, "the same write again keeps nothing new");
+    assert_eq!(before[0].text, "running");
+    assert_eq!(t.at(&s, 0).expect("at").expect("there").revisions, 1);
+}
+
+#[test]
+fn what_was_noticed_sits_beside_the_turn_in_arrival_order() {
+    let t = held();
+    let s = SessionId::new("s1");
+    t.insert(&s, &turn(3, "the call")).expect("turn");
+    assert_eq!(t.notice(&s, 3, 1, "permission", "allowed").expect("one"), 0);
+    assert_eq!(t.notice(&s, 3, 2, "retry", "again").expect("two"), 1);
+    let seen = t.noticed(&s, 0, 10).expect("noticed");
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[1].kind, "retry");
+    assert_eq!(t.at(&s, 3).expect("at").expect("there").text, "the call");
+}

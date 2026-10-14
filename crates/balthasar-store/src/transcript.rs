@@ -269,57 +269,6 @@ impl Transcript {
         Ok(())
     }
 
-    /// Write one turn, or revise the one already at that cursor.
-    ///
-    /// Revising is ordinary: a tool call is written when it is made and written again when its
-    /// result arrives. Durable on return.
-    pub fn write(&mut self, session: &SessionId, turn: &Turn) -> Result<(), StoreError> {
-        self.connection.execute(
-            "INSERT INTO turn \
-             (session, cursor, at, role, kind, text, tool, raw, entry, tokens, pinned, \
-              ok, ms, args, revisions, grp, stub, handle, keep, error) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, \
-                     ?15, ?16, ?17, ?18, ?19) \
-             ON CONFLICT(session, cursor) DO UPDATE SET \
-               at = ?3, role = ?4, kind = ?5, text = ?6, tool = ?7, raw = ?8, entry = ?9, \
-               tokens = ?10, pinned = ?11, ok = ?12, ms = ?13, args = ?14, \
-               grp = ?15, stub = ?16, handle = ?17, keep = ?18, error = ?19, \
-               revisions = revisions + 1",
-            params![
-                session.as_str(),
-                turn.cursor as i64,
-                turn.at,
-                turn.role,
-                turn.kind,
-                turn.text,
-                turn.tool,
-                turn.raw,
-                turn.entry,
-                turn.tokens,
-                i64::from(turn.pinned),
-                turn.ok,
-                turn.ms.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
-                turn.args,
-                turn.group.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
-                turn.stub,
-                turn.handle,
-                i64::from(turn.keep),
-                i64::from(turn.error),
-            ],
-        )?;
-        self.connection.execute(
-            "DELETE FROM turn_fts WHERE session = ?1 AND cursor = ?2",
-            params![session.as_str(), turn.cursor as i64],
-        )?;
-        if !turn.text.trim().is_empty() {
-            self.connection.execute(
-                "INSERT INTO turn_fts (text, session, cursor) VALUES (?1, ?2, ?3)",
-                params![turn.text, session.as_str(), turn.cursor as i64],
-            )?;
-        }
-        Ok(())
-    }
-
     /// Everything a run said, in order. Answers the turns as they finally stood, not as they
     /// were first written — a tool call comes back with its result.
     pub fn replay(&self, session: &SessionId) -> Result<Vec<Turn>, StoreError> {
@@ -629,6 +578,44 @@ CREATE TABLE IF NOT EXISTS turn (
   keep       INTEGER NOT NULL DEFAULT 0,
   error      INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session, cursor)
+) STRICT;
+
+-- Every earlier revision of a turn, kept when it is amended rather than lost to the overwrite.
+CREATE TABLE IF NOT EXISTS turn_revision (
+  session    TEXT NOT NULL,
+  cursor     INTEGER NOT NULL,
+  at         INTEGER NOT NULL,
+  role       TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  text       TEXT NOT NULL DEFAULT '',
+  tool       TEXT,
+  raw        TEXT,
+  entry      TEXT,
+  tokens     INTEGER,
+  state      TEXT NOT NULL DEFAULT 'live',
+  pinned     INTEGER NOT NULL DEFAULT 0,
+  ok         INTEGER,
+  ms         INTEGER,
+  args       TEXT,
+  revisions  INTEGER NOT NULL,
+  grp        INTEGER,
+  stub       TEXT,
+  handle     TEXT,
+  keep       INTEGER NOT NULL DEFAULT 0,
+  error      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (session, cursor, revisions)
+) STRICT;
+
+-- What was noticed at a cursor and is not a turn: a permission, a retry, a compaction. Its own
+-- space, so a trace sent at an entry's cursor never takes the entry's place.
+CREATE TABLE IF NOT EXISTS trace (
+  session  TEXT NOT NULL,
+  cursor   INTEGER NOT NULL,
+  seq      INTEGER NOT NULL,
+  at       INTEGER NOT NULL,
+  kind     TEXT NOT NULL,
+  text     TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (session, cursor, seq)
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS turn_of ON turn(session, cursor);
