@@ -92,7 +92,7 @@ fn move_runs(tool_home: &Path) -> std::io::Result<usize> {
         if now.join("memory.db").exists() {
             continue;
         }
-        std::fs::create_dir_all(&now)?;
+        crate::private::dir(&now).map_err(|why| std::io::Error::other(why.to_string()))?;
         // A database and its write-ahead log move together or not at all: leaving the WAL at the
         // old path reads as a run already brought forward, and the writes it holds are lost.
         let mut undo = Vec::new();

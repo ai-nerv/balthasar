@@ -23,6 +23,7 @@ mod layout;
 mod mint;
 mod notes;
 mod paths;
+mod private;
 mod purge;
 mod read;
 mod relate;
@@ -107,15 +108,14 @@ impl Store {
     /// cannot outlive the memory it is evidence for. `secure_delete` on, because SQLite does not
     /// zero a freed page by default and the words stay in the file where `strings` finds them.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(parent.to_owned(), e))?;
-        }
+        private::before_open(path)?;
         let connection = Connection::open(path)?;
+        // A busy store is a store being consolidated. Waiting is right; failing is not.
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "secure_delete", true)?;
-        // A busy store is a store being consolidated. Waiting is right; failing is not.
-        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        private::tighten(path)?;
         schema::migrate(&connection)?;
         Ok(Self {
             connection,

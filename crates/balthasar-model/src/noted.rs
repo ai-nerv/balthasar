@@ -29,10 +29,12 @@ pub fn note(args: std::fmt::Arguments<'_>) {
 /// The half that does not read the environment, so a test can exercise it.
 pub fn note_to(path: &std::path::Path, args: std::fmt::Arguments<'_>) {
     use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     let line = stamped(&args.to_string(), std::time::SystemTime::now());
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
         .open(path)
     {
         // One write per line, so lines from several programs appending to one file do not interleave.
@@ -119,6 +121,18 @@ mod tests {
         assert_eq!(timestamp(epoch), "1970-01-01T00:00:00.000Z");
         let leap = epoch + std::time::Duration::from_millis(951_782_400_250);
         assert_eq!(timestamp(leap), "2000-02-29T00:00:00.250Z");
+    }
+
+    #[test]
+    fn a_log_is_created_for_its_owner_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let at = Scratch::file("balthasar-noted", "mode", "log.txt");
+        note_to(&at, format_args!("said"));
+        let mode = std::fs::metadata(&*at)
+            .expect("written")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]
