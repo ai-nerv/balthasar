@@ -79,8 +79,28 @@ pub fn tool_descriptor() -> std::io::Result<PathBuf> {
 
 /// How long a read waits before looking up.
 ///
-/// Not a deadline on the caller: a wait that expires is asked again.
+/// Not a deadline on the caller: a wait that expires is asked again, until [`Patience::idle`].
 const QUIET: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long a connection is waited on, in the family's numbers.
+#[derive(Debug, Clone, Copy)]
+struct Patience {
+    /// From a frame's first byte to its last.
+    frame: std::time::Duration,
+    /// With nothing said at all, before the connection is closed.
+    idle: std::time::Duration,
+    /// For one reply to be taken.
+    write: std::time::Duration,
+}
+
+const PATIENCE: Patience = Patience {
+    frame: std::time::Duration::from_secs(30),
+    idle: std::time::Duration::from_secs(300),
+    write: std::time::Duration::from_secs(30),
+};
+
+/// How long to pause after an accept that failed, before accepting again.
+const BACKOFF: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// How many callers may be connected at once.
 ///
@@ -244,7 +264,19 @@ fn accept(listening: &UnixListener, asked: &std::sync::mpsc::Sender<Heard>) {
     let crowd: Crowd = Crowd::default();
 
     for incoming in listening.incoming() {
-        let Ok(mut stream) = incoming else { continue };
+        let mut stream = match incoming {
+            Ok(stream) => stream,
+            // Out of descriptors or buffers is a moment, not an ending: say so, pause, carry on.
+            Err(why) => {
+                eprintln!("balthasar: accept failed: {why}; trying again shortly");
+                std::thread::sleep(BACKOFF);
+                continue;
+            }
+        };
+        // Every reply, refusals included, is written under a deadline.
+        if stream.set_write_timeout(Some(PATIENCE.write)).is_err() {
+            continue;
+        }
 
         let Some(peer) = Peer::of(&stream) else {
             // A caller the kernel will not identify cannot be held to a write ceiling.
@@ -257,7 +289,8 @@ fn accept(listening: &UnixListener, asked: &std::sync::mpsc::Sender<Heard>) {
         }
         // Refused out loud: this socket has a client that answers silence by deleting it.
         let Some(seat) = Seat::take(&crowd) else {
-            let _ = refuse(&mut stream, "balthasar is holding all the callers it can");
+            let busy = Reply::failed("busy: balthasar is holding all the callers it can");
+            let _ = say(&mut stream, crate::Wire::Json, &busy);
             continue;
         };
 
@@ -296,17 +329,27 @@ fn answering(asked: &std::sync::mpsc::Sender<Heard>, peer: &Peer, request: Reque
     }
 }
 
-/// Answer one connection's calls until it closes.
+/// Answer one connection's calls until it closes, goes quiet for too long, or stalls mid-frame.
 ///
 /// `answer` is a way to ask the one thread that answers, taken per call rather than per
 /// connection, so that holding a connection holds nothing.
 fn converse(stream: &mut UnixStream, peer: &Peer, answer: &impl Fn(&Peer, Request) -> Reply) {
+    converse_within(stream, peer, answer, PATIENCE);
+}
+
+fn converse_within(
+    stream: &mut UnixStream,
+    peer: &Peer,
+    answer: &impl Fn(&Peer, Request) -> Reply,
+    patience: Patience,
+) {
+    let mut heard = std::time::Instant::now();
     loop {
-        let body = match frame::recv(stream) {
+        let body = match frame::recv_within(stream, Some(patience.frame)) {
             Ok(body) => body,
             // Only a wait that began at a frame boundary is resumable: one that expired mid-frame
             // has lost bytes the next read would misread as a header.
-            Err(frame::WireError::Idle) => continue,
+            Err(frame::WireError::Idle) if heard.elapsed() < patience.idle => continue,
             // One refusal, then close: a body that is not read cannot be skipped in step.
             Err(why @ frame::WireError::TooLarge(_)) => {
                 let _ = say(stream, crate::Wire::Json, &Reply::failed(why.to_string()));
@@ -327,6 +370,7 @@ fn converse(stream: &mut UnixStream, peer: &Peer, answer: &impl Fn(&Peer, Reques
         if say(stream, wire, &reply).is_err() {
             break;
         }
+        heard = std::time::Instant::now();
     }
 }
 
@@ -650,6 +694,14 @@ mod crowd {
         over.read_exact(&mut body).expect("the refusal's body");
         let told: serde_json::Value = serde_json::from_slice(&body).expect("decode");
         assert_eq!(told["ok"], serde_json::json!(false));
+        assert_eq!(told["fault"], serde_json::json!("failed"));
+        assert!(
+            told["error"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("busy"),
+            "{told}"
+        );
 
         // The seat comes back when the reading thread notices the close, a moment after it.
         drop(held.pop());

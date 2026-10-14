@@ -90,7 +90,15 @@ pub fn table<'gc>(ctx: Context<'gc>) -> Table<'gc> {
             _ => DEFAULT_TIMEOUT,
         };
 
+        // A socket answered by another uid is closed unused.
+        let ours = |socket: &UnixStream| {
+            rustix::net::sockopt::socket_peercred(socket)
+                .is_ok_and(|said| said.uid.as_raw() == balthasar_model::runtime::uid())
+        };
         match UnixStream::connect(&target) {
+            Ok(socket) if !ours(&socket) => {
+                stack.replace(ctx, (Value::Nil, "that socket is answered by another user"));
+            }
             Ok(socket) => {
                 // This VM has no way to interrupt a blocking read, so a handle whose deadline
                 // never took would hang the whole harness.

@@ -149,6 +149,7 @@ version = "0.5.5"
 dependencies = [
  "balthasar-model",
  "luna",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

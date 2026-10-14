@@ -156,14 +156,23 @@ pub fn send(to: &mut impl Write, body: &[u8]) -> Result<(), WireError> {
 /// [`WireError::Idle`] when a read timeout expired with nothing of a frame received; an expiry
 /// part-way through has already dropped bytes the next read would take for a header.
 pub fn recv(from: &mut impl Read) -> Result<Vec<u8>, WireError> {
+    recv_within(from, None)
+}
+
+/// Read one frame, giving up once `limit` has passed since its first byte arrived.
+pub fn recv_within(
+    from: &mut impl Read,
+    limit: Option<std::time::Duration>,
+) -> Result<Vec<u8>, WireError> {
+    let mut started = None;
     let mut header = [0_u8; 4];
-    exactly(from, &mut header)?;
+    exactly(from, &mut header, &mut started, limit)?;
     let n = u32::from_be_bytes(header) as usize;
     if n > MAX_FRAME {
         return Err(WireError::TooLarge(n));
     }
     let mut body = vec![0_u8; n];
-    exactly(from, &mut body)?;
+    exactly(from, &mut body, &mut started, limit)?;
     Ok(body)
 }
 
@@ -180,15 +189,30 @@ fn expired(e: &std::io::Error) -> bool {
 /// Fill a buffer, however many reads that takes.
 ///
 /// Taking one short read for the whole message desynchronises on the first frame that splits.
-fn exactly(from: &mut impl Read, into: &mut [u8]) -> Result<(), WireError> {
+/// `started` is when the frame's first byte came, shared between the header and the body.
+fn exactly(
+    from: &mut impl Read,
+    into: &mut [u8],
+    started: &mut Option<std::time::Instant>,
+    limit: Option<std::time::Duration>,
+) -> Result<(), WireError> {
     let mut have = 0;
     while have < into.len() {
         match from.read(&mut into[have..]) {
             Ok(0) => return Err(WireError::Closed),
-            Ok(n) => have += n,
+            Ok(n) => {
+                have += n;
+                let since = *started.get_or_insert_with(std::time::Instant::now);
+                if limit.is_some_and(|limit| since.elapsed() > limit) && have < into.len() {
+                    return Err(WireError::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "the rest of the frame did not arrive in time",
+                    )));
+                }
+            }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            // Only at the start: the bytes already taken cannot be put back.
-            Err(e) if expired(&e) && have == 0 => return Err(WireError::Idle),
+            // Only before the frame's first byte: the bytes already taken cannot be put back.
+            Err(e) if expired(&e) && started.is_none() => return Err(WireError::Idle),
             Err(e) => return Err(WireError::Io(e)),
         }
     }
@@ -233,6 +257,35 @@ mod tests {
             at: 0,
         };
         assert!(matches!(recv(&mut torn), Err(WireError::Io(_))));
+    }
+
+    #[test]
+    fn a_body_that_stalls_after_its_header_is_not_idle() {
+        let mut torn = Slow {
+            first: vec![0, 0, 0, 5],
+            at: 0,
+        };
+        assert!(matches!(recv(&mut torn), Err(WireError::Io(_))));
+    }
+
+    #[test]
+    fn a_frame_dribbled_past_its_deadline_is_given_up_on() {
+        struct Drip(Vec<u8>, usize);
+        impl Read for Drip {
+            fn read(&mut self, into: &mut [u8]) -> std::io::Result<usize> {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                into[0] = self.0[self.1];
+                self.1 += 1;
+                Ok(1)
+            }
+        }
+        let mut body = 64_u32.to_be_bytes().to_vec();
+        body.extend(vec![b'x'; 64]);
+        let limit = Some(std::time::Duration::from_millis(100));
+        assert!(matches!(
+            recv_within(&mut Drip(body, 0), limit),
+            Err(WireError::Io(_))
+        ));
     }
 
     #[test]

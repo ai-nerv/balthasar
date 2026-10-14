@@ -107,3 +107,63 @@ fn a_reply_over_the_cap_is_replaced_by_a_refusal_and_the_next_call_is_in_step() 
     ask(&mut client, "small");
     assert_eq!(reply(&mut client).expect("next")["result"][0], "small");
 }
+
+/// A connection served on its own thread with short deadlines, and a way to see it end.
+fn hurried(
+    answer: fn(&Peer, Request) -> Reply,
+    patience: super::Patience,
+) -> (UnixStream, std::sync::mpsc::Receiver<()>) {
+    let (client, mut server) = UnixStream::pair().expect("pair");
+    server
+        .set_read_timeout(Some(std::time::Duration::from_millis(20)))
+        .expect("read deadline");
+    server
+        .set_write_timeout(Some(patience.write))
+        .expect("write deadline");
+    let peer = Peer::of(&server).expect("the kernel names us");
+    let (ended, ending) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        super::converse_within(&mut server, &peer, &answer, patience);
+        let _ = ended.send(());
+    });
+    (client, ending)
+}
+
+const SHORT: super::Patience = super::Patience {
+    frame: std::time::Duration::from_millis(200),
+    idle: std::time::Duration::from_millis(200),
+    write: std::time::Duration::from_millis(200),
+};
+
+#[test]
+fn a_connection_that_says_nothing_is_closed_once_idle() {
+    let (mut client, ending) = hurried(echo, SHORT);
+    ask(&mut client, "verbs");
+    assert!(reply(&mut client).is_some());
+    ending
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("closed after going quiet");
+}
+
+#[test]
+fn a_frame_that_stalls_part_way_is_given_up_on() {
+    let (mut client, ending) = hurried(echo, SHORT);
+    client.write_all(&[0, 0, 0, 40, b'{']).expect("a start");
+    ending
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("closed rather than waiting on the rest");
+}
+
+fn sizeable(_peer: &Peer, _request: Request) -> Reply {
+    Reply::one(serde_json::json!("w".repeat(8 * 1024 * 1024)))
+}
+
+#[test]
+fn a_peer_that_never_reads_its_reply_is_let_go() {
+    let (mut client, ending) = hurried(sizeable, SHORT);
+    ask(&mut client, "big");
+    ending
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the write gave up and the connection closed");
+    drop(client);
+}
