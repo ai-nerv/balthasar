@@ -27,7 +27,8 @@ balthasar decay                   # what today's forgetting would take, before i
 ```
                           a harness
                               │
-                      observe │  SO_PEERCRED names it, so the kernel says who
+                      observe │  SO_PEERCRED: the kernel says which uid and program;
+                              │  the agent its environment names is attribution only
                               ▼
                      ┌────────────────────┐
                      │  api@default.sock  │
