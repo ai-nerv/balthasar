@@ -130,8 +130,14 @@ fn purge_transcript(
         "DELETE FROM turn WHERE session = ?1",
         params![session.as_str()],
     )?;
-    // Summaries, job inputs and proposed layouts quote the turns, so they go with them.
+    // Summaries, job inputs, proposed layouts, earlier revisions, traces, generations and note
+    // changes quote the turns, so they go with them.
     for table in [
+        "turn_revision",
+        "trace",
+        "generation",
+        "chunk",
+        "note_change",
         "extraction_progress",
         "extraction_ack",
         "layout_effect",
@@ -257,6 +263,26 @@ pub fn purge_session(
         "DELETE FROM episode_segment WHERE session = ?1",
         params![session.as_str()],
     )?;
+    // The ledger's rows for the run, children before what they point at; one another run's
+    // action still points at stays.
+    for statement in [
+        "DELETE FROM outcome WHERE action_id IN (SELECT id FROM action_use WHERE session = ?1)",
+        "DELETE FROM action_memory WHERE action_id IN \
+         (SELECT id FROM action_use WHERE session = ?1)",
+        "DELETE FROM action_use WHERE session = ?1",
+        "DELETE FROM injection_memory WHERE injection_id IN \
+         (SELECT id FROM injection WHERE session = ?1 \
+          AND id NOT IN (SELECT injection_id FROM action_use WHERE injection_id IS NOT NULL))",
+        "DELETE FROM injection WHERE session = ?1 \
+         AND id NOT IN (SELECT injection_id FROM action_use WHERE injection_id IS NOT NULL)",
+        "DELETE FROM recall_candidate WHERE recall_id IN \
+         (SELECT id FROM recall_run WHERE session = ?1 \
+          AND id NOT IN (SELECT recall_id FROM injection WHERE recall_id IS NOT NULL))",
+        "DELETE FROM recall_run WHERE session = ?1 \
+         AND id NOT IN (SELECT recall_id FROM injection WHERE recall_id IS NOT NULL)",
+    ] {
+        tx.execute(statement, params![session.as_str()])?;
+    }
     tx.execute(
         "DELETE FROM session WHERE id = ?1",
         params![session.as_str()],
