@@ -10,6 +10,10 @@
 
 local make = oslo.make
 
+-- `.env.lua` names `.tmp` as TMPDIR; made here so it exists before anything is built in it. A
+-- TMPDIR that does not exist fails the build as a libsqlite3-sys error that says nothing about it.
+if not oslo.fs.exists(".tmp") then oslo.fs.mkdir(".tmp") end
+
 -- Name and version live in PROJECT, one per line, so every tool reads them from one place.
 local function project()
   local found = {}
