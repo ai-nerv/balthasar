@@ -1,5 +1,6 @@
 //! Typed, immutable transcript evidence retained with extraction jobs.
 
+use crate::queue::{field_of, set};
 use balthasar_store::{Budget, Job, StoreError, Transcript, Turn, Want};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -15,9 +16,11 @@ fn eligible(turn: &Turn) -> bool {
 
 pub(super) fn intact(scrollback: &Transcript, job: &Job) -> Result<bool, StoreError> {
     let (Some(from), Some(to), Some(sources)) = (
-        job.context["from"].as_u64(),
-        job.context["to"].as_u64(),
-        job.context["provenance"]["sources"].as_array(),
+        job.context.get("from").and_then(Value::as_u64),
+        job.context.get("to").and_then(Value::as_u64),
+        job.context
+            .pointer("/provenance/sources")
+            .and_then(Value::as_array),
     ) else {
         return Ok(false);
     };
@@ -57,7 +60,7 @@ pub(super) fn source(turn: &Turn, limit: usize) -> Value {
 
 pub(super) fn validated(scrollback: &Transcript, job: &Job) -> Result<Vec<Value>, StoreError> {
     let mut valid = Vec::new();
-    let provenance = &job.context["provenance"];
+    let provenance = field_of(&job.context, "provenance");
     if provenance["version"] != 1 {
         balthasar_model::noted!("note: job {} has no supported source provenance", job.id);
         return Ok(valid);
@@ -65,7 +68,10 @@ pub(super) fn validated(scrollback: &Transcript, job: &Job) -> Result<Vec<Value>
     let Some(sources) = provenance["sources"].as_array() else {
         return Ok(valid);
     };
-    let (Some(from), Some(to)) = (job.context["from"].as_u64(), job.context["to"].as_u64()) else {
+    let (Some(from), Some(to)) = (
+        job.context.get("from").and_then(Value::as_u64),
+        job.context.get("to").and_then(Value::as_u64),
+    ) else {
         return Ok(valid);
     };
     let budget = Budget {
@@ -101,8 +107,8 @@ pub(super) fn validated(scrollback: &Transcript, job: &Job) -> Result<Vec<Value>
         let captured = source["text"].as_str().unwrap_or_default();
         if !captured.is_empty() && turn.text.starts_with(captured) {
             let mut source = source.clone();
-            source["session"] = json!(job.session.as_str());
-            source["eligible"] = json!(eligible(turn));
+            set(&mut source, "session", json!(job.session.as_str()));
+            set(&mut source, "eligible", json!(eligible(turn)));
             valid.push(source);
         }
     }
@@ -111,11 +117,13 @@ pub(super) fn validated(scrollback: &Transcript, job: &Job) -> Result<Vec<Value>
 
 pub(super) fn current(scrollback: &Transcript, evidence: &Value) -> Result<bool, StoreError> {
     if evidence["kind"] == "duplicate" {
-        let Some(id) = evidence["retained"]["id"].as_str() else {
+        let Some(id) = evidence.pointer("/retained/id").and_then(Value::as_str) else {
             return Ok(false);
         };
         if !scrollback.note(id)?.is_some_and(|n| {
-            n.pinned && n.retired.is_none() && n.fields() == evidence["retained"]["fields"]
+            n.pinned
+                && n.retired.is_none()
+                && Some(&n.fields()) == evidence.pointer("/retained/fields")
         }) {
             return Ok(false);
         }
@@ -150,8 +158,8 @@ pub(super) fn restored(
             return Ok(None);
         }
         let mut row = source(&turn, usize::MAX);
-        row["session"] = json!(session);
-        row["eligible"] = json!(eligible(&turn));
+        set(&mut row, "session", json!(session));
+        set(&mut row, "eligible", json!(eligible(&turn)));
         if let Some(quote) = saved.get("quote") {
             let Some(quote) = quote
                 .as_str()
@@ -159,7 +167,7 @@ pub(super) fn restored(
             else {
                 return Ok(None);
             };
-            row["quote"] = json!(quote);
+            set(&mut row, "quote", json!(quote));
         }
         restored.push(row);
     }

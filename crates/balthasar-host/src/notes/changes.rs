@@ -70,7 +70,7 @@ pub(super) fn propose(
                 live.iter().find(|n| n.title.eq_ignore_ascii_case(title))
             })
             .or_else(|| {
-                let title = clean["title"].as_str()?.trim();
+                let title = clean.get("title").and_then(Value::as_str)?.trim();
                 live.iter().find(|n| n.title.eq_ignore_ascii_case(title))
             });
         let op = if target.is_some_and(|n| n.pinned) || original["pinned"] == true {
@@ -230,7 +230,7 @@ fn apply(scrollback: &Transcript, id: &str, now: Timestamp) -> Result<bool, Stor
             .filter(|note| note.retired.is_none());
         let reason = if current.as_ref().map(Note::fields) != change.before {
             Some("target note changed before application")
-        } else if change.evidence["version"] != 1
+        } else if crate::queue::field_of(&change.evidence, "version") != 1
             || !provenance::current(scrollback, &change.evidence)?
         {
             Some("source evidence is missing or changed before application")

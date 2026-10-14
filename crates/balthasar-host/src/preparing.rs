@@ -6,7 +6,7 @@
 //! a separate step at a turn boundary, and needs no model.
 
 use crate::Answering;
-use crate::queue::pending;
+use crate::queue::{field_of, pending};
 use crate::working::Working;
 use balthasar_model::SessionId;
 use balthasar_store::{Budget, Generation, Job, Ready, StoreError, Summary, Want};
@@ -158,18 +158,25 @@ pub(crate) fn settle(
         balthasar_model::noted!("working: {} was refused: {why:?}", job.id);
         return Ok(false);
     }
-    let (Some(from), Some(to)) = (job.context["from"].as_u64(), job.context["to"].as_u64()) else {
+    let (Some(from), Some(to)) = (
+        job.context.get("from").and_then(Value::as_u64),
+        job.context.get("to").and_then(Value::as_u64),
+    ) else {
         return Ok(false);
     };
     let held = Generation {
         id: format!("g-{}", job.id),
         session: session.clone(),
         state: Ready::Building,
-        parent: job.context["parent"].as_str().map(str::to_owned),
+        parent: job
+            .context
+            .get("parent")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         covers: (from, to),
-        policy: job.context["policy"].clone(),
+        policy: field_of(&job.context, "policy").clone(),
         provenance: json!({ "version": 1, "job": job.id, "from": from, "to": to,
-            "withheld": job.context["withheld"].clone() }),
+            "withheld": field_of(&job.context, "withheld").clone() }),
         content: serde_json::to_string(&proposed).unwrap_or_default(),
         made: at.now,
     };

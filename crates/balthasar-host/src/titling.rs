@@ -86,8 +86,9 @@ pub(crate) fn settle(
     let Some(said) = json_in(text) else {
         return Ok(false);
     };
-    let Some(title) = said["title"]
-        .as_str()
+    let Some(title) = said
+        .get("title")
+        .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|t| !t.is_empty())
     else {

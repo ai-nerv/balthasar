@@ -106,7 +106,8 @@ fn described(request: &Request, reply: &Reply, took: std::time::Duration) -> Str
         request
             .args
             .get(1)
-            .map(|a| a[key].clone())
+            .and_then(|a| a.get(key))
+            .cloned()
             .unwrap_or_default()
     };
     let first = reply.result.first().cloned().unwrap_or_default();
@@ -115,10 +116,19 @@ fn described(request: &Request, reply: &Reply, took: std::time::Duration) -> Str
         "observe" | "amend" => format!("cursor {} {}", arg("cursor"), arg("kind")),
         "layout" | "overflowed" => format!(
             "{} with {} slots, {} jobs — {}",
-            first["id"],
-            first["slots"].as_array().map_or(0, Vec::len),
-            first["jobs"].as_array().map_or(0, Vec::len),
-            first["why"].as_str().unwrap_or("")
+            first.get("id").cloned().unwrap_or_default(),
+            first
+                .get("slots")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len),
+            first
+                .get("jobs")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len),
+            first
+                .get("why")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
         ),
         "applied" => format!("{} took {}", arg("id"), arg("usage")),
         "jobs" => format!("handed {} jobs", reply.n),

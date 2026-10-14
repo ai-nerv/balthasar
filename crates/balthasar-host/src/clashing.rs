@@ -114,7 +114,11 @@ pub(crate) fn settle(at: &mut Answering<'_>, text: &str) -> Result<bool, StoreEr
     let Some(said) = json_in(text) else {
         return Ok(false);
     };
-    let pairs = said["pairs"].as_array().cloned().unwrap_or_default();
+    let pairs = said
+        .get("pairs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let named = |pair: &Value, side: &str| pair[side].as_str().map(MemoryId::new);
     let mut touched: Vec<MemoryId> = Vec::new();
     let mut linked = 0;

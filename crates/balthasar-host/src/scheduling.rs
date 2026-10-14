@@ -1,6 +1,7 @@
 //! Which background work goes out, in what order, and how much at once. The policy is balthasar’s.
 
 use balthasar_store::{Job, JobState};
+use serde_json::Value;
 
 /// How many jobs of one session may be out at once, and what a backlog drains to before more go.
 pub(crate) const HIGH: usize = 3;
@@ -58,7 +59,10 @@ pub(crate) fn ordered(jobs: &[Job]) -> Vec<&Job> {
 
 /// Whether a job must go whatever the watermarks say: a request is waiting on it.
 pub(crate) fn urgent(job: &Job) -> bool {
-    job.spec["blocking"].as_bool().unwrap_or(false)
+    job.spec
+        .get("blocking")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
