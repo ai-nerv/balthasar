@@ -457,24 +457,26 @@ make.recipe{
   end,
 }
 
--- The advisory database and the dependency policy, each run only where its tool is installed:
--- `verify` names both, and a machine without one says so and carries on.
-local function when_installed(tool, argv, failed)
+-- The advisory database and the dependency policy: this machine's tool where it has one, else the
+-- dev shell's, which carries both. `verify` names them, so neither is skipped for want of a tool.
+local function cargo_tool(tool, args, failed)
   return function()
+    local argv = { "cargo", tool }
+    for _, arg in ipairs(args) do argv[#argv + 1] = arg end
     if not oslo.run{ "cargo", tool, "--version", capture = true }.ok then
-      print(("cargo %s is not installed; skipped"):format(tool))
-      return
+      table.insert(argv, 1, "--command")
+      table.insert(argv, 1, "develop")
+      table.insert(argv, 1, "nix")
     end
     assert(oslo.run(argv).ok, failed)
   end
 end
 
 make.recipe{ name = "audit", desc = "known advisories against the lockfile, offline",
-             run = when_installed("audit", { "cargo", "audit", "--no-fetch" },
-                                  "cargo audit failed") }
+             run = cargo_tool("audit", { "--no-fetch" }, "cargo audit failed") }
 
-make.recipe{ name = "deny", desc = "the dependency policy",
-             run = when_installed("deny", { "cargo", "deny", "check" }, "cargo deny failed") }
+make.recipe{ name = "deny", desc = "the dependency policy in deny.toml",
+             run = cargo_tool("deny", { "check" }, "cargo deny failed") }
 
 make.recipe{
   name = "verify",
