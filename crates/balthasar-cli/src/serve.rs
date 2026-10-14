@@ -152,6 +152,7 @@ pub fn serve(
                         scratch: balthasar_store::Scratchpad::at(runs_under(
                             store_path, scope, &which,
                         )),
+                        retired: None,
                     })
                 });
                 match made {
@@ -164,18 +165,28 @@ pub fn serve(
                 }
             }
         };
+        let now = now();
         let mut at = Answering {
             store: &mut held.store,
             scrollback: Some(&mut held.scrollback),
             scratch: Some(&mut held.scratch),
             scope: scope.clone(),
             agent: agent_of(peer, &agent),
-            now: now(),
+            now,
             inject_floor: floors.inject,
             live_floor: floors.live,
             capture,
         };
-        balthasar_host::answer_hooked(&mut at, &Door::Socket(peer.clone()), &request, loaded)
+        let reply =
+            balthasar_host::answer_hooked(&mut at, &Door::Socket(peer.clone()), &request, loaded);
+        retire(
+            held,
+            &request,
+            &reply,
+            loaded.settings().retained_since(now),
+            now,
+        );
+        reply
     });
 
     // The socket goes before the stores: closing a store checkpoints its WAL and fsyncs.
@@ -276,6 +287,46 @@ struct Opened {
     store: balthasar_store::Store,
     scrollback: balthasar_store::Transcript,
     scratch: balthasar_store::Scratchpad,
+    /// When turn retention last ran on these stores.
+    retired: Option<balthasar_model::Timestamp>,
+}
+
+/// Once a turn is recorded, and at most once a day, remove the turns of sessions quiet since
+/// `before`. The session that just spoke is never one of them; no `before`, nothing is removed.
+fn retire(
+    held: &mut Opened,
+    request: &Request,
+    reply: &Reply,
+    before: Option<balthasar_model::Timestamp>,
+    now: balthasar_model::Timestamp,
+) {
+    let (Some(before), Some(live)) = (before, request.args.first().and_then(|v| v.as_str())) else {
+        return;
+    };
+    let due = held
+        .retired
+        .is_none_or(|last| now.saturating_sub(last) >= balthasar_store::DAY);
+    if request.call != "observe" || !reply.ok || !due {
+        return;
+    }
+    held.retired = Some(now);
+    let live = [balthasar_model::SessionId::new(live)];
+    match balthasar_store::prune_turns(
+        &held.scrollback,
+        Some(&mut held.scratch),
+        Some(&mut held.store),
+        before,
+        &live,
+    ) {
+        Ok(pruned) if pruned.sessions > 0 => balthasar_model::noted!(
+            "serve: retention removed {} turns of {} sessions and {} scratch copies",
+            pruned.turns,
+            pruned.sessions,
+            pruned.mirrors
+        ),
+        Ok(_) => {}
+        Err(why) => balthasar_model::noted!("serve: retention failed: {why}"),
+    }
 }
 
 /// What a harness names its agent in, in the environment it starts `serve` with.
@@ -389,6 +440,100 @@ mod agents {
             agent: None,
         };
         assert_eq!(agent_of(&peer, &served), served);
+    }
+}
+
+#[cfg(test)]
+mod retiring {
+    use super::*;
+    use balthasar_model::{SessionId, Timestamp};
+    use balthasar_store::DAY;
+
+    const NOW: Timestamp = 1_800_000_000;
+    const KEPT: Option<Timestamp> = Some(NOW - 30 * DAY);
+
+    fn held(dir: &Path) -> Opened {
+        Opened {
+            store: balthasar_store::Store::ephemeral().expect("store"),
+            scrollback: balthasar_store::Transcript::ephemeral().expect("scrollback"),
+            scratch: balthasar_store::Scratchpad::at(dir),
+            retired: None,
+        }
+    }
+
+    fn said(held: &Opened, session: &str) {
+        let turn = balthasar_store::Turn {
+            at: NOW - 40 * DAY,
+            role: "user".into(),
+            kind: "prose".into(),
+            text: format!("{session} said this"),
+            ..balthasar_store::Turn::default()
+        };
+        held.scrollback
+            .insert(&SessionId::new(session), &turn)
+            .expect("turn");
+    }
+
+    fn holds(held: &Opened, session: &str) -> u64 {
+        held.scrollback
+            .count(&SessionId::new(session))
+            .expect("count")
+    }
+
+    fn call(verb: &str, session: &str) -> Request {
+        Request {
+            call: verb.to_owned(),
+            args: vec![serde_json::json!(session)],
+        }
+    }
+
+    #[test]
+    fn a_recorded_turn_prunes_quiet_sessions_once_a_day_and_never_its_own() {
+        let dir = balthasar_model::scratch::Scratch::new("balthasar-serve-retire", "daily");
+        let mut held = held(&dir);
+        said(&held, "quiet");
+        said(&held, "speaking");
+        retire(
+            &mut held,
+            &call("replay", "speaking"),
+            &Reply::none(),
+            KEPT,
+            NOW,
+        );
+        assert_eq!(holds(&held, "quiet"), 1, "a read prunes nothing");
+
+        retire(
+            &mut held,
+            &call("observe", "speaking"),
+            &Reply::none(),
+            KEPT,
+            NOW,
+        );
+        assert_eq!(holds(&held, "quiet"), 0);
+        assert_eq!(holds(&held, "speaking"), 1, "the session that spoke");
+
+        said(&held, "later");
+        let observed = call("observe", "speaking");
+        retire(&mut held, &observed, &Reply::none(), KEPT, NOW + DAY / 2);
+        assert_eq!(holds(&held, "later"), 1, "not twice in one day");
+        retire(&mut held, &observed, &Reply::none(), KEPT, NOW + DAY);
+        assert_eq!(holds(&held, "later"), 0);
+    }
+
+    #[test]
+    fn with_no_retention_set_nothing_is_removed() {
+        let dir = balthasar_model::scratch::Scratch::new("balthasar-serve-retire", "unset");
+        let mut held = held(&dir);
+        said(&held, "quiet");
+        retire(
+            &mut held,
+            &call("observe", "speaking"),
+            &Reply::none(),
+            None,
+            NOW,
+        );
+        assert_eq!(holds(&held, "quiet"), 1);
+        assert_eq!(held.retired, None);
     }
 }
 
