@@ -4,6 +4,8 @@
 //! retrieval cannot recover what was removed. That is what this file is: not "did the row go"
 //! but "is every path back to it closed".
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::Scratch;
 
 use balthasar_model::{

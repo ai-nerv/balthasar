@@ -3,6 +3,8 @@
 //! Against the real binary: `Drop` does not run on a signal, and what has to be true is that the
 //! socket file is gone afterwards, looked at by something that is not the process that made it.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::Scratch;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};

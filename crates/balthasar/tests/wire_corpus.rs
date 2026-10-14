@@ -1,6 +1,8 @@
 //! The family's wire corpus, against the real `serve`: every case answered as `cases.json` says,
 //! and the connection left open or closed as it says.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::Scratch;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;

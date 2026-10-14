@@ -1,5 +1,7 @@
 //! M6's acceptance test: a session that would have overflowed reaches turn 90 instead.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, answer, answer_with};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{ScopeId, floor};

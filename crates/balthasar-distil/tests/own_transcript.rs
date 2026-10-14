@@ -6,6 +6,8 @@
 //! was watching it for "remember that we deploy with fly.io", which is the cheapest signal there
 //! is and the one a person would most expect to work.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_distil::{Ingest, TRANSCRIPT_SOURCE, distil_run, undistilled};
 use balthasar_lua::{Engine, Settings};
 use balthasar_model::{ScopeId, SessionId, Tier, Timestamp, WitnessKind};

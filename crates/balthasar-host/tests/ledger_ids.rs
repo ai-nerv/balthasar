@@ -1,5 +1,7 @@
 //! Each search the ledger records is its own record, named after what was actually asked.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, answer};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{ScopeId, floor};

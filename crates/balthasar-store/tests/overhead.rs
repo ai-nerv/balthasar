@@ -4,6 +4,8 @@
 //! shadow policies to be unable to move strength or access counts. Both are properties nobody
 //! notices breaking until a memory has quietly been reinforced by an experiment.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::{
     Attribution, Body, Memory, NoteKind, Presentation, ScopeId, SessionId, Tier, Witness,
     WitnessId, WitnessKind,

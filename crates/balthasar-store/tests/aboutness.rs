@@ -4,6 +4,8 @@
 //! entity boost, and R-Mem's split between predicates that name one current answer and
 //! predicates that name an accumulating set.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::{
     Body, Memory, ScopeId, SessionId, Tier, Timestamp, Witness, WitnessId, WitnessKind,
 };

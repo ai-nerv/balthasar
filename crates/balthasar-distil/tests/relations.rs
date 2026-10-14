@@ -4,6 +4,8 @@
 //! surviving with no embedder, rebuilds that leave memories alone, and bounds that hold on a
 //! store dense enough to hurt.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_distil::{Step, Thresholds, entities, overlap, repairs, temporal};
 use balthasar_model::{
     Body, Derivation, Family, Memory, MemoryId, NoteKind, ScopeId, SessionId, Temporal, Tier, View,

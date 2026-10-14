@@ -4,6 +4,8 @@
 //! parent. Every test here kills the parent outright rather than asking it to stop, because
 //! nothing in a caller runs when it is killed.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::Scratch;
 use std::path::Path;
 use std::process::{Child, Command};

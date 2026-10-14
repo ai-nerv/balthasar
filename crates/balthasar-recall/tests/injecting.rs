@@ -1,5 +1,7 @@
 //! M4: what a model is actually told, and what it is not.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::{
     Body, Importance, Memory, Privacy, ScopeId, SessionId, Tier, Timestamp, Witness, WitnessId,
     WitnessKind, floor,

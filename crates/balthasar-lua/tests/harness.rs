@@ -2,6 +2,8 @@
 //!
 //! Every call has to answer `nil` and let the harness carry on exactly as it did before.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_lua::{CLIENT, Engine};
 use std::path::PathBuf;
 

@@ -1,5 +1,7 @@
 //! M1: what fades, what does not, and what happens to it when it does.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::{
     Body, Importance, Memory, ScopeId, SessionId, Tier, Timestamp, Witness, WitnessId, WitnessKind,
     floor,

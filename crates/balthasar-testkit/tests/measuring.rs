@@ -1,5 +1,7 @@
 //! The number that would make somebody change what they run.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_testkit::{Scenario, Score};
 
 const START: balthasar_model::Timestamp = 1_756_000_000;

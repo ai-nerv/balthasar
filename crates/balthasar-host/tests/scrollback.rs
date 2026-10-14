@@ -1,5 +1,7 @@
 //! The scrollback, as a harness with no journal of its own would use it.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, answer};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{ScopeId, floor};

@@ -1,5 +1,7 @@
 //! `layout`, `applied` and `overflowed`, end to end through the door.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, Hooks, answer_hooked};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{ScopeId, SessionId, floor};

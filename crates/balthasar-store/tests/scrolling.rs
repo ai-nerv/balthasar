@@ -4,6 +4,8 @@
 //! model's context does not. These are the reads that sit between "one turn" and "all of it",
 //! and every one of them is about a bound holding.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::SessionId;
 use balthasar_store::{Budget, Transcript, Turn, Want};
 

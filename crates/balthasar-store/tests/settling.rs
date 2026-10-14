@@ -3,6 +3,8 @@
 //! A sweep makes two disagreeing claims less believed, and that is the right thing to do while
 //! nobody knows which is wrong. These cover what happens once somebody does know.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::{
     Body, LinkRelation, Memory, MemoryId, NoteKind, ScopeId, SessionId, Tier, Witness, WitnessId,
     WitnessKind,

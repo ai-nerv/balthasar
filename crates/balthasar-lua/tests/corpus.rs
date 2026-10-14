@@ -2,6 +2,8 @@
 //! what a fake server answers the client's second call with, and the client must take it as
 //! `cases.json` says.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_lua::{CLIENT, Engine};
 use std::io::{Read, Write};
 use std::path::PathBuf;

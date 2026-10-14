@@ -4,6 +4,8 @@
 //! discovery bug there is — a socket in the wrong directory, a lister that only sees its own
 //! host, a name that does not match its file — works perfectly when a tool tests itself.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door};
 use balthasar_ipc::{Listener, Peer, Request};
 use balthasar_model::{ScopeId, floor};

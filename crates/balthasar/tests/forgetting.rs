@@ -4,6 +4,8 @@
 //! the command finds all three — which is a different thing, and the half that breaks when a
 //! path is computed twice in two places.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::Scratch;
 
 use balthasar_model::{Body, Memory, NoteKind, ScopeId, SessionId, Tier};

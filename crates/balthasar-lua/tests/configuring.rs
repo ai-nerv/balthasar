@@ -1,5 +1,7 @@
 //! M2: the config API, as a configuration author would meet it.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::Scratch;
 
 use balthasar_lua::{Engine, LuaError, Settings};

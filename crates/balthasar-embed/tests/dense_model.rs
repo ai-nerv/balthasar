@@ -3,6 +3,8 @@
 //! Skipped unless `MAGI_BALTHASAR_MODEL_DIR` names a directory holding a sentence transformer, because a
 //! 127 MB download is not something a test suite may assume. Point it at one and this becomes
 //! the evidence that the dense path works, and that it is better at the job it was added for.
+
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
 #![cfg(feature = "dense")]
 
 use balthasar_embed::{Dense, Embed, Hashed};

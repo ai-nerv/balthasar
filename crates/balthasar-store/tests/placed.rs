@@ -1,5 +1,7 @@
 //! A project's store moved with its checkout answers for the new place, once.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::Scratch;
 use balthasar_model::{
     Body, Memory, ScopeId, SessionId, Tier, Timestamp, Witness, WitnessId, WitnessKind,

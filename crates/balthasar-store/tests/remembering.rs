@@ -3,6 +3,8 @@
 //! The milestone's own acceptance test. A fact remembered, corrected and asked again answers
 //! with the new one; both witnesses survive; and the old answer is still in the store.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::{
     Body, Memory, MemoryId, ScopeId, SessionId, Tier, Timestamp, Witness, WitnessId, WitnessKind,
 };

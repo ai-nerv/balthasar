@@ -1,5 +1,7 @@
 //! M7's CALLUS and SLEEP: what crosses from a session into a project, and why.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_distil::{DISTINCT_SESSIONS, consolidate};
 use balthasar_lua::Settings;
 use balthasar_model::{

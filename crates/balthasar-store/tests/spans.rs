@@ -4,6 +4,8 @@
 //! and never extracted lives in the transcript and nowhere else — and until this index existed
 //! it was reachable only by replaying the whole run.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::SessionId;
 use balthasar_store::{Transcript, Turn};
 

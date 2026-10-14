@@ -3,6 +3,8 @@
 //! The tables are read out of the schema rather than listed here, so a table added later with a
 //! session column and no purge fails this test instead of quietly keeping what was said.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::SessionId;
 use balthasar_model::scratch::Scratch;
 use balthasar_store::{Store, Transcript};

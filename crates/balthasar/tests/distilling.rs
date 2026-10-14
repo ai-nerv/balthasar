@@ -5,6 +5,8 @@
 //! which walks a *harness's* journal files. This plants a run the way `observe` would and asks
 //! the shipped binary whether the project learned from it.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_model::scratch::Scratch;
 
 use balthasar_model::SessionId;

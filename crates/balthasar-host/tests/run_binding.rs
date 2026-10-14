@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, answer};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{AgentId, ScopeId, SessionId, floor, scratch::Scratch};

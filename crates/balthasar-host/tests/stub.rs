@@ -5,6 +5,8 @@
 //! socket primitive, and has to find, connect, frame, encode, decode and unpack on its own —
 //! which is every layer a sibling would exercise, in the order a sibling would exercise them.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door};
 use balthasar_ipc::{Listener, Peer, Request};
 use balthasar_lua::{CLIENT, Engine};

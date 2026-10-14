@@ -1,5 +1,7 @@
 //! Jobs: summaries and curated memory, asked of the harness and settled by its answers.
 
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use balthasar_host::{Answering, Door, Hooks, answer_hooked};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{ScopeId, floor};
