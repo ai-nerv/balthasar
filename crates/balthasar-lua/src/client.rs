@@ -116,24 +116,30 @@ mod tests {
 
     #[test]
     fn the_uid_is_the_hosts_and_never_the_environment() {
-        assert_eq!(looked_in(r#"UID = "4242""#, "nil"), "");
+        assert_eq!(looked_in(r#"UID = "4242", TMPDIR = "/scratch""#, "nil"), "");
         assert_eq!(
-            looked_in(r#"UID = "4242""#, "{ uid = 1000 }"),
-            "/tmp/memory-1000/api@x.sock|/tmp/balthasar-1000/api@x.sock"
+            looked_in(r#"UID = "4242", TMPDIR = "/scratch""#, "{ uid = 1000 }"),
+            "/scratch/memory-1000/api@x.sock|/scratch/balthasar-1000/api@x.sock"
         );
         assert_eq!(
-            looked_in("", "{ uid = function() return 7 end }"),
-            "/tmp/memory-7/api@x.sock|/tmp/balthasar-7/api@x.sock"
+            looked_in(
+                r#"TMPDIR = "/scratch""#,
+                "{ uid = function() return 7 end }"
+            ),
+            "/scratch/memory-7/api@x.sock|/scratch/balthasar-7/api@x.sock"
         );
-        assert_eq!(looked_in("", r#"{ uid = "1000" }"#), "");
-        assert_eq!(looked_in("", "{ uid = 1.5 }"), "");
+        assert_eq!(
+            looked_in(r#"TMPDIR = "/scratch""#, r#"{ uid = "1000" }"#),
+            ""
+        );
+        assert_eq!(looked_in(r#"TMPDIR = "/scratch""#, "{ uid = 1.5 }"), "");
     }
 
     #[test]
     fn the_runtime_dir_is_used_only_when_the_host_says_it_is_private() {
         let at = |runtime: &str, stat: &str| {
             let first = looked_in(
-                &format!("XDG_RUNTIME_DIR = {runtime:?}"),
+                &format!("XDG_RUNTIME_DIR = {runtime:?}, TMPDIR = \"/scratch\""),
                 &format!("{{ uid = 1000, fs = {{ stat = {stat} }} }}"),
             );
             first.split('|').next().unwrap_or_default().to_owned()
@@ -142,20 +148,20 @@ mod tests {
             format!("function() return {{ type = {kind:?}, uid = {uid}, mode = {mode} }} end")
         };
         assert_eq!(
-            at("/run/user/1000/", &stat("directory", 1000, 0o700)),
-            "/run/user/1000/memory/api@x.sock"
+            at("/w/run/1000/", &stat("directory", 1000, 0o700)),
+            "/w/run/1000/memory/api@x.sock"
         );
         for (runtime, said) in [
-            ("/run/user/1000", stat("directory", 1000, 0o755)),
-            ("/run/user/1000", stat("directory", 1001, 0o700)),
-            ("/run/user/1000", stat("symlink", 1000, 0o700)),
-            ("/run/user/1000", "nil".to_owned()),
-            ("run/user", stat("directory", 1000, 0o700)),
+            ("/w/run/1000", stat("directory", 1000, 0o755)),
+            ("/w/run/1000", stat("directory", 1001, 0o700)),
+            ("/w/run/1000", stat("symlink", 1000, 0o700)),
+            ("/w/run/1000", "nil".to_owned()),
+            ("w/run/1000", stat("directory", 1000, 0o700)),
             ("", stat("directory", 1000, 0o700)),
         ] {
             assert_eq!(
                 at(runtime, &said),
-                "/tmp/memory-1000/api@x.sock",
+                "/scratch/memory-1000/api@x.sock",
                 "{runtime:?} trusted though stat said {said}"
             );
         }
@@ -167,10 +173,15 @@ mod tests {
             looked_in(r#"TMPDIR = "/scratch/""#, "{ uid = 1000 }"),
             "/scratch/memory-1000/api@x.sock|/scratch/balthasar-1000/api@x.sock"
         );
-        assert_eq!(
-            looked_in(r#"TMPDIR = "scratch""#, "{ uid = 1000 }"),
-            "/tmp/memory-1000/api@x.sock|/tmp/balthasar-1000/api@x.sock"
-        );
+        for env in [r#"TMPDIR = "scratch""#, ""] {
+            let fallback = looked_in(env, "{ uid = 1000 }");
+            assert!(
+                fallback.starts_with('/')
+                    && !fallback.contains("scratch")
+                    && fallback.contains("/memory-1000/api@x.sock|"),
+                "{env:?} gave {fallback}"
+            );
+        }
     }
 
     /// What `fetch` ran for tool `x`, given the host's uid, what `fs.stat` says of the descriptor
@@ -180,7 +191,7 @@ mod tests {
         let (dir_kind, dir_uid, dir_mode) = dir;
         probe(&format!(
             r#"(function()
-                os.getenv = function() return nil end
+                os.getenv = function(name) return name == "TMPDIR" and "/scratch" or nil end
                 local ran = "nothing"
                 hexe = {{ uid = {uid},
                   run = function(cmd) ran = cmd
@@ -188,9 +199,9 @@ mod tests {
                   fs = {{ ls = function() return {{}} end,
                           read = function() return '{{"exec":{exec:?}}}' end,
                           stat = function(path)
-                            if path == "/tmp/x-1000/x.tool" then
+                            if path == "/scratch/x-1000/x.tool" then
                               return {{ type = {file_kind:?}, uid = {file_uid}, mode = {file_mode} }}
-                            elseif path == "/tmp/x-1000" then
+                            elseif path == "/scratch/x-1000" then
                               return {{ type = {dir_kind:?}, uid = {dir_uid}, mode = {dir_mode} }}
                             end
                           end }} }}
