@@ -64,6 +64,9 @@ pub enum Compacting {
     Pending,
     /// This prompt has had its share.
     Spent,
+    /// One is written, and held back from this request because it costs more than what it would
+    /// take the place of.
+    Withheld,
 }
 
 /// What the other slots hold, before the factor.
@@ -295,6 +298,9 @@ pub fn lay(rules: &Rules, ask: &Ask, rows: &[Row], held: &Held, factor: f64) -> 
             }
             Compacting::Pending => why.push("a summary is on its way".to_owned()),
             Compacting::Spent => why.push("no more summaries this prompt".to_owned()),
+            Compacting::Withheld => {
+                why.push("the summary is held back: it outweighs what it would replace".to_owned());
+            }
         }
     }
 
@@ -376,10 +382,19 @@ pub fn lay(rules: &Rules, ask: &Ask, rows: &[Row], held: &Held, factor: f64) -> 
 
 /// Fill in what a layout spends, and whether it fits.
 pub fn account(layout: &mut Layout, rows: &[Row], held: &Held, factor: f64) {
+    let used = spent(&layout.slots, rows, held, factor);
+    let budget = &mut layout.budget;
+    budget.used = used;
+    budget.estimated_input = used.saturating_add(budget.fixed);
+    layout.fits =
+        u64::from(budget.estimated_input) + u64::from(budget.reply) <= u64::from(budget.window);
+}
+
+/// What `slots` cost after the factor, the fixed items aside.
+fn spent(slots: &[Slot], rows: &[Row], held: &Held, factor: f64) -> u32 {
     let fix = |tokens: u32| corrected(tokens, factor);
     let by: HashMap<u64, &Row> = rows.iter().map(|r| (r.cursor, r)).collect();
-    let used: u32 = layout
-        .slots
+    slots
         .iter()
         .map(|slot| match slot {
             Slot::Pinned => fix(held.pinned),
@@ -389,12 +404,106 @@ pub fn account(layout: &mut Layout, rows: &[Row], held: &Held, factor: f64) {
             Slot::Note => fix(held.note),
             Slot::Memory => fix(held.memory),
         })
-        .sum();
-    let budget = &mut layout.budget;
-    budget.used = used;
-    budget.estimated_input = used.saturating_add(budget.fixed);
-    layout.fits =
-        u64::from(budget.estimated_input) + u64::from(budget.reply) <= u64::from(budget.window);
+        .fold(0, u32::saturating_add)
+}
+
+/// A request the provider refused as too long, which the next one has to come in under.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Refused {
+    pub slots: Vec<Slot>,
+    /// The summary it carried, if its slots hold one.
+    pub summary: Option<Covered>,
+}
+
+impl Refused {
+    /// What it costs now, the fixed items aside: its own summary, and the rest as they are held.
+    #[must_use]
+    pub fn cost(&self, rows: &[Row], held: &Held, factor: f64) -> u32 {
+        let then = Held {
+            summary: self.summary,
+            ..held.clone()
+        };
+        spent(&self.slots, rows, &then, factor)
+    }
+}
+
+/// `held` for the request after `refused`: without its summary when the summary costs more than
+/// what it would take the place of there. A tighter request never grows by a summary.
+#[must_use]
+pub fn against(held: &Held, rows: &[Row], refused: &Refused, factor: f64) -> Held {
+    let Some(summary) = held.summary else {
+        return held.clone();
+    };
+    let fix = |tokens: u32| corrected(tokens, factor);
+    let by: HashMap<u64, &Row> = rows.iter().map(|r| (r.cursor, r)).collect();
+    let replaced = refused
+        .slots
+        .iter()
+        .map(|slot| match slot {
+            Slot::Item(c) if summary.covers(*c) => by.get(c).map_or(0, |r| fix(r.tokens)),
+            Slot::Stub(c) if summary.covers(*c) => by.get(c).map_or(0, |r| fix(r.stub_tokens)),
+            Slot::Summary => refused.summary.map_or(0, |s| fix(s.tokens)),
+            _ => 0,
+        })
+        .fold(0, u32::saturating_add);
+    if fix(summary.tokens) <= replaced {
+        return held.clone();
+    }
+    Held {
+        summary: None,
+        compacting: Compacting::Withheld,
+        ..held.clone()
+    }
+}
+
+/// Stub what `layout` still sends whole until it costs less than `refused`: the largest result
+/// first and the older of two alike, the newest included. What failed and what a tool asked to
+/// keep stay word for word.
+/// Answers how many it stubbed; a layout still not under `refused` has nothing left to stub.
+pub fn under(
+    layout: &mut Layout,
+    rows: &[Row],
+    held: &Held,
+    refused: &Refused,
+    factor: f64,
+) -> usize {
+    let limit = refused.cost(rows, held, factor);
+    let by: HashMap<u64, &Row> = rows.iter().map(|r| (r.cursor, r)).collect();
+    account(layout, rows, held, factor);
+    let mut stubbed = 0;
+    while layout.budget.used >= limit {
+        let largest = layout
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(at, slot)| match slot {
+                Slot::Item(cursor) => by.get(cursor).map(|row| (at, *row)),
+                _ => None,
+            })
+            .filter(|(_, r)| r.tool && !r.error && !r.keep && r.stub_tokens < r.tokens)
+            .max_by_key(|(_, r)| (r.tokens, std::cmp::Reverse(r.cursor)));
+        let Some((at, row)) = largest else {
+            break;
+        };
+        if let Some(slot) = layout.slots.get_mut(at) {
+            *slot = Slot::Stub(row.cursor);
+        }
+        layout.stubbed.push(row.cursor);
+        account(layout, rows, held, factor);
+        stubbed += 1;
+    }
+    layout.stubbed.sort_unstable();
+    if stubbed > 0 {
+        layout.why.push_str(&format!(
+            "; {stubbed} more results stubbed to come in under the refused request"
+        ));
+    }
+    if layout.budget.used >= limit {
+        layout
+            .why
+            .push_str("; nothing left to stub below the refused request");
+    }
+    stubbed
 }
 
 /// Slots in the order the prompt cache wants: pinned, the conversation with the summary where

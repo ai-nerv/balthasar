@@ -284,6 +284,48 @@ fn an_overflow_answers_a_tighter_layout() {
 }
 
 #[test]
+fn an_overflow_at_the_floor_stubs_the_newest_result() {
+    // A prompt and the one result it is working from: no rule stubs or drops the newest row, so
+    // tightening by the rules alone lays out the very request just refused.
+    let mut harness = Harness::new();
+    harness.observe(
+        json!({ "cursor": 0, "role": "user", "kind": "user", "tokens": 40,
+                            "text": "read the file" }),
+    );
+    harness.observe(
+        json!({ "cursor": 1, "role": "assistant", "kind": "assistant",
+                            "tokens": 100, "group": 1, "text": "" }),
+    );
+    harness.observe(
+        json!({ "cursor": 2, "role": "tool", "kind": "tool_result", "tool": "read",
+                            "tokens": 6_000, "group": 1, "text": "line ".repeat(4_000),
+                            "stub": "read big.rs (281 lines)" }),
+    );
+    let first = harness.one("layout", small());
+    assert_eq!(kinds(&first), ["item", "item", "item"], "{}", first["why"]);
+    let said = "prompt is too long: 30000 tokens > 20000 maximum";
+    let tighter = harness.one("overflowed", json!({ "id": first["id"], "said": said }));
+    let slots = tighter["slots"].as_array().expect("slots");
+    let stub = slots
+        .iter()
+        .find(|s| s["cursor"] == 2)
+        .expect("the result is still named");
+    assert_eq!(stub["kind"], "stub", "{}", tighter["why"]);
+    assert_eq!(stub["text"], "read big.rs (281 lines)");
+    let raw = |laid: &Value| {
+        laid["budget"]["used"].as_f64().expect("used")
+            / laid["budget"]["factor"].as_f64().expect("f")
+    };
+    assert!(raw(&tighter) < raw(&first), "{}", tighter["why"]);
+    assert!(
+        tighter["why"]
+            .as_str()
+            .expect("why")
+            .contains("under the refused request")
+    );
+}
+
+#[test]
 fn a_stored_summary_stands_in_for_what_it_covers() {
     let mut harness = Harness::new();
     for n in 0..4 {
