@@ -670,3 +670,6 @@ mod a_summary_larger_than_its_span_is_not_used {
         assert!(laid.slots.contains(&Slot::Summary), "{:?}", laid.slots);
     }
 }
+
+#[path = "rules/after_a_refusal.rs"]
+mod after_a_refusal;

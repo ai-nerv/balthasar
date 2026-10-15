@@ -4,7 +4,9 @@
 use crate::supply::{self, Supplied};
 use crate::window::stub_for;
 use crate::{Answering, Hooks};
-use balthasar_buffer::{Ask, Compacting, Covered, Held, Layout, Row, Rules, Slot, corrected};
+use balthasar_buffer::{
+    Ask, Compacting, Covered, Held, Layout, Refused, Row, Rules, Slot, corrected,
+};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::SessionId;
 use balthasar_store::{Prompt, State, StoreError, Turn};
@@ -26,7 +28,7 @@ pub fn layout(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) 
         return Reply::refused("layout needs a session");
     };
     let asked = request.args.get(1).cloned().unwrap_or_else(|| json!({}));
-    match lay_out(at, &session, &asked, hooks) {
+    match lay_out(at, &session, &asked, None, hooks) {
         Ok(laid) => Reply::one(laid),
         Err(why) => Reply::refused(why),
     }
@@ -69,21 +71,23 @@ pub fn overflowed(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hoo
         .and_then(|s| s.get("said"))
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let asked = match tighten(at, &session, id, message) {
-        Ok(asked) => asked,
+    let (asked, refused) = match tighten(at, &session, id, message) {
+        Ok(tightened) => tightened,
         Err(why) => return Reply::refused(why),
     };
-    match lay_out(at, &session, &asked, hooks) {
+    match lay_out(at, &session, &asked, Some(&refused), hooks) {
         Ok(laid) => Reply::one(laid),
         Err(why) => Reply::refused(why),
     }
 }
 
-/// Lay out one request, keep it as proposed, and answer it.
+/// Lay out one request, keep it as proposed, and answer it. After a refusal, what the provider
+/// refused is what it has to come in under.
 fn lay_out(
     at: &mut Answering<'_>,
     session: &SessionId,
     asked: &Value,
+    refused: Option<&Value>,
     hooks: &mut dyn Hooks,
 ) -> Result<Value, String> {
     crate::applying::replay(at, session).map_err(|why| why.to_string())?;
@@ -156,11 +160,19 @@ fn lay_out(
             Compacting::Allowed
         },
     };
+    let refused = refused.map(|body| refused_of(body, &rules));
+    let held = match &refused {
+        Some(refused) => balthasar_buffer::against(&held, &rows, refused, factor),
+        None => held,
+    };
     let mut laid = balthasar_buffer::lay(&rules, &ask, &rows, &held, factor);
     let mut note = rules.warning.clone();
     by_policy(
         hooks, &mut laid, &rows, &held, &mut stubs, &mut note, factor,
     );
+    if let Some(refused) = &refused {
+        balthasar_buffer::under(&mut laid, &rows, &held, refused, factor);
+    }
 
     // A summary when one is due, and a curated memory once per prompt when a helper can do it.
     let e = |e: StoreError| e.to_string();
@@ -530,14 +542,43 @@ fn policy_slots(
     Some(out)
 }
 
+/// The slots of a layout as it was answered, and the summary among them, as the rules cost them.
+fn refused_of(body: &Value, rules: &Rules) -> Refused {
+    let mut refused = Refused::default();
+    for slot in body["slots"].as_array().into_iter().flatten() {
+        let next = match (
+            slot["kind"].as_str().unwrap_or_default(),
+            slot["cursor"].as_u64(),
+        ) {
+            ("item", Some(cursor)) => Slot::Item(cursor),
+            ("stub", Some(cursor)) => Slot::Stub(cursor),
+            ("summary", _) => {
+                let end = |at: usize| slot["covers"].get(at).and_then(Value::as_u64);
+                refused.summary = Some(Covered {
+                    from: end(0).unwrap_or(0),
+                    to: end(1).unwrap_or(0),
+                    tokens: rules.estimate(slot["text"].as_str().unwrap_or_default()),
+                });
+                Slot::Summary
+            }
+            ("note", _) => Slot::Note,
+            ("memory", _) => Slot::Memory,
+            ("rules" | "observations", _) if !refused.slots.contains(&Slot::Pinned) => Slot::Pinned,
+            _ => continue,
+        };
+        refused.slots.push(next);
+    }
+    refused
+}
+
 /// Raise the factor by what the provider said, count the overflow, and hand back what the
-/// refused layout was asked with.
+/// refused layout was asked with and what it answered.
 fn tighten(
     at: &mut Answering<'_>,
     session: &SessionId,
     id: &str,
     message: &str,
-) -> Result<Value, String> {
+) -> Result<(Value, Value), String> {
     let scrollback = at
         .scrollback
         .as_ref()
@@ -578,7 +619,7 @@ fn tighten(
         prompt.overflows += 1;
         scrollback.keep_prompt(session, &prompt).map_err(e)?;
     }
-    Ok(proposal.asked)
+    Ok((proposal.asked, proposal.body))
 }
 
 /// The provider's own count in a refusal: the largest number in it that is not the window or the

@@ -8,7 +8,8 @@ mod rules;
 mod window;
 
 pub use layout::{
-    Ask, Budget, Compacting, Covered, Held, Layout, Row, Slot, account, budget, corrected, lay,
+    Ask, Budget, Compacting, Covered, Held, Layout, Refused, Row, Slot, account, against, budget,
+    corrected, lay, under,
 };
 pub use plan::{Masked, Plan, Span, plan};
 pub use policy::{Admission, Counting, Policy, Room, Unsatisfiable};

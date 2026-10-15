@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.2] - 2026-10-15
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Come in under a refused request
+
+### Build
+
+- Move to rustc 1.95
+
 ## [0.7.1] - 2026-10-14
 
 ### <!-- 7 -->⚙️ Miscellaneous Tasks
