@@ -164,7 +164,7 @@
         # Pinned to the version nixpkgs was already giving us, with the musl target added.
         # Floating to `latest` would drift the compiler underneath a workspace that builds
         # under `-Dwarnings`, where one new lint is a failed verify.
-        rust = pkgs.rust-bin.stable."1.95.0".default.override {
+        rust = pkgs.rust-bin.stable."1.96.0".default.override {
           extensions = [ "rust-src" ];
           targets = [ "x86_64-unknown-linux-musl" ];
         };

@@ -1,6 +1,6 @@
 # The compiler this repository is built with, named where rustup can see it.
 #
-# `flake.nix` already pins 1.95.0 and CI runs everything through `nix develop`, so the flake was
+# `flake.nix` already pins 1.96.0 and CI runs everything through `nix develop`, so the flake was
 # the only place that said so. Outside the dev shell `cargo` is a rustup shim, and rustup picks
 # whatever the machine's default toolchain happens to be -- which on one machine was a nightly
 # from before `slice_as_chunks` was stable, so `cargo build --release` failed on committed code
@@ -10,5 +10,5 @@
 # this changes nothing about CI or a release, and stops a bare `cargo` outside the shell from
 # quietly building with a different compiler.
 [toolchain]
-channel = "1.95.0"
+channel = "1.96.0"
 components = ["rustfmt", "clippy"]
