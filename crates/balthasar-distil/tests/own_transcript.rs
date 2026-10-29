@@ -589,3 +589,60 @@ fn a_run_that_goes_on_is_read_from_where_it_stopped() {
     );
     assert_eq!(read(&mut store, &held).already_read, 1);
 }
+
+#[test]
+fn a_rule_whose_note_was_undone_is_not_learned_again_from_where_it_was_said() {
+    let mut store = Store::ephemeral().expect("store");
+    let mut engine = Engine::new();
+    let settings = Settings::default();
+    let mut held = Transcript::ephemeral().expect("scrollback");
+    let session = SessionId::new("01UNDONE");
+    streamed(
+        &mut held,
+        &session,
+        vec![
+            said(
+                1,
+                "remember: always use tabs for indentation in this project",
+            ),
+            said(2, "remember: we deploy with fly.io"),
+        ],
+    );
+    let after = serde_json::json!({"title": "Indentation",
+        "text": "Always use tabs for indentation in this project.",
+        "evidence": {"sources": [{"session": "01UNDONE", "cursor": 1}]}});
+    held.record_change(
+        &balthasar_store::Change {
+            op: "add".into(),
+            after: Some(after.clone()),
+            state: "undone".into(),
+            by: "extract".into(),
+            at: NOW,
+            evidence: after["evidence"].clone(),
+            ..balthasar_store::Change::default()
+        },
+        Some(&session),
+    )
+    .expect("an undone note");
+
+    distil_run(
+        &mut store,
+        &mut engine,
+        &settings,
+        &held,
+        &session,
+        &ask(false),
+    )
+    .expect("distil");
+    let texts: Vec<String> = store
+        .recall(&Recall::of("", NOW))
+        .expect("recall")
+        .iter()
+        .map(|hit| hit.memory.text())
+        .collect();
+    assert!(!texts.iter().any(|t| t.contains("tabs")), "{texts:?}");
+    assert!(
+        texts.iter().any(|t| t.contains("fly.io")),
+        "the other rule stands: {texts:?}"
+    );
+}

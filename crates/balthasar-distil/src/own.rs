@@ -77,6 +77,16 @@ pub fn distil_run(
     report.by = by;
     found.candidates.extend(guessed);
 
+    // A rule the person took back by undoing its note is not learned again from where they said it.
+    let taken = held.taken_back()?;
+    found.candidates.retain(|candidate| {
+        candidate.cursor.is_none_or(|cursor| {
+            !taken
+                .iter()
+                .any(|back| back.covers(session, cursor, &candidate.text()))
+        })
+    });
+
     report.proposed = found.candidates.len();
 
     let from = Provenance {

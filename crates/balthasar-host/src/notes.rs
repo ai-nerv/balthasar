@@ -490,10 +490,41 @@ pub fn undo(at: &mut Answering<'_>, request: &Request) -> Reply {
     };
     let reverted = changes::undo(scrollback, &id, at.now);
     match reverted {
-        Ok(Ok(made)) => Reply::one(json!({ "undone": id, "change": made })),
+        Ok(Ok(made)) => match retract(at, &id) {
+            Ok(closed) => Reply::one(json!({ "undone": id, "change": made, "closed": closed })),
+            Err(why) => Reply::refused(why.to_string()),
+        },
         Ok(Err(why)) => Reply::refused(why),
         Err(why) => Reply::refused(why.to_string()),
     }
+}
+
+/// Close what the turns an undone note cited taught the project of the same rule: the person took
+/// it back. Answers how many memories closed.
+fn retract(at: &mut Answering<'_>, id: &str) -> Result<usize, balthasar_store::StoreError> {
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Ok(0);
+    };
+    let Some(back) = scrollback
+        .change(id)?
+        .as_ref()
+        .and_then(balthasar_store::TakenBack::of)
+    else {
+        return Ok(0);
+    };
+    let mut closed = 0;
+    for (session, cursor) in &back.cited {
+        for memory in at.store.witnessed_at(session, *cursor)? {
+            let Some(held) = at.store.get(&memory)? else {
+                continue;
+            };
+            if back.covers(session, *cursor, &held.text()) {
+                at.store.close(&memory, at.now)?;
+                closed += 1;
+            }
+        }
+    }
+    Ok(closed)
 }
 
 /// `approve(session, {changes})` and `reject(session, {changes})`: settle staged changes.
