@@ -9,6 +9,10 @@ use crate::{Landing, Store, StoreError, row};
 use balthasar_model::{LinkRelation, Memory, MemoryId, Timestamp, Witness};
 use rusqlite::{OptionalExtension, params};
 
+/// The most memories one dispute group is settled across, and the most passes it gets.
+const DISPUTED: usize = 64;
+const PASSES: usize = 16;
+
 impl Store {
     /// The live memory this one would collide with, if any. A fact collides on its slot;
     /// anything else collides on saying the same thing.
@@ -119,6 +123,57 @@ impl Store {
             .into_iter()
             .find(|(_, held)| balthasar_model::same_claim(held, &text))
             .map(|(id, _)| id))
+    }
+
+    /// Score every memory in `id`'s dispute group again until no number moves, and answer `id`'s
+    /// own score, when it has a group.
+    pub(crate) fn settle_disputes(
+        &mut self,
+        id: &MemoryId,
+        now: Timestamp,
+    ) -> Result<Option<f64>, StoreError> {
+        let mut group = vec![id.clone()];
+        let mut next = 0;
+        while let Some(here) = group.get(next).cloned() {
+            next += 1;
+            let mut statement = self.db().prepare(
+                "SELECT dst FROM link WHERE src = ?1 AND rel = 'contradicts' \
+                 UNION SELECT src FROM link WHERE dst = ?1 AND rel = 'contradicts' ORDER BY 1",
+            )?;
+            let near = statement
+                .query_map(params![here.as_str()], |r| {
+                    Ok(MemoryId::new(r.get::<_, String>(0)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            for other in near {
+                if group.len() < DISPUTED && !group.contains(&other) {
+                    group.push(other);
+                }
+            }
+        }
+        if group.len() == 1 {
+            return Ok(None);
+        }
+        let mut score = None;
+        for _ in 0..PASSES {
+            let mut moved = false;
+            for member in &group {
+                let before: f64 = self.db().query_row(
+                    "SELECT confidence FROM memory WHERE id = ?1",
+                    params![member.as_str()],
+                    |r| r.get(0),
+                )?;
+                let after = self.rescore_one(member, now)?;
+                moved |= (before - after).abs() > 1e-12;
+                if member == id {
+                    score = Some(after);
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+        Ok(score)
     }
 
     /// The open habit whose step names the command this habit's trigger says failed.

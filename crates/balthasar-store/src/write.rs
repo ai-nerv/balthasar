@@ -207,8 +207,15 @@ impl Store {
     /// Recompute a memory's confidence from what the store currently holds about it.
     ///
     /// Called after every change to the evidence, because a record whose number and whose
-    /// argument disagree is the one state `balthasar why` must never be able to show.
+    /// argument disagree is the one state `balthasar why` must never be able to show. What
+    /// disputes it is scored again too, since each counts against the other.
     pub fn rescore(&mut self, id: &MemoryId, now: Timestamp) -> Result<f64, StoreError> {
+        let score = self.rescore_one(id, now)?;
+        self.settle_disputes(id, now)?.map_or(Ok(score), Ok)
+    }
+
+    /// [`Store::rescore`] for one memory alone.
+    pub(crate) fn rescore_one(&mut self, id: &MemoryId, now: Timestamp) -> Result<f64, StoreError> {
         let witnesses = self.witnesses_of(id)?;
         let against = self.contradictions_of(id)?;
         let (superseded, pinned): (bool, bool) = self.db().query_row(
