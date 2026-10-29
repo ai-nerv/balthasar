@@ -80,7 +80,7 @@ balthasar.load("sections.lua")
 -- balthasar.window = {
 --   budget = { share = 0.50, margin = 0 },  -- of the window, and what is held back against a
 --                                           -- provider counting differently from this estimate
---   shares = { memory = 0.05, pinned = 0.03, summary = 0.08 },  -- the rest is the conversation
+--   shares = { memory = 0.05, pinned = 0.03, summary = 0.08, catalog = 0.03 }, -- the rest: conversation
 --   prune_at   = 0.70,   -- start stubbing old tool results
 --   compact_at = 0.85,   -- ask for a summary of the oldest turns
 --   compact_to = 0.50,   -- ...enough to bring the conversation back to half

@@ -180,8 +180,12 @@ fn a_layout_answers_in_the_contracts_shape() {
     assert_eq!(budget["summary"], 7_120);
     assert_eq!(budget["factor"], 1.0);
     assert_eq!(named(&laid), [0, 1, 2, 3], "ascending, from live");
-    assert_eq!(kinds(&laid), ["item", "item", "item", "memory", "item"]);
-    let memory = &laid["slots"][3];
+    assert_eq!(budget["catalog"], 2_670);
+    assert_eq!(
+        kinds(&laid),
+        ["catalog", "item", "item", "item", "memory", "item"]
+    );
+    let memory = &laid["slots"][4];
     assert!(memory["text"].as_str().expect("text").contains("fly.io"));
     assert_eq!(memory["ids"].as_array().expect("ids").len(), 1);
     assert_eq!(laid["jobs"], json!([]));

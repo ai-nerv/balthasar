@@ -310,8 +310,15 @@ Every layout rebuilds this projection from current sources and the current quota
 notes produce identical bytes; legacy cached mixed bodies are never reused as authority.
 The retained prompt snapshot has version 2 and is for inspection, not authorization.
 
-Magi renders `rules` on the user-instruction channel and `observations` as assistant/helper
-context. Summaries, recalled memory and old mixed `pinned` slots are also lower-trust assistant
+A `catalog` slot follows them: what the project has on record, newest first, one line per
+asserted fact or habit — its handle, its tier, its first line quoted, the handles of what it
+replaced and of anything it is still disputed with. The last line says whether that is
+everything or a page of it, so a model can tell "nothing is held about this" from "the search
+missed it". `why <handle>` answers for any line. It has its own share of the room
+(`window.shares.catalog`, 3% by default) and changes only when what is asserted changes.
+
+Magi renders `rules` on the user-instruction channel, and `observations` and `catalog` as
+assistant/helper context. Summaries, recalled memory and old mixed `pinned` slots are also lower-trust assistant
 context; legacy journal compaction uses the same boundary even without a memory service. Older consumers
 that do not know the new slot kinds may skip them; the exact current family is the tested
 combination. This separation prevents note metadata from becoming a user instruction; it is

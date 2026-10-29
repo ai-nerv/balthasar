@@ -299,3 +299,64 @@ fn slot_bytes_are_identical_across_requests_without_changes() {
     ));
     assert_eq!(first, again);
 }
+
+/// The catalog slot's text, from a layout.
+fn catalog_slot(laid: &Value) -> String {
+    laid["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .filter(|slot| slot["kind"] == "catalog")
+        .filter_map(|slot| slot["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn catalog_lists_what_stands_and_names_only_the_handle_of_what_it_replaced() {
+    let mut held = Held::seeded();
+    held.asked();
+    let text = catalog_slot(&held.one("layout", window()));
+    assert!(text.contains("QWNEWVALUE"), "{text}");
+    assert!(text.contains("· replaces ["), "{text}");
+    for gone in GONE {
+        assert!(!text.contains(gone), "{gone} in the catalog: {text}");
+    }
+    assert!(text.ends_with("That is everything on record."), "{text}");
+}
+
+#[test]
+fn catalog_says_when_it_is_truncated() {
+    let mut held = Held::seeded();
+    for n in 0..200 {
+        let body = Body::fact(
+            "service",
+            format!("port_of_worker_{n}"),
+            format!("{}", 9000 + n),
+        );
+        held.remember(body, WitnessKind::Imperative, &format!("r{n}"), NOW - DAY);
+    }
+    held.asked();
+    let text = catalog_slot(&held.one(
+        "layout",
+        json!({ "round": 0, "window": 40_000, "reply": 2_000,
+                "fixed": { "system": 600, "tools": 400 }, "query": ASKED, "idle_s": 5,
+                "helpers": [] }),
+    ));
+    assert!(text.contains("may still be held"), "{text}");
+}
+
+#[test]
+fn catalog_bytes_are_stable_without_changes() {
+    let mut held = Held::seeded();
+    held.asked();
+    let first = catalog_slot(&held.one("layout", window()));
+    let again = catalog_slot(&held.one(
+        "layout",
+        json!({ "round": 1, "window": 200_000, "reply": 8_000,
+                "fixed": { "system": 600, "tools": 400 }, "query": "something else",
+                "idle_s": 5, "helpers": [] }),
+    ));
+    assert!(!first.is_empty());
+    assert_eq!(first, again);
+}

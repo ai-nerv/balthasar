@@ -154,6 +154,13 @@ fn lay_out(
         packed
     };
 
+    let catalog = crate::catalog::catalog(
+        at,
+        (f64::from(caps.catalog) / factor) as u32,
+        rules.estimate_chars_per_token,
+    )
+    .unwrap_or_default();
+
     let known = at
         .scrollback
         .as_ref()
@@ -169,6 +176,7 @@ fn lay_out(
             tokens: rules.estimate(&s.text),
         }),
         pinned: project_notes.tokens(),
+        catalog: catalog.tokens,
         memory: if memory.ids.is_empty() {
             0
         } else {
@@ -276,6 +284,8 @@ fn lay_out(
                 Slot::Stub(cursor) => json!({ "kind": "stub", "cursor": cursor,
                                           "text": stubs.get(cursor).cloned().unwrap_or_default() }),
                 Slot::Note => json!({ "kind": "note", "text": note }),
+                Slot::Catalog => json!({ "kind": "catalog", "text": catalog.text,
+                    "tokens": fix(catalog.tokens), "ids": catalog.ids }),
                 Slot::Memory => json!({ "kind": "memory", "text": memory.text,
                                     "tokens": fix(memory.tokens), "ids": memory.ids }),
             }]
@@ -286,7 +296,8 @@ fn lay_out(
         "budget": {
             "window": b.window, "limit": b.limit, "fixed": b.fixed, "reply": b.reply, "room": b.room,
             "conversation": b.conversation, "memory": b.memory, "pinned": b.pinned,
-            "summary": b.summary, "used": b.used, "estimated_input": b.estimated_input,
+            "summary": b.summary, "catalog": b.catalog, "used": b.used,
+            "estimated_input": b.estimated_input,
             "factor": (b.factor * 1000.0).round() / 1000.0,
             // What the sizes above are worth: the weaker of what the caller can count and what
             // this layer can, so neither side reads an estimate as a certified ceiling.
@@ -525,6 +536,7 @@ fn policy_slots(
                 out.push(Slot::Stub(cursor));
             }
             ("pinned", _) if held.pinned > 0 => out.push(Slot::Pinned),
+            ("catalog", _) if held.catalog > 0 => out.push(Slot::Catalog),
             ("summary", _) if held.summary.is_some() => out.push(Slot::Summary),
             ("memory", _) if held.memory > 0 => out.push(Slot::Memory),
             ("note", _) => {
@@ -586,6 +598,7 @@ fn refused_of(body: &Value, rules: &Rules) -> Refused {
             }
             ("note", _) => Slot::Note,
             ("memory", _) => Slot::Memory,
+            ("catalog", _) => Slot::Catalog,
             ("rules" | "observations", _) if !refused.slots.contains(&Slot::Pinned) => Slot::Pinned,
             _ => continue,
         };

@@ -156,7 +156,7 @@ impl Store {
     }
 
     /// One memory, only while it is open: read from `live_memory`, without witnesses or links.
-    fn get_live(&self, id: &MemoryId) -> Result<Option<Memory>, StoreError> {
+    pub(crate) fn get_live(&self, id: &MemoryId) -> Result<Option<Memory>, StoreError> {
         let found = self
             .db()
             .query_row(

@@ -341,7 +341,7 @@ fn shares_scale_from_32k_to_a_million() {
         assert_eq!(split.room, room, "window {window}");
         assert_eq!(split.memory, (f64::from(room) * 0.05).round() as u32);
         assert_eq!(
-            split.conversation + split.memory + split.pinned + split.summary,
+            split.conversation + split.memory + split.pinned + split.summary + split.catalog,
             room
         );
     }

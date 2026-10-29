@@ -3,6 +3,7 @@
 mod applying;
 mod cadence;
 mod calendar;
+mod catalog;
 mod ceiling;
 mod clashing;
 pub(crate) mod dispatch;

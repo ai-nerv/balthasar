@@ -35,6 +35,22 @@ impl Scored {
             .max(self.lexical)
             .max(self.entity)
     }
+
+    /// A memory listed rather than searched for: no query-relative signal.
+    #[must_use]
+    pub fn of(memory: Memory) -> Self {
+        Self {
+            score: memory.confidence,
+            semantic: None,
+            lexical: 0.0,
+            entity: 0.0,
+            frecency: 0.0,
+            confidence: memory.confidence,
+            strength: memory.strength.value,
+            near: true,
+            memory,
+        }
+    }
 }
 
 /// How much each signal counts when nothing has been configured.

@@ -458,6 +458,8 @@ CREATE VIEW live_memory AS
          embedding, embed_model, confirmed_at, strength_at
   FROM memory
   WHERE valid_to IS NULL AND archived_at IS NULL AND tier <> 'archive';
+CREATE INDEX memory_catalog ON memory(scope, valid_from DESC, id DESC)
+  WHERE valid_to IS NULL AND archived_at IS NULL;
 "#;
 
 #[cfg(test)]
