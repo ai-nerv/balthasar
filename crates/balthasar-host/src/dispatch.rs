@@ -245,8 +245,18 @@ fn status(at: &mut Answering<'_>) -> Reply {
         Err(why) => return Reply::refused(why.to_string()),
     };
     let scope = at.scope.to_string();
+    let checks = balthasar_store::health(at.store, at.scrollback.as_deref()).unwrap_or_default();
+    let health: Vec<serde_json::Value> = checks
+        .iter()
+        .map(|c| {
+            serde_json::json!({ "check": c.name, "state": c.state.as_str(),
+                                     "detail": c.detail, "fix": c.fix })
+        })
+        .collect();
     Reply::one(serde_json::json!({
         "scope": scope,
+        "health": health,
+        "summary": balthasar_store::health_summary(&checks),
         "path": at.store.path().to_string_lossy(),
         "tiers": census.into_iter()
             .map(|(tier, count)| (tier, serde_json::json!(count)))

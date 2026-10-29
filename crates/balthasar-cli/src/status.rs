@@ -16,7 +16,21 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let at = now();
     let store = open(store_path, scope, tool)?;
+    let held = crate::scrollback(store_path, scope, tool).ok();
+    let mut checks = balthasar_store::health(&store, held.as_ref())?;
+    let said = loaded.log();
+    checks.push(balthasar_store::Check {
+        name: "config",
+        state: if said.is_empty() {
+            balthasar_store::HealthState::Ok
+        } else {
+            balthasar_store::HealthState::Cold
+        },
+        detail: said.first().cloned().unwrap_or_else(|| "loaded".to_owned()),
+        fix: None,
+    });
 
+    crate::say!("{}", balthasar_store::health_summary(&checks));
     crate::say!("{}", render::bold(scope.as_str()));
     crate::say!("{}", render::dim(&store.path().display().to_string()));
     crate::say!();

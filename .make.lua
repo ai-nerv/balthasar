@@ -292,6 +292,10 @@ make.recipe{ name = "test-vendor-source", desc = "Nix source retains the patched
                assert(oslo.run{ "sh", "scripts/test-vendor-source.sh" }.ok, "vendor source check failed")
              end }
 
+make.recipe{ name = "test-faults",
+             desc = "damaged stores and hostile conditions, BALTHASAR_FAULT_REPS times each",
+             run = function() sh.cargo("test", "-p", "balthasar-host", "--test", "faults") end }
+
 make.recipe{ name = "test-run-binding", desc = "transcript and scratch run identities",
              run = function() sh.cargo("test", "-p", "balthasar-host", "--test", "run_binding") end }
 

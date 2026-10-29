@@ -117,3 +117,26 @@ fn recall_strength_matches_decay_strength() {
     let expected = hit.memory.strength.at_tier(hit.memory.tier, at);
     assert!((hit.strength - expected).abs() < 1e-12);
 }
+
+#[test]
+fn health_sees_a_missing_index_row_and_reindex_mends_it() {
+    let dir = balthasar_model::scratch::Scratch::new("balthasar-health", "index");
+    let path = dir.join("memory.db");
+    let mut store = Store::open(&path).expect("store");
+    held(&mut store, "the cache lives in target", T0);
+    let checks = balthasar_store::health(&store, None).expect("health");
+    assert!(
+        balthasar_store::health_summary(&checks).ends_with("ok"),
+        "{checks:?}"
+    );
+    rusqlite::Connection::open(&path)
+        .and_then(|raw| raw.execute("DELETE FROM memory_fts", []))
+        .expect("index row gone");
+    let checks = balthasar_store::health(&store, None).expect("health");
+    let summary = balthasar_store::health_summary(&checks);
+    assert!(summary.contains("RED"), "{summary}");
+    assert!(summary.contains("balthasar reindex --text"), "{summary}");
+    store.reindex_text().expect("reindexed");
+    let checks = balthasar_store::health(&store, None).expect("health");
+    assert!(!balthasar_store::health_summary(&checks).contains("RED"));
+}

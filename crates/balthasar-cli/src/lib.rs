@@ -443,3 +443,6 @@ mod tests {
         assert!(matches!(cli.what, Some(What::Init(_))));
     }
 }
+
+#[cfg(test)]
+mod fixes;
