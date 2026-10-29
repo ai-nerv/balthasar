@@ -136,13 +136,40 @@ pub enum Arm {
     History,
     /// As many tokens as balthasar would send, of memories that answer nothing asked.
     Unrelated,
+    /// balthasar, with what it states touched as delivered, ranked with or without frecency.
+    Delivered {
+        /// Whether frecency keeps its weight, or gives it to the lexical signal.
+        frecency: bool,
+    },
+    /// balthasar, with the agent also reading the catalog of what is on record.
+    Catalog,
 }
 
 impl Arm {
     /// Whether this arm keeps a store between sessions.
     #[must_use]
     pub fn keeps_a_store(self) -> bool {
-        matches!(self, Self::Memory | Self::History | Self::Unrelated)
+        !matches!(self, Self::Nothing | Self::InWindow(_))
+    }
+}
+
+/// How many catalog lines the agent reads, and how much of each, as the host lays them out.
+const CATALOG_PAGE: usize = 120;
+const CATALOG_LINE: usize = 72;
+
+/// How one arm searches.
+#[derive(Debug, Clone, Copy)]
+struct Looking {
+    history: bool,
+    weights: balthasar_store::Weights,
+}
+
+impl Looking {
+    fn shipped() -> Self {
+        Self {
+            history: false,
+            weights: balthasar_store::Weights::default(),
+        }
     }
 }
 
@@ -173,8 +200,22 @@ pub fn measure(scenario: &Scenario, with_memory: bool) -> Result<(Score, Measure
     )
 }
 
+/// What happens between sessions, after a consolidation: the store, its scope, which session just
+/// ended and when.
+pub type Between<'a> =
+    dyn FnMut(&mut Store, &ScopeId, usize, Timestamp) -> Result<(), DistilError> + 'a;
+
 /// The same, for one named arm.
 pub fn measure_arm(scenario: &Scenario, arm: Arm) -> Result<(Score, Measured), DistilError> {
+    measure_between(scenario, arm, &mut |_, _, _, _| Ok(()))
+}
+
+/// The same, with `between` run after each session of an arm that keeps a store.
+pub fn measure_between(
+    scenario: &Scenario,
+    arm: Arm,
+    between: &mut Between<'_>,
+) -> Result<(Score, Measured), DistilError> {
     let with_memory = arm.keeps_a_store();
     // The text an agent with no memory system would still have, oldest dropped first.
     let mut window: Vec<String> = Vec::new();
@@ -184,7 +225,7 @@ pub fn measure_arm(scenario: &Scenario, arm: Arm) -> Result<(Score, Measured), D
     let mut score = Score::default();
     let mut cost = Measured::default();
 
-    for session in &scenario.sessions {
+    for (n, session) in scenario.sessions.iter().enumerate() {
         let mut ran = Ran {
             session: session.id.clone(),
             rediscovered: Vec::new(),
@@ -193,14 +234,43 @@ pub fn measure_arm(scenario: &Scenario, arm: Arm) -> Result<(Score, Measured), D
 
         for lesson in &session.lessons {
             cost.encounters += 1;
+            let shipped = Looking::shipped();
             let looked = match arm {
-                Arm::Memory => look(&store, &scope, lesson, session.at, false, &mut cost),
-                Arm::History => look(&store, &scope, lesson, session.at, true, &mut cost),
+                Arm::Memory => look(&store, &scope, lesson, session.at, shipped, &mut cost).0,
+                Arm::History => {
+                    let history = Looking {
+                        history: true,
+                        ..shipped
+                    };
+                    look(&store, &scope, lesson, session.at, history, &mut cost).0
+                }
                 Arm::Unrelated => {
                     let mut asked = Measured::default();
-                    look(&store, &scope, lesson, session.at, false, &mut asked);
+                    look(&store, &scope, lesson, session.at, shipped, &mut asked);
                     cost.injected_tokens += asked.injected_tokens;
                     false
+                }
+                Arm::Delivered { frecency } => {
+                    let w = shipped.weights;
+                    let weights = if frecency {
+                        w
+                    } else {
+                        balthasar_store::Weights {
+                            lexical: w.lexical + w.frecency,
+                            frecency: 0.0,
+                            ..w
+                        }
+                    };
+                    let tuned = Looking { weights, ..shipped };
+                    let (knew, stated) = look(&store, &scope, lesson, session.at, tuned, &mut cost);
+                    for id in &stated {
+                        store.touch(id, session.at)?;
+                    }
+                    knew
+                }
+                Arm::Catalog => {
+                    let knew = look(&store, &scope, lesson, session.at, shipped, &mut cost).0;
+                    knew || listed(&store, &scope, lesson)
                 }
                 Arm::Nothing => false,
                 // No retrieval: knowing means the answer is still in the window.
@@ -240,6 +310,7 @@ pub fn measure_arm(scenario: &Scenario, arm: Arm) -> Result<(Score, Measured), D
                 session.at + 3600,
                 false,
             )?;
+            between(&mut store, &scope, n, session.at + 3600)?;
         }
         score.sessions.push(ran);
     }
@@ -252,23 +323,25 @@ pub fn measure_arm(scenario: &Scenario, arm: Arm) -> Result<(Score, Measured), D
 ///
 /// The findable set is read at the retrieval floor and the asserted set at the injection floor,
 /// from one query, because the gap between them is the thing the two floors exist to create.
-/// `history` searches the whole record and states what it finds there closed as current.
+/// `looking.history` searches the whole record and states what it finds there closed as current.
+/// Answers whether it knew, and what it stated.
 fn look(
     store: &Store,
     scope: &ScopeId,
     lesson: &Lesson,
     at: Timestamp,
-    history: bool,
+    looking: Looking,
     cost: &mut Measured,
-) -> bool {
+) -> (bool, Vec<balthasar_model::MemoryId>) {
     let mut ask = balthasar_store::Recall::of(&lesson.intent, at);
     ask.limit = 10;
     ask.floor = floor::LIVE;
     ask.near = true;
-    ask.history = history;
+    ask.history = looking.history;
+    ask.weights = looking.weights;
 
     let started = std::time::Instant::now();
-    let found = if history {
+    let found = if looking.history {
         store.recall(&ask)
     } else {
         store.recall_current(&ask).map(|found| {
@@ -280,7 +353,9 @@ fn look(
     };
     cost.recall_us.push(started.elapsed().as_micros() as u64);
 
-    let Ok(found) = found else { return false };
+    let Ok(found) = found else {
+        return (false, Vec::new());
+    };
     let closed = |hit: &balthasar_store::Scored| {
         hit.memory.temporal.valid_to.is_some()
             || hit.memory.archived_at.is_some()
@@ -294,10 +369,12 @@ fn look(
     }
 
     let mut knew = false;
+    let mut stated = Vec::new();
     for hit in mine {
         if !(closed(hit) || hit.memory.is_assertable(floor::INJECT, at, false)) {
             continue;
         }
+        stated.push(hit.memory.id.clone());
         // What a harness would have been handed, counted for every assertion, right or wrong.
         cost.injected_tokens += hit.memory.text().len().div_ceil(4);
         if hit.memory.text().contains(&lesson.right) {
@@ -310,7 +387,25 @@ fn look(
             cost.asserted_stale += 1;
         }
     }
-    knew
+    (knew, stated)
+}
+
+/// Whether the catalog names the lesson's answer in the part of a line it shows.
+fn listed(store: &Store, scope: &ScopeId, lesson: &Lesson) -> bool {
+    let held = store
+        .catalogued(scope.as_str(), floor::INJECT, CATALOG_PAGE)
+        .unwrap_or_default();
+    held.iter().any(|hit| {
+        let text = hit.memory().text();
+        let first: String = text
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take(CATALOG_LINE)
+            .collect();
+        first.contains(&lesson.right)
+    })
 }
 
 /// Record what a session did, as a harness streaming its turns would.

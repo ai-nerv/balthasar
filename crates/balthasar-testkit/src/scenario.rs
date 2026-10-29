@@ -212,6 +212,34 @@ impl Scenario {
         }
     }
 
+    /// A decision the person states, then changes in `project`'s code halfway: the deploy target
+    /// the first session names is the one a commit later takes out.
+    #[must_use]
+    pub fn decision_in_code(project: &str, sessions: usize, start: Timestamp) -> Self {
+        let before = Lesson::new("deploy the site", "npm run deploy", "make deploy-fly");
+        let after = Lesson::new("deploy the site", "make deploy-fly", "make deploy-render");
+        let half = sessions / 2;
+        Self {
+            project: project.to_owned(),
+            sessions: (0..sessions)
+                .map(|n| {
+                    let lesson = if n < half { &before } else { &after };
+                    let asked = if n == 0 {
+                        "remember: we deploy the site with make deploy-fly".to_owned()
+                    } else {
+                        lesson.intent.clone()
+                    };
+                    Session {
+                        id: format!("01SESSION{n:04}"),
+                        at: start + n as Timestamp * DAY,
+                        asked,
+                        lessons: vec![lesson.clone()],
+                    }
+                })
+                .collect(),
+        }
+    }
+
     /// Every distinct lesson in the scenario.
     #[must_use]
     pub fn lessons(&self) -> Vec<Lesson> {
