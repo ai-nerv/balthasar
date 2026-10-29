@@ -43,7 +43,7 @@ mod write;
 mod writer;
 
 pub use chunking::{Chunk, covered, cut, revision};
-pub use current::Current;
+pub use current::{Current, presented};
 
 /// Who wrote a scratch row the model said, as opposed to one the person said.
 pub const SAID_BY_MODEL: &str = "said:model";

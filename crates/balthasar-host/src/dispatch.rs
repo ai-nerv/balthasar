@@ -262,7 +262,8 @@ fn why(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(id) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("why needs an id");
     };
-    let held = at.store.get(&MemoryId::new(id));
+    let named = at.store.resolve(id).ok().flatten();
+    let held = at.store.get(&named.unwrap_or_else(|| MemoryId::new(id)));
     match held {
         Ok(Some(memory)) => {
             let names = session_names(at);
@@ -501,7 +502,12 @@ fn forget(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
     if asked("session") {
         return forget_run(at, door, id, asked("purge"));
     }
-    let id = MemoryId::new(id);
+    let id = at
+        .store
+        .resolve(id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| MemoryId::new(id));
 
     let held = match at.store.get(&id) {
         Ok(Some(memory)) => memory,

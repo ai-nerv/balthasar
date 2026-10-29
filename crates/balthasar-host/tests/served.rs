@@ -251,3 +251,51 @@ fn a_delivered_memory_gains_access_count() {
         assert_eq!(memory.strength.access_count, 1, "{}", memory.text());
     }
 }
+
+/// The memory slot's text, from a layout.
+fn memory_slot(laid: &Value) -> String {
+    laid["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .filter(|slot| slot["kind"] == "memory")
+        .filter_map(|slot| slot["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn every_packed_line_has_a_handle_why_can_answer() {
+    let mut held = Held::seeded();
+    held.asked();
+    let text = memory_slot(&held.one("layout", window()));
+    let handles: Vec<String> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("- ["))
+        .filter_map(|rest| rest.split(']').next())
+        .map(str::to_owned)
+        .collect();
+    assert!(!handles.is_empty(), "{text}");
+    for handle in handles {
+        let reply = held.ask(&Door::Owner, "why", vec![json!(handle)]);
+        assert!(reply.ok, "why {handle}: {:?}", reply.error);
+    }
+    assert!(
+        text.contains("(you corrected, "),
+        "origin and date are shown: {text}"
+    );
+}
+
+#[test]
+fn slot_bytes_are_identical_across_requests_without_changes() {
+    let mut held = Held::seeded();
+    held.asked();
+    let first = memory_slot(&held.one("layout", window()));
+    let again = memory_slot(&held.one(
+        "layout",
+        json!({ "round": 1, "window": 200_000, "reply": 8_000,
+                "fixed": { "system": 600, "tools": 400 }, "query": ASKED, "idle_s": 5,
+                "helpers": [] }),
+    ));
+    assert_eq!(first, again);
+}

@@ -142,7 +142,7 @@ pub fn assemble(
                 continue;
             };
 
-            let line = format!("- {text}");
+            let line = balthasar_model::offered::line(&memory, &text, &memory.witnesses, None);
             let Some(line) = budget::fit(&line, allowance.saturating_sub(spent)) else {
                 break;
             };
@@ -151,18 +151,17 @@ pub fn assemble(
             lines.push(line);
         }
 
-        if lines.is_empty() {
-            continue;
+        if !lines.is_empty() {
+            let tokens = budget::tokens(&lines.join("\n"));
+            context.tokens += tokens;
+            context.sections.push(Rendered {
+                id: section.id.clone(),
+                lines,
+                tokens,
+            });
         }
-        let tokens = budget::tokens(&lines.join("\n"));
-        context.tokens += tokens;
-        context.sections.push(Rendered {
-            id: section.id.clone(),
-            lines,
-            tokens,
-        });
 
-        // Whatever this section did not use goes to the ones after it.
+        // Whatever this section did not use goes to the ones after it, an empty one's included.
         let unspent = allowance.saturating_sub(spent);
         let remaining: f64 = sections
             .iter()
@@ -210,8 +209,11 @@ fn gather(
         }
 
         for hit in store.recall_current(&recall)? {
-            let hit = hit.into_scored();
-            if store.presentation_of(&hit.memory)? != balthasar_model::Presentation::Asserted {
+            let mut hit = hit.into_scored();
+            hit.memory.witnesses = store.witnesses_of(&hit.memory.id)?;
+            if balthasar_store::presented(&hit.memory, &hit.memory.witnesses)
+                != balthasar_model::Presentation::Asserted
+            {
                 continue;
             }
             if section.takes(&hit.memory, *near)

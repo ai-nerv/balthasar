@@ -20,6 +20,7 @@ mod id;
 mod lifecycle;
 mod memory;
 pub mod noted;
+pub mod offered;
 mod relation;
 pub mod runtime;
 pub mod scratch;

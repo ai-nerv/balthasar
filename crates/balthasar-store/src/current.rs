@@ -26,20 +26,7 @@ impl Store {
     /// one witness permits. Content that looks like an instruction, on a channel that cannot
     /// carry one, is quarantined.
     pub fn presentation_of(&self, memory: &Memory) -> Result<Presentation, StoreError> {
-        let witnesses = self.witnesses_of(&memory.id)?;
-        let domains: std::collections::BTreeSet<String> = witnesses
-            .iter()
-            .map(balthasar_model::Witness::domain_of)
-            .collect();
-        let suspicious = balthasar_model::looks_like_injection(&memory.text());
-        Ok(witnesses
-            .iter()
-            .map(|w| {
-                let flagged = suspicious && !w.channel.may_be_imperative();
-                balthasar_model::presentation_for(w.channel, domains.len() > 1, flagged)
-            })
-            .min()
-            .unwrap_or(Presentation::Evidence))
+        Ok(presented(memory, &self.witnesses_of(&memory.id)?))
     }
 
     /// A search that finds only open memories, whatever `ask` says about history.
@@ -54,6 +41,24 @@ impl Store {
             .map(Current)
             .collect())
     }
+}
+
+/// [`Store::presentation_of`], from witnesses already read.
+#[must_use]
+pub fn presented(memory: &Memory, witnesses: &[balthasar_model::Witness]) -> Presentation {
+    let domains: std::collections::BTreeSet<String> = witnesses
+        .iter()
+        .map(balthasar_model::Witness::domain_of)
+        .collect();
+    let suspicious = balthasar_model::looks_like_injection(&memory.text());
+    witnesses
+        .iter()
+        .map(|w| {
+            let flagged = suspicious && !w.channel.may_be_imperative();
+            balthasar_model::presentation_for(w.channel, domains.len() > 1, flagged)
+        })
+        .min()
+        .unwrap_or(Presentation::Evidence)
 }
 
 fn is_open(memory: &Memory) -> bool {

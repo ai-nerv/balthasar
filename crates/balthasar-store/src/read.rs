@@ -134,6 +134,27 @@ impl Store {
         Ok(Some(memory))
     }
 
+    /// The memory a handle names: the whole id, or the unique memory whose id ends with it.
+    pub fn resolve(&self, handle: &str) -> Result<Option<balthasar_model::MemoryId>, StoreError> {
+        let wanted = handle.trim().to_uppercase();
+        if wanted.is_empty() {
+            return Ok(None);
+        }
+        let mut statement = self
+            .db()
+            .prepare("SELECT id FROM memory WHERE id = ?1 OR id LIKE '%' || ?1 LIMIT 2")?;
+        let found = statement
+            .query_map([&wanted], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(match found.as_slice() {
+            [one] => Some(balthasar_model::MemoryId::new(one.clone())),
+            _ => found
+                .into_iter()
+                .find(|id| *id == wanted)
+                .map(balthasar_model::MemoryId::new),
+        })
+    }
+
     /// One memory, only while it is open: read from `live_memory`, without witnesses or links.
     fn get_live(&self, id: &MemoryId) -> Result<Option<Memory>, StoreError> {
         let found = self

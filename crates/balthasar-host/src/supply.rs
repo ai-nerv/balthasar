@@ -130,21 +130,24 @@ pub(crate) fn pack(
             continue;
         }
         said.push(same);
-        let line = format!("- {}\n", text.trim());
         let id = memory.id.to_string();
-        let shown = at
-            .store
-            .presentation_of(memory)
-            .unwrap_or(balthasar_model::Presentation::Evidence);
+        let witnesses = at.store.witnesses_of(&memory.id).unwrap_or_default();
+        let shown = balthasar_store::presented(memory, &witnesses);
         if !shown.may_inject() {
             continue;
         }
         if shown != balthasar_model::Presentation::Asserted
             || !memory.is_assertable(at.inject_floor, at.now, true)
         {
-            hedged.push((line, id));
+            let doubt = balthasar_model::offered::doubt(memory, at.inject_floor, at.now);
+            let line = balthasar_model::offered::line(memory, &text, &witnesses, Some(&doubt));
+            hedged.push((format!("{line}\n"), id));
             continue;
         }
+        let line = format!(
+            "{}\n",
+            balthasar_model::offered::line(memory, &text, &witnesses, None)
+        );
         let heading = if headed { 0 } else { CURRENT.len() + 1 };
         if out.len() + heading + line.len() > total {
             continue;
