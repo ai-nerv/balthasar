@@ -586,7 +586,7 @@ fn forget_run(at: &mut Answering<'_>, door: &Door, handle: &str, purge: bool) ->
         },
         None => 0,
     };
-    let memories = match balthasar_store::purge_session(at.store, &session) {
+    let memories = match balthasar_store::purge_session(at.store, &session, at.now) {
         Ok(n) => n,
         Err(why) => return Reply::refused(why.to_string()),
     };

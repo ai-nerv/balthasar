@@ -5,7 +5,7 @@
 
 use crate::score::{Scored, Weights, cosine, coverage, frecency, fts_query, relative, terms_of};
 use crate::{Store, StoreError, row};
-use balthasar_model::{Link, Memory, MemoryId, Privacy, Tier, Timestamp, Witness, WitnessId};
+use balthasar_model::{Link, Memory, MemoryId, Tier, Timestamp, Witness, WitnessId};
 use rusqlite::{OptionalExtension, params};
 
 /// What a recall was asked for.
@@ -15,7 +15,8 @@ pub struct Recall {
     pub query: String,
     /// How many to answer with.
     pub limit: usize,
-    /// Only these tiers, or every durable one when empty.
+    /// Only these tiers, or every tier when empty: scratch too, and the archive when
+    /// [`Recall::history`] and `include_archived` both let it in.
     pub tiers: Vec<Tier>,
     /// Confidence a memory must reach to come back at all. The *live* floor, not the injection
     /// floor: a memory below assertion is still findable.
@@ -186,7 +187,7 @@ impl Store {
     pub fn links_of(&self, id: &MemoryId) -> Result<Vec<Link>, StoreError> {
         let mut statement = self
             .db()
-            .prepare("SELECT dst, rel, at FROM link WHERE src = ?1 ORDER BY at")?;
+            .prepare("SELECT dst, rel, at FROM link WHERE src = ?1 ORDER BY at, dst, rel")?;
         let found = statement
             .query_map(params![id.as_str()], |r| Ok(row::link(r)))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -209,7 +210,7 @@ impl Store {
                AND b.archived_at IS NULL AND b.valid_to IS NULL \
                AND NOT EXISTS (SELECT 1 FROM link r WHERE r.src = l.src \
                                  AND r.dst = l.dst AND r.rel = 'reconciled') \
-             ORDER BY l.at DESC",
+             ORDER BY l.at DESC, l.src, l.dst",
         )?;
         let pairs: Vec<(String, String)> = statement
             .query_map(params![scope], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -262,7 +263,7 @@ impl Store {
                 "SELECT id FROM memory WHERE scope = ?1 AND subject = ?2 AND predicate = ?3 \
                    AND tier IN ('fact', 'archive') AND valid_from <= ?4 \
                    AND (valid_to IS NULL OR valid_to > ?4) \
-                 ORDER BY valid_from DESC LIMIT 1",
+                 ORDER BY valid_from DESC, id DESC LIMIT 1",
                 params![scope, subject, predicate, at],
                 |r| r.get(0),
             )
@@ -331,8 +332,7 @@ impl Store {
 
         let mut scored: Vec<Scored> = candidates
             .into_iter()
-            .filter(|(memory, _)| memory.privacy.may_reach(ask.remote))
-            .filter(|(memory, _)| memory.privacy != Privacy::Secret || ask.include_archived)
+            .filter(|(memory, _)| memory.privacy.may_show(ask.remote, ask.history))
             .filter(|(memory, _)| memory.confidence >= ask.floor)
             .map(|(memory, lexical)| {
                 let w = ask.weights;
@@ -382,7 +382,11 @@ impl Store {
 
         // Answering less than the caller asked for is not answering.
         scored.retain(|hit| hit.relevance() >= ask.relevance);
-        scored.sort_by(|a, b| b.score.total_cmp(&a.score));
+        scored.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.memory.id.as_str().cmp(b.memory.id.as_str()))
+        });
         scored.truncate(ask.limit);
         Ok(scored)
     }
@@ -487,7 +491,7 @@ impl Store {
         at_least: usize,
     ) -> Result<Vec<Cluster>, StoreError> {
         let mut statement = self.db().prepare(
-            "SELECT content_hash, min(text), min(observed_at), count(DISTINCT session)              FROM memory              WHERE scope = ?1 AND tier = 'scratch' AND archived_at IS NULL                AND session IS NOT NULL AND text != '' AND who IS NOT 'said:model'              GROUP BY content_hash              HAVING count(DISTINCT session) >= ?2              ORDER BY count(DISTINCT session) DESC, min(observed_at)",
+            "SELECT content_hash, min(text), min(observed_at), count(DISTINCT session)              FROM memory              WHERE scope = ?1 AND tier = 'scratch' AND archived_at IS NULL                AND session IS NOT NULL AND text != '' AND who IS NOT 'said:model'              GROUP BY content_hash              HAVING count(DISTINCT session) >= ?2              ORDER BY count(DISTINCT session) DESC, min(observed_at), content_hash",
         )?;
         let groups = statement
             .query_map(params![scope, at_least as i64], |r| {
@@ -519,7 +523,7 @@ impl Store {
         hash: &str,
     ) -> Result<Vec<balthasar_model::SessionId>, StoreError> {
         let mut statement = self.db().prepare(
-            "SELECT DISTINCT session FROM memory              WHERE scope = ?1 AND content_hash = ?2 AND tier = 'scratch' AND session IS NOT NULL                AND who IS NOT 'said:model'              ORDER BY observed_at",
+            "SELECT DISTINCT session FROM memory              WHERE scope = ?1 AND content_hash = ?2 AND tier = 'scratch' AND session IS NOT NULL                AND who IS NOT 'said:model'              ORDER BY observed_at, session",
         )?;
         let found = statement
             .query_map(params![scope, hash], |r| {

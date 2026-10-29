@@ -30,6 +30,12 @@ pub struct Args {
     #[arg(long)]
     purge: bool,
 
+    /// With `--purge`, also take its text out of every turn that still quotes it.
+    ///
+    /// A purge alone leaves what was said in the scrollback, and its preview lists those turns.
+    #[arg(long, requires = "purge")]
+    redact_turns: bool,
+
     /// Do not ask before purging.
     #[arg(long)]
     yes: bool,
@@ -91,16 +97,56 @@ pub fn run(
             ))
         );
     }
+    let held = scrollback(store_path, scope, tool)?;
+    let quoting = held.quoting(&memory.text())?;
+    if !quoting.is_empty() && !args.how.framed() {
+        let turns: Vec<String> = quoting
+            .iter()
+            .map(|(session, cursor)| format!("{}#{cursor}", render::short(session.as_str())))
+            .collect();
+        crate::say!(
+            "{}",
+            render::dim(&format!(
+                "{} turn(s) still quote it: {}{}",
+                quoting.len(),
+                turns.join(", "),
+                if args.redact_turns {
+                    " — they will be redacted"
+                } else {
+                    " — add --redact-turns to take it out of them"
+                }
+            ))
+        );
+    }
     if !args.yes && !confirmed(&memory.text())? {
         crate::say!("{}", render::dim("left alone"));
         return Ok(());
     }
     let gone = balthasar_store::purge(&mut store, &id)?;
     anyhow::ensure!(gone == 1, "nothing was removed");
+    let redacted = if args.redact_turns {
+        held.redact(&memory.text())?
+    } else {
+        0
+    };
     loaded.tell("forget", &[described.clone(), serde_json::json!("purged")]);
     if args.how.framed() {
-        args.how.one(went("purged", &described));
+        let mut said = went("purged", &described);
+        if let Some(fields) = said.as_object_mut() {
+            let quoted: Vec<_> = quoting
+                .iter()
+                .map(|(session, cursor)| {
+                    serde_json::json!({"session": session.as_str(), "cursor": cursor})
+                })
+                .collect();
+            fields.insert("quoted_by".to_owned(), serde_json::json!(quoted));
+            fields.insert("redacted".to_owned(), serde_json::json!(redacted));
+        }
+        args.how.one(said);
         return Ok(());
+    }
+    if redacted > 0 {
+        crate::say!("redacted {redacted} turn(s)");
     }
     crate::say!("purged {}", render::dim(&memory.text()));
     crate::say!(
@@ -203,7 +249,7 @@ fn run_session(
 
     // All three, or the run is not forgotten.
     let gone = balthasar_store::purge_run(&held, &session)?;
-    let memories = balthasar_store::purge_session(&mut store, &session)?;
+    let memories = balthasar_store::purge_session(&mut store, &session, now())?;
     let mut pad = balthasar_store::Scratchpad::at(crate::runs_under(store_path, scope, tool));
     let scratch = balthasar_store::purge_scratch(&mut pad, &session)?;
 

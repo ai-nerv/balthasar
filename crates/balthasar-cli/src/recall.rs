@@ -478,7 +478,7 @@ fn passes(
     }
     memory.confidence >= ask.floor
         && memory.strength.at(at) >= balthasar_model::floor::SPENT
-        && memory.privacy.may_reach(ask.remote)
+        && memory.privacy.may_show(ask.remote, ask.history)
 }
 
 /// Which stores answer a search: the scope asked for, and `global` underneath it unless it

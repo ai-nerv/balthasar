@@ -250,7 +250,7 @@ fn forgetting_a_run_takes_what_it_owned_and_leaves_what_it_only_saw() {
         )
         .expect("attach");
 
-    balthasar_store::purge_session(&mut store, &doomed).expect("purge session");
+    balthasar_store::purge_session(&mut store, &doomed, NOW).expect("purge session");
 
     assert!(
         store.get(&mine_id).expect("get").is_none(),
@@ -332,7 +332,7 @@ fn forgetting_a_source_does_not_take_honest_memories_with_it() {
         )
         .expect("attach");
 
-    let gone = balthasar_store::purge_domain(&mut store, &bad).expect("purge domain");
+    let gone = balthasar_store::purge_domain(&mut store, &bad, NOW).expect("purge domain");
 
     assert_eq!(gone, 1, "only what stood on that source alone");
     assert!(store.get(&theirs_id).expect("get").is_none());
@@ -390,7 +390,7 @@ fn forgetting_a_run_closes_all_three_of_its_hiding_places() {
             .expect("keep");
     }
 
-    balthasar_store::purge_session(&mut store, &doomed).expect("session");
+    balthasar_store::purge_session(&mut store, &doomed, NOW).expect("session");
     balthasar_store::purge_run(&held, &doomed).expect("run");
     assert!(
         balthasar_store::purge_scratch(&mut pad, &doomed).expect("scratch"),

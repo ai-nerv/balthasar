@@ -228,9 +228,14 @@ fn gather(
 
     if section.preserve_order {
         // Chronological, oldest first.
-        found.sort_by_key(|(_, memory)| memory.temporal.when());
+        found.sort_by(|a, b| {
+            (a.1.temporal.when(), a.1.id.as_str()).cmp(&(b.1.temporal.when(), b.1.id.as_str()))
+        });
     } else {
-        found.sort_by(|a, b| b.0.total_cmp(&a.0));
+        found.sort_by(|a, b| {
+            b.0.total_cmp(&a.0)
+                .then_with(|| a.1.id.as_str().cmp(b.1.id.as_str()))
+        });
     }
     Ok(found.into_iter().map(|(_, memory)| memory).collect())
 }

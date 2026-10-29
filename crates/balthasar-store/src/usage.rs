@@ -286,7 +286,8 @@ impl Store {
             "SELECT a.attribution_kind, o.kind, o.observed_at \
              FROM action_memory m \
              JOIN action_use a ON a.id = m.action_id \
-             LEFT JOIN outcome o ON o.action_id = a.id \
+             LEFT JOIN outcome o ON o.id = (SELECT id FROM outcome WHERE action_id = a.id \
+                                            ORDER BY observed_at DESC, id DESC LIMIT 1) \
              WHERE m.memory_id = ?1",
         )?;
         let rows = statement

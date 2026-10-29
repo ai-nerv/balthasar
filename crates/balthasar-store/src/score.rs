@@ -98,7 +98,13 @@ impl Weights {
 
     #[must_use]
     pub fn total(self) -> f64 {
-        self.semantic + self.lexical + self.entity + self.frecency + self.confidence + self.strength
+        self.semantic
+            + self.lexical
+            + self.entity
+            + self.frecency
+            + self.confidence
+            + self.strength
+            + self.scope
     }
 }
 
@@ -328,6 +334,11 @@ mod scoring {
         let with = Weights::default();
         let without = with.without_vectors();
         assert!((with.total() - without.total()).abs() < 1e-9);
+        assert!(
+            (with.total() - 1.0).abs() < 1e-9,
+            "scope counted too: {}",
+            with.total()
+        );
         assert_eq!(without.semantic, 0.0);
     }
 }

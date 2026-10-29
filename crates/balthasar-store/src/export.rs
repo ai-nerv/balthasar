@@ -67,24 +67,33 @@ pub struct Row {
 impl Store {
     /// Every scored decision the ledger holds, as training rows.
     ///
-    /// One row per candidate per search, joined to whatever happened afterwards. A candidate
-    /// nobody acted on still produces a row: "was returned and nothing followed" is a label,
-    /// and a dataset containing only the successes teaches a model that everything works.
+    /// One row per candidate per search, joined to whatever happened afterwards: the first
+    /// injection of that search to show it, the first action of it to use the memory, and that
+    /// action's latest outcome, never one row per pairing. A candidate nobody acted on still
+    /// produces a row: "was returned and nothing followed" is a label, and a dataset containing
+    /// only the successes teaches a model that everything works.
     pub fn training_rows(&self, limit: usize) -> Result<Vec<Row>, StoreError> {
         let mut statement = self.db().prepare(
             "SELECT r.id, r.query_hash, r.config_fingerprint, r.vector_available, r.requested_at, \
                     c.memory_id, c.rank, c.selected, c.score, c.semantic, c.lexical, c.entity, \
                     c.frecency, c.confidence, c.strength, c.scope_signal, \
-                    im.presentation_mode, o.kind, a.attribution_kind \
-             FROM recall_candidate c \
+                    (SELECT im.presentation_mode FROM injection i \
+                       JOIN injection_memory im ON im.injection_id = i.id \
+                      WHERE i.recall_id = r.id AND im.memory_id = c.memory_id \
+                      ORDER BY i.created_at, i.id LIMIT 1), \
+                    (SELECT o.kind FROM outcome o WHERE o.action_id = a.id \
+                      ORDER BY o.observed_at DESC, o.id DESC LIMIT 1), \
+                    a.attribution_kind \
+             FROM (SELECT c.*, \
+                          (SELECT a.id FROM action_use a \
+                             JOIN action_memory am ON am.action_id = a.id \
+                             JOIN injection i ON i.id = a.injection_id \
+                            WHERE i.recall_id = c.recall_id AND am.memory_id = c.memory_id \
+                            ORDER BY a.reported_at, a.id LIMIT 1) AS action \
+                   FROM recall_candidate c) c \
              JOIN recall_run r ON r.id = c.recall_id \
-             LEFT JOIN injection i ON i.recall_id = r.id \
-             LEFT JOIN injection_memory im \
-                    ON im.injection_id = i.id AND im.memory_id = c.memory_id \
-             LEFT JOIN action_memory am ON am.memory_id = c.memory_id \
-             LEFT JOIN action_use a ON a.id = am.action_id AND a.injection_id = i.id \
-             LEFT JOIN outcome o ON o.action_id = a.id \
-             ORDER BY r.requested_at DESC, c.rank \
+             LEFT JOIN action_use a ON a.id = c.action \
+             ORDER BY r.requested_at DESC, r.id, c.rank \
              LIMIT ?1",
         )?;
 

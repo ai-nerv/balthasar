@@ -113,7 +113,12 @@ this in March, it may be stale" instead of stating it flatly.
 
 **No memory is ever deleted.** Superseded, contradicted, decayed past the floor, forgotten on
 purpose — every one of those is a column. `balthasar forget --purge` is the single exception, and it
-exists so that "delete the key I pasted" can be answered with yes. What is not a memory is
+exists so that "delete the key I pasted" can be answered with yes. Its preview names every turn
+that still quotes the text, and `--redact-turns` takes it out of them too; a purge merges the
+search indexes afterwards, so no page of them keeps a deleted word. Purging a run takes the notes
+made only of it and the citations of it from the rest, and what it witnessed is scored again
+without it. A `secret` memory is never injected and is found only by the owner's
+`recall --all`. What is not a memory is
 bounded: derived indexes are rebuilt, the recall ledger keeps what its retention says, and an
 applied layout goes after thirty days, keeping each run's newest. Turns are kept for good unless
 `balthasar.retain_days` is set; then a session quiet that long loses every copy of its turns but

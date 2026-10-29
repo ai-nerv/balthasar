@@ -62,7 +62,8 @@ pub enum Privacy {
     Open,
     /// Never leaves this machine. Injected for a local model, withheld from a remote one.
     Local,
-    /// Never injected at all. Found only by an explicit search by the person who owns it.
+    /// Never injected at all. Found only by the owner's own search of the record, the one a
+    /// history search makes (`balthasar recall --all`).
     Secret,
 }
 
@@ -85,6 +86,13 @@ impl Privacy {
             Self::Local => !remote,
             Self::Secret => false,
         }
+    }
+
+    /// Whether a search may return this: anything that may reach `remote`, and a secret only
+    /// to a search of the record.
+    #[must_use]
+    pub fn may_show(self, remote: bool, record: bool) -> bool {
+        self.may_reach(remote) || (self == Self::Secret && record)
     }
 }
 
@@ -177,6 +185,16 @@ mod tests {
         assert!(!Privacy::Local.may_reach(true));
         assert!(Privacy::Open.may_reach(true));
         assert!(!Privacy::Secret.may_reach(false));
+    }
+
+    #[test]
+    fn a_secret_is_shown_only_to_a_search_of_the_record() {
+        assert!(!Privacy::Secret.may_show(false, false));
+        assert!(Privacy::Secret.may_show(true, true));
+        assert!(
+            !Privacy::Local.may_show(true, true),
+            "the record is no way around remote"
+        );
     }
 
     #[test]

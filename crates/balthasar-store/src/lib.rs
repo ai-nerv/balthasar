@@ -28,6 +28,7 @@ mod paths;
 mod placed;
 mod private;
 mod purge;
+mod quoting;
 mod read;
 mod read_through;
 mod relate;
@@ -71,6 +72,7 @@ pub use purge::{
     Closure, DAY, Expired, LAYOUT_KEPT, Pruned, closure_of, expired, prune_layouts, prune_turns,
     purge, purge_domain, purge_run, purge_scratch, purge_session,
 };
+pub use quoting::REDACTED;
 pub use read::{Cluster, Recall};
 pub use read_through::RunRead;
 pub use relate::Reach;
