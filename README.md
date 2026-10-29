@@ -161,7 +161,7 @@ one. Vectors rank only the owner's `recall`; `layout` and `context` never embed 
 
 Built. M0–M9, F0–F9, and the three things a survey of the field turned up afterwards —
 searching what was said, the control arm that can lose, and an erasure that reaches what was
-derived from what. 1579 tests, fourteen gates.
+derived from what. 1756 tests, fifteen gates.
 
 ```sh
 balthasar serve                     # listen for a harness; its key is in <socket>.key
@@ -254,6 +254,7 @@ The gates are not advisory:
 | `gate-hermetic` | the suite leaves nothing behind in `$TMPDIR` |
 | `gate-wire` | one way of saying a thing crosses a boundary |
 | `gate-sandbox` | one Lua VM, built in one place, and it is sandboxed |
+| `gate-served` | nothing closed or forgotten is read for a prompt outside the live view |
 | `gate-family` | the binary answers the family contract |
 | `gate-role` | the binary fills the memory role |
 | `gate-no-llm` | the suite passes with no key, no network, no embeddings |
@@ -400,12 +401,13 @@ without one, their first new resolution cannot reconstruct previously erased tar
 
 Extraction queues whole original transcript rows, never truncated row prefixes or helper stubs.
 `memory.extract_bytes` bounds the input string in UTF-8 bytes (default 100,000, clamped to
-4,096–1,000,000). Instructions and the output allowance are separate. Each job records only
-its represented cursor range. Queueing does not acknowledge progress: accepted completion
-commits note effects, audit, job result and acknowledgment together. Acknowledgments advance
-only through contiguous ranges; malformed answers, rejected operations and changed source
-snapshots leave coverage pending. Supported operations in a partly rejected batch remain
-audited and idempotent on retry. A valid empty result acknowledges its represented range.
+4,096–160,000, what one helper input may hold). Instructions and the output allowance are
+separate. Each job records only its represented cursor range. Queueing does not acknowledge
+progress: accepted completion commits note effects, audit, job result and acknowledgment
+together. Acknowledgments advance only through contiguous ranges; malformed answers and changed
+source snapshots leave coverage pending. A rejected operation is audited where it was refused
+and its range still counts as read, so one bad operation does not hold back the spans after it.
+A valid empty result acknowledges its represented range.
 
 Automatic failure recovery retries a job once, then leaves it visibly failed. A row too large
 for the input budget stays blocked rather than skipped. `jobs(session, {inspect=true})` returns
