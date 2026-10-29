@@ -18,7 +18,7 @@ pub fn lead(text: &str) -> String {
 ///
 /// The claims must share an opening run of at least two words, and with any shared ending it
 /// must be at least half of the shorter claim. What differs between them must be a value: up to
-/// [`VALUE_WORDS`] words on each side, or words added on one side only.
+/// `VALUE_WORDS` words on each side, or words added on one side only.
 #[must_use]
 pub fn same_claim_different_value(before: &str, after: &str) -> bool {
     let a = clause(before);
