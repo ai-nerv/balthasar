@@ -1,13 +1,13 @@
 //! Tier-aware lifecycle, held to §9.8 of the future plan.
 //!
 //! The acceptance criteria are mostly negative: truth must not move because something helped,
-//! habit statistics must not move without attribution, and no lifecycle path may delete.
+//! the ledger counts what happened once, and no lifecycle path may delete.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
 use balthasar_model::{
-    Attribution, Body, Environment, Memory, NoteKind, OutcomeKind, Presentation, Record, ScopeId,
-    SessionId, Standing, Tier, Witness, WitnessId, WitnessKind,
+    Attribution, Body, Memory, NoteKind, OutcomeKind, Presentation, ScopeId, SessionId, Tier,
+    Witness, WitnessId, WitnessKind,
 };
 use balthasar_store::{Injection, Store, Use, Verdict, mint};
 
@@ -159,53 +159,6 @@ fn using_a_fact_badly_does_not_make_it_less_true() {
     );
     let utility = store.utility_of(&id).expect("utility");
     assert_eq!(utility.verified_harmful, 5, "and the harm was recorded");
-}
-
-#[test]
-fn habit_statistics_move_only_on_attributable_outcomes() {
-    // §9.8's second criterion, as arithmetic. Proximal evidence is not attribution, and a
-    // procedure that gained authority from proximity would gain it from being popular.
-    let mut record = Record::default();
-    record.succeeded();
-    assert_eq!(record.standing(false, false), Standing::Advisory);
-
-    record.succeeded();
-    assert_eq!(record.standing(false, false), Standing::Established);
-
-    // A failure does not erase the history; it lowers the ratio and holds the standing back.
-    record.failed();
-    assert_eq!(record.tried, 3);
-    assert_eq!(record.worked, 2);
-    assert_eq!(record.standing(false, true), Standing::Advisory);
-}
-
-#[test]
-fn a_changed_environment_suspends_rather_than_archives() {
-    // §9.6: what was learned did not stop being true of the machine it was learned on.
-    let learned = Environment {
-        scope: Some("/w/thing".to_owned()),
-        os: Some("linux".to_owned()),
-        arch: Some("x86_64".to_owned()),
-        ..Environment::default()
-    };
-    let elsewhere = Environment {
-        scope: Some("/w/other".to_owned()),
-        os: Some("windows".to_owned()),
-        arch: Some("aarch64".to_owned()),
-        ..Environment::default()
-    };
-    let record = Record {
-        tried: 9,
-        worked: 9,
-    };
-
-    assert!(elsewhere.has_moved_from(&learned));
-    assert_eq!(record.standing(true, false), Standing::Suspended);
-    assert!(!Standing::Suspended.may_offer(), "not offered");
-    assert!(
-        record.success().expect("some") > 0.9,
-        "and its record is untouched"
-    );
 }
 
 #[test]

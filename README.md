@@ -149,12 +149,18 @@ goes on is read from where it stopped. `balthasar.ladder = false` turns it off, 
 turns cold when turns have waited more than two days for a consolidation.
 
 **What was said is searchable.** A claim stated once, never repeated and never extracted lives
-in the transcript and nowhere else. `recall` answers from it too, as evidence — never as truth.
+in the transcript and nowhere else. `scroll` finds it in its session's turns; `recall` never
+answers from them, so nothing reaches a model only because it was once said.
+
+**Built, not wired.** The advisor and the logistic ranker are exercised only by their own tests
+until an evaluation shows either earns a place in what a model is told. Nothing derives a causal
+edge: the rule pairing a failure with its fix needed a memory per command, and nothing writes
+one. Vectors rank only the owner's `recall`; `layout` and `context` never embed the turn.
 
 ## Status
 
 Built. M0–M9, F0–F9, and the three things a survey of the field turned up afterwards —
-searching the spans, the control arm that can lose, and an erasure that reaches what was
+searching what was said, the control arm that can lose, and an erasure that reaches what was
 derived from what. 1579 tests, fourteen gates.
 
 ```sh

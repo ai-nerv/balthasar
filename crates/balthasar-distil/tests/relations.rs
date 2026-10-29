@@ -6,10 +6,10 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
-use balthasar_distil::{Step, Thresholds, entities, overlap, repairs, temporal};
+use balthasar_distil::{Thresholds, entities, overlap, temporal};
 use balthasar_model::{
-    Body, Derivation, Family, Memory, MemoryId, NoteKind, ScopeId, SessionId, Temporal, Tier, View,
-    Witness, WitnessId, WitnessKind,
+    Body, Derivation, Family, Memory, MemoryId, NoteKind, Relation, ScopeId, SessionId, Temporal,
+    Tier, View, Witness, WitnessId, WitnessKind,
 };
 use balthasar_store::{Reach, Store, mint};
 
@@ -59,31 +59,30 @@ fn a_repair_story() -> (Store, MemoryId, MemoryId, MemoryId) {
     (store, ids[0].clone(), ids[1].clone(), ids[2].clone())
 }
 
+/// Causal edges between a failure and its fix, planted as a structural derivation would.
+fn fixed(failure: &MemoryId, fix: &MemoryId) -> Vec<Relation> {
+    let edge = |from: &MemoryId, to: &MemoryId, view, weight| Relation {
+        from: from.clone(),
+        to: to.clone(),
+        view,
+        weight,
+        source: Derivation::Structure,
+        derivation_version: 1,
+        evidence_cursor: Some(1),
+        created_at: NOW,
+    };
+    vec![
+        edge(fix, failure, View::Resolved, 0.8),
+        edge(failure, fix, View::Caused, 0.6),
+    ]
+}
+
 #[test]
 fn a_causal_query_reaches_the_fix_from_the_failure() {
     // The question the whole family exists for: "why did this fail / what fixed it" has to
     // return the repair when the search only matched the failure.
     let (mut store, failure, fix, _) = a_repair_story();
-    let edges = repairs(
-        &[
-            Step {
-                memory: failure.clone(),
-                episode: "e1".to_owned(),
-                command: "cargo test".to_owned(),
-                failed: true,
-                cursor: Some(1),
-            },
-            Step {
-                memory: fix.clone(),
-                episode: "e1".to_owned(),
-                command: "make test".to_owned(),
-                failed: false,
-                cursor: Some(2),
-            },
-        ],
-        NOW,
-    );
-    store.relate(&edges).expect("relate");
+    store.relate(&fixed(&failure, &fix)).expect("relate");
 
     let found = store
         .traverse(
@@ -102,27 +101,7 @@ fn a_causal_query_reaches_the_fix_from_the_failure() {
 fn the_unrelated_memory_is_not_dragged_in() {
     // A traversal that returned everything would beat search by being indiscriminate.
     let (mut store, failure, fix, wifi) = a_repair_story();
-    store
-        .relate(&repairs(
-            &[
-                Step {
-                    memory: failure.clone(),
-                    episode: "e1".to_owned(),
-                    command: "cargo test".to_owned(),
-                    failed: true,
-                    cursor: Some(1),
-                },
-                Step {
-                    memory: fix,
-                    episode: "e1".to_owned(),
-                    command: "make test".to_owned(),
-                    failed: false,
-                    cursor: Some(2),
-                },
-            ],
-            NOW,
-        ))
-        .expect("relate");
+    store.relate(&fixed(&failure, &fix)).expect("relate");
 
     let found = store
         .traverse(&[failure], &[Family::Causal], &Reach::default())
@@ -140,27 +119,7 @@ fn three_families_still_answer_with_no_embedder() {
     store
         .relate(&temporal(&held, &Thresholds::default(), NOW))
         .expect("temporal");
-    store
-        .relate(&repairs(
-            &[
-                Step {
-                    memory: failure.clone(),
-                    episode: "e1".to_owned(),
-                    command: "cargo test".to_owned(),
-                    failed: true,
-                    cursor: Some(1),
-                },
-                Step {
-                    memory: fix.clone(),
-                    episode: "e1".to_owned(),
-                    command: "make test".to_owned(),
-                    failed: false,
-                    cursor: Some(2),
-                },
-            ],
-            NOW,
-        ))
-        .expect("causal");
+    store.relate(&fixed(&failure, &fix)).expect("causal");
     store
         .relate(&entities(
             &[
