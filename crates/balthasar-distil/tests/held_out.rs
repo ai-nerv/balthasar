@@ -17,7 +17,10 @@ fn cases(name: &str) -> Option<Vec<Case>> {
         .join("tests/held-out")
         .join(name);
     let Ok(text) = std::fs::read_to_string(&path) else {
-        println!("no held-out set at {}: waived, see held-out/README.md", path.display());
+        println!(
+            "no held-out set at {}: waived, see held-out/README.md",
+            path.display()
+        );
         return None;
     };
     let held: Vec<Case> = text
