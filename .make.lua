@@ -299,6 +299,13 @@ make.recipe{ name = "test-faults",
              desc = "damaged stores and hostile conditions, BALTHASAR_FAULT_REPS times each",
              run = function() sh.cargo("test", "-p", "balthasar-host", "--test", "faults") end }
 
+make.recipe{ name = "test-held-out",
+             desc = "F2 and F6 as a person wrote them after the freeze; see held-out/README.md",
+             run = function()
+               sh.cargo("test", "-p", "balthasar-distil", "--test", "held_out", "--", "--ignored",
+                        "--nocapture")
+             end }
+
 make.recipe{ name = "perf",
              desc = "layout and recall p95 at 20,000 live memories; BALTHASAR_PERF_SCALE scales the budgets",
              run = function()
