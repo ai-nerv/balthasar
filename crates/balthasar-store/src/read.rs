@@ -449,7 +449,8 @@ impl Store {
     ) -> Result<Vec<balthasar_model::MemoryId>, StoreError> {
         let mut statement = self.db().prepare(
             "SELECT id FROM memory \
-             WHERE scope = ?1 AND content_hash = ?2 AND tier = 'scratch' AND archived_at IS NULL",
+             WHERE scope = ?1 AND content_hash = ?2 AND tier = 'scratch' AND archived_at IS NULL \
+               AND who IS NOT 'said:model'",
         )?;
         let found = statement
             .query_map(params![scope, hash], |r| {
@@ -465,7 +466,7 @@ impl Store {
         at_least: usize,
     ) -> Result<Vec<Cluster>, StoreError> {
         let mut statement = self.db().prepare(
-            "SELECT content_hash, min(text), min(observed_at), count(DISTINCT session)              FROM memory              WHERE scope = ?1 AND tier = 'scratch' AND archived_at IS NULL                AND session IS NOT NULL AND text != ''              GROUP BY content_hash              HAVING count(DISTINCT session) >= ?2              ORDER BY count(DISTINCT session) DESC, min(observed_at)",
+            "SELECT content_hash, min(text), min(observed_at), count(DISTINCT session)              FROM memory              WHERE scope = ?1 AND tier = 'scratch' AND archived_at IS NULL                AND session IS NOT NULL AND text != '' AND who IS NOT 'said:model'              GROUP BY content_hash              HAVING count(DISTINCT session) >= ?2              ORDER BY count(DISTINCT session) DESC, min(observed_at)",
         )?;
         let groups = statement
             .query_map(params![scope, at_least as i64], |r| {
@@ -497,7 +498,7 @@ impl Store {
         hash: &str,
     ) -> Result<Vec<balthasar_model::SessionId>, StoreError> {
         let mut statement = self.db().prepare(
-            "SELECT DISTINCT session FROM memory              WHERE scope = ?1 AND content_hash = ?2 AND tier = 'scratch' AND session IS NOT NULL              ORDER BY observed_at",
+            "SELECT DISTINCT session FROM memory              WHERE scope = ?1 AND content_hash = ?2 AND tier = 'scratch' AND session IS NOT NULL                AND who IS NOT 'said:model'              ORDER BY observed_at",
         )?;
         let found = statement
             .query_map(params![scope, hash], |r| {

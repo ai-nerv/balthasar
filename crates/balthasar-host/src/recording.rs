@@ -143,6 +143,9 @@ fn afterwards(
             now,
         );
         held.session = Some(SessionId::new(run));
+        if turn.role == "assistant" {
+            held.provenance.who = Some(balthasar_store::SAID_BY_MODEL.to_owned());
+        }
         match at.run(session) {
             Ok(store) => {
                 if let Err(why) = store.keep_scratch(held) {

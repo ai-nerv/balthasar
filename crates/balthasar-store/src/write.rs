@@ -59,10 +59,42 @@ impl Store {
                 self.attach(&existing, witness, now)?;
                 return Ok(Landing::Reinforced(existing));
             }
+            // Evidence too weak to cross on its own disputes a claim rather than closing it. A
+            // single-valued slot holds one answer, so there the newer one still stands in.
+            let (_, predicate, _) = row::slot(&memory.body);
+            let slot = predicate.is_some_and(|p| balthasar_model::is_single_valued(&p));
+            if !slot && witness.weight < balthasar_model::floor::PROMOTE {
+                return self.dispute(&existing, memory, witness, now);
+            }
             let landed = self.supersede(&existing, memory, witness, now)?;
             return Ok(landed);
         }
         let id = self.insert(memory, &witness, now)?;
+        Ok(Landing::Added(id))
+    }
+
+    /// Write a claim that disputes `held` instead of replacing it: both stay open, each counts
+    /// against the other until a person settles them. A restatement of something held
+    /// reinforces it as [`Store::remember`] would.
+    pub fn dispute(
+        &mut self,
+        held: &MemoryId,
+        memory: Memory,
+        witness: Witness,
+        now: Timestamp,
+    ) -> Result<Landing, StoreError> {
+        if let Some(existing) = self.standing(&memory)?
+            && existing != *held
+            && self.says_the_same(&existing, &memory)?
+        {
+            self.attach(&existing, witness, now)?;
+            return Ok(Landing::Reinforced(existing));
+        }
+        let id = self.insert(memory, &witness, now)?;
+        self.link(&id, held, LinkRelation::Contradicts, now)?;
+        self.link(held, &id, LinkRelation::Contradicts, now)?;
+        self.rescore(&id, now)?;
+        self.rescore(held, now)?;
         Ok(Landing::Added(id))
     }
 
@@ -200,11 +232,8 @@ impl Store {
         Ok(score)
     }
 
-    /// Close one answer's interval and stand another in its place.
-    ///
-    /// The new memory inherits the old one's confidence as a floor. Being a correction of
-    /// something established is itself evidence about the correction, and starting a
-    /// replacement from zero is why systems oscillate between a stale fact and its fix.
+    /// Close one answer's interval and stand another in its place. The replacement's confidence
+    /// is what its own witnesses argue.
     ///
     /// All of it is one transaction: a failure part-way leaves the old answer standing.
     fn supersede(
@@ -240,11 +269,6 @@ impl Store {
         witness: Witness,
         now: Timestamp,
     ) -> Result<Landing, StoreError> {
-        let was: f64 = self.db().query_row(
-            "SELECT confidence FROM memory WHERE id = ?1",
-            params![old.as_str()],
-            |r| r.get(0),
-        )?;
         // The interval closes first: the partial unique index will refuse the replacement
         // while the old answer is still live, which is exactly the protection it exists for.
         self.db().execute(
@@ -260,13 +284,7 @@ impl Store {
             tx.commit()?;
         }
 
-        let earned = self.rescore(&new_id, now)?;
-        if was > earned {
-            self.db().execute(
-                "UPDATE memory SET confidence = ?2 WHERE id = ?1",
-                params![new_id.as_str(), was],
-            )?;
-        }
+        self.rescore(&new_id, now)?;
         self.rescore(old, now)?;
 
         Ok(Landing::Superseded {

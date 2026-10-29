@@ -213,6 +213,7 @@ pub fn measure_arm(scenario: &Scenario, arm: Arm) -> Result<(Score, Measured), D
             consolidate(
                 &mut store,
                 None,
+                None,
                 &settings,
                 &scope,
                 session.at + 3600,

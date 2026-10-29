@@ -17,6 +17,8 @@ pub struct Candidate {
     pub from: String,
     /// Whether it should be kept from fading; only somebody insisting sets this.
     pub pinned: bool,
+    /// What it disagrees with without announcing a change: both are kept, for a person to settle.
+    pub disputes: Option<balthasar_model::MemoryId>,
 }
 
 impl Candidate {
@@ -31,7 +33,15 @@ impl Candidate {
             importance: balthasar_model::Importance::Normal,
             from: from.into(),
             pinned: false,
+            disputes: None,
         }
+    }
+
+    /// Kept beside `held` as a disagreement rather than replacing it.
+    #[must_use]
+    pub fn disputing(mut self, held: balthasar_model::MemoryId) -> Self {
+        self.disputes = Some(held);
+        self
     }
 
     /// Kept from fading, because somebody insisted.

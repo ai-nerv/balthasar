@@ -44,6 +44,9 @@ mod writer;
 
 pub use chunking::{Chunk, covered, cut, revision};
 pub use current::Current;
+
+/// Who wrote a scratch row the model said, as opposed to one the person said.
+pub const SAID_BY_MODEL: &str = "said:model";
 pub use decay::{Faded, Weakened};
 pub use effects::{LayoutEffect, LayoutTarget};
 pub use entity::{Entity, Kind as EntityKind, extract as entities_in, rarity};

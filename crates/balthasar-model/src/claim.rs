@@ -221,6 +221,12 @@ pub fn claim_overlap(a: &str, b: &str) -> f32 {
     shared / union as f32
 }
 
+/// What a claim is about, as its distinct content words.
+#[must_use]
+pub fn content_words(text: &str) -> Vec<String> {
+    content(text)
+}
+
 /// What a claim is about: its words, less grammar, stemmed, without repeats.
 fn content(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();

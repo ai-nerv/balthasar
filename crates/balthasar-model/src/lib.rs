@@ -8,6 +8,7 @@
 
 mod body;
 mod cardinality;
+mod change;
 mod channel;
 mod claim;
 mod confidence;
@@ -30,8 +31,11 @@ mod witness;
 
 pub use body::{Body, NoteKind, Outcome, Span};
 pub use cardinality::is_single_valued;
+pub use change::announces_change;
 pub use channel::{Channel, Domain};
-pub use claim::{claim_overlap, lead, negative, same_claim, same_claim_different_value};
+pub use claim::{
+    claim_overlap, content_words, lead, negative, same_claim, same_claim_different_value,
+};
 pub use confidence::{Contradiction, of as confidence_of};
 pub use guard::{looks_like_injection, presentation_for, witness_for};
 pub use habit::{Avoidance, Environment, Polarity, Record, Standing};

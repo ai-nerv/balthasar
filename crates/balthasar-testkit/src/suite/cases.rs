@@ -300,8 +300,9 @@ pub fn corpus() -> Vec<Case> {
             probes: vec![Probe {
                 asks: "database",
                 at: day(4),
-                expect: Expect::Asserted("postgres"),
-                why: "two unrelated runs corroborating carries a claim into the project",
+                expect: Expect::Findable("postgres"),
+                why: "two unrelated runs repeating a claim carry it into the project, held \
+                      until evidence of another kind joins it",
             }],
         },
         Case {

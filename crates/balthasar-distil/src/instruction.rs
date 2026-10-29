@@ -262,7 +262,7 @@ fn is_insistent(raw: &str, normalised: &str) -> bool {
     if INSIST.iter().any(|m| normalised.contains(m)) {
         return true;
     }
-    if raw.contains('!') {
+    if raw.contains("!!") {
         return true;
     }
     if normalised.contains("times") && normalised.chars().any(|c| c.is_ascii_digit()) {
@@ -271,11 +271,15 @@ fn is_insistent(raw: &str, normalised: &str) -> bool {
     if SWEARING.iter().any(|word| normalised.contains(word)) {
         return true;
     }
-    // Shouting: a run of capitals long enough not to be an acronym.
-    if raw
+    // Shouting: two words in capitals that are not acronyms.
+    let shouted = raw
         .split_whitespace()
-        .any(|word| word.chars().filter(|c| c.is_uppercase()).count() >= 4)
-    {
+        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|word| word.chars().filter(|c| c.is_uppercase()).count() >= 4)
+        .filter(|word| !word.chars().any(char::is_lowercase))
+        .filter(|word| !ACRONYMS.contains(word))
+        .count();
+    if shouted >= 2 {
         return true;
     }
     // A stretched word: `duuuude`, `pleeease`.
@@ -284,6 +288,52 @@ fn is_insistent(raw: &str, normalised: &str) -> bool {
         .windows(3)
         .any(|three| matches!(three, [a, b, c] if a == b && b == c && a.is_ascii_alphabetic()))
 }
+
+/// Capitalised words that are names, not shouting.
+const ACRONYMS: &[&str] = &[
+    "README",
+    "JSON",
+    "YAML",
+    "TOML",
+    "HTML",
+    "HTTP",
+    "HTTPS",
+    "UUID",
+    "ULID",
+    "CUDA",
+    "LLVM",
+    "MUSL",
+    "GLIBC",
+    "POSIX",
+    "ASCII",
+    "UTF8",
+    "OAUTH",
+    "CORS",
+    "CSRF",
+    "TODO",
+    "FIXME",
+    "NOTE",
+    "WARN",
+    "INFO",
+    "DEBUG",
+    "ERROR",
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LICENSE",
+    "CHANGELOG",
+    "SQLITE",
+    "NVIDIA",
+    "AMD64",
+    "ARM64",
+    "X86_64",
+    "GRPC",
+    "REST",
+    "AWS",
+    "GCP",
+    "TLS",
+    "SSH",
+];
 
 /// Enough to notice somebody is cross. Not a filter, and never used to refuse anything.
 const SWEARING: &[&str] = &["fuck", "fuk", "shit", "damn", "bloody", "christ", "goddamn"];
@@ -544,9 +594,17 @@ mod tests {
     }
 
     #[test]
-    fn an_exclamation_counts() {
+    fn one_exclamation_is_not_insisting_and_two_are() {
         let said = read_it("remember we use make!").expect("an instruction");
+        assert!(!said.insistent);
+        let said = read_it("remember we use make!!").expect("an instruction");
         assert!(said.insistent);
+    }
+
+    #[test]
+    fn an_acronym_does_not_pin() {
+        let said = read_it("remember the README lists the JSON schema").expect("an instruction");
+        assert!(!said.insistent);
     }
 
     #[test]

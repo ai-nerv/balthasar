@@ -579,3 +579,67 @@ fn an_open_search_never_finds_a_closed_memory_and_history_does() {
     let current = store.recall_current(&ask).expect("current, history asked");
     assert_eq!(current.len(), 1, "a prompt-bound search ignores history");
 }
+
+#[test]
+fn a_replacement_score_equals_its_argument() {
+    let mut store = store();
+    let first = store
+        .remember(
+            fact("project", "deploy", "heroku", AUGUST),
+            saw(WitnessKind::Imperative, "s1", AUGUST),
+            AUGUST,
+        )
+        .expect("first");
+    let second = store
+        .remember(
+            fact("project", "deploy", "fly.io", AUGUST),
+            saw(WitnessKind::Distillation, "s2", AUGUST),
+            AUGUST,
+        )
+        .expect("weak replacement");
+    for id in [first.id().clone(), second.id().clone()] {
+        let stored = store.get(&id).expect("read").expect("there").confidence;
+        let argued = store.rescore(&id, AUGUST).expect("rescored");
+        assert!(
+            (stored - argued).abs() < 1e-12,
+            "stored {stored} but the witnesses argue {argued}"
+        );
+    }
+}
+
+#[test]
+fn weak_evidence_disputes_a_claim_and_strong_evidence_replaces_it() {
+    let mut store = store();
+    let held = store
+        .remember(
+            note("we deploy with heroku", MARCH),
+            saw(WitnessKind::Imperative, "s1", MARCH),
+            MARCH,
+        )
+        .expect("held")
+        .id()
+        .clone();
+    let weak = store
+        .remember(
+            note("we deploy with fly.io", AUGUST),
+            saw(WitnessKind::Distillation, "s2", AUGUST),
+            AUGUST,
+        )
+        .expect("weak");
+    assert!(matches!(weak, Landing::Added(_)), "{weak:?}");
+    let old = store.get(&held).expect("read").expect("there");
+    assert!(
+        old.temporal.valid_to.is_none(),
+        "a weak revision closes nothing"
+    );
+    assert_eq!(store.disagreements("global").expect("open").len(), 1);
+
+    let strong = store
+        .remember(
+            note("we deploy with render", AUGUST + 10),
+            saw(WitnessKind::Correction, "s3", AUGUST + 10),
+            AUGUST + 10,
+        )
+        .expect("strong");
+    assert!(matches!(strong, Landing::Superseded { .. }), "{strong:?}");
+}

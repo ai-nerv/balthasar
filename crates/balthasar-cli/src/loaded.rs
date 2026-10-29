@@ -200,6 +200,20 @@ impl Loaded {
         balthasar_distil::ingest(&mut self.engine, store, settings, ask)
     }
 
+    /// One consolidation pass, with this configuration's `promote` gate.
+    pub fn consolidate(
+        &mut self,
+        store: &mut balthasar_store::Store,
+        scratch: Option<&mut balthasar_store::Scratchpad>,
+        scope: &ScopeId,
+        at: balthasar_model::Timestamp,
+        dry_run: bool,
+    ) -> Result<balthasar_distil::Consolidated, balthasar_distil::DistilError> {
+        let settings = self.settings.clone();
+        let gate = Some(&mut self.engine);
+        balthasar_distil::consolidate(store, scratch, gate, &settings, scope, at, dry_run)
+    }
+
     /// Read one of this project's own runs and offer what it taught.
     pub fn distil(
         &mut self,

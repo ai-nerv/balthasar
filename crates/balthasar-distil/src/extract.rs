@@ -240,7 +240,7 @@ fn repair(worked: &Observation, before: &[Observation]) -> Option<Candidate> {
         .rev()
         .find(|earlier| earlier.failed() && earlier.tool.as_deref() == Some(tool))?;
     let attempted = failed.command()?;
-    if attempted == succeeded {
+    if attempted == succeeded || !related(attempted, succeeded) {
         return None;
     }
 
@@ -257,6 +257,26 @@ fn repair(worked: &Observation, before: &[Observation]) -> Option<Candidate> {
         .at(worked.cursor)
         .fading(Importance::High),
     )
+}
+
+/// Programs that build or test, any one of which may stand in for another.
+const BUILDERS: &[&str] = &[
+    "cargo", "make", "oslo", "just", "npm", "pnpm", "yarn", "bun", "pytest", "python", "uv", "go",
+    "mvn", "gradle", "tsc", "nix", "bazel", "cmake", "ninja", "meson", "zig",
+];
+
+/// Whether two commands are attempts at the same thing: one program, or two builders.
+fn related(attempted: &str, succeeded: &str) -> bool {
+    let (a, b) = (head(attempted), head(succeeded));
+    a == b || (BUILDERS.contains(&a) && BUILDERS.contains(&b))
+}
+
+/// The program a command runs, past environment assignments and wrappers.
+fn head(command: &str) -> &str {
+    command
+        .split_whitespace()
+        .find(|word| !word.contains('=') && !matches!(*word, "sudo" | "env" | "time" | "nice"))
+        .map_or("", |word| word.rsplit('/').next().unwrap_or(word))
 }
 
 /// A command nobody wants to rediscover the hard way.
@@ -525,6 +545,25 @@ mod tests {
             tool("shell", "make test", true),
         ];
         assert!(extract(&turns, &markers()).candidates.is_empty());
+    }
+
+    #[test]
+    fn unrelated_failures_mint_no_habit() {
+        for (failed, worked) in [
+            ("ls missing/", "cat README.md"),
+            ("grep -r foo src", "git status"),
+        ] {
+            let turns = vec![tool("shell", failed, false), tool("shell", worked, true)];
+            assert!(
+                extract(&turns, &markers()).candidates.is_empty(),
+                "{failed} → {worked}"
+            );
+        }
+        let wrapped = vec![
+            tool("shell", "RUST_LOG=debug cargo test", false),
+            tool("shell", "sudo /usr/bin/make test", true),
+        ];
+        assert_eq!(extract(&wrapped, &markers()).candidates.len(), 1);
     }
 
     #[test]

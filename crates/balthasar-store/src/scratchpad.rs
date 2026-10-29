@@ -139,7 +139,8 @@ impl Scratchpad {
             let mut statement = store.db().prepare(
                 "SELECT content_hash, text, observed_at, session FROM memory \
                  WHERE scope = ?1 AND tier = 'scratch' AND archived_at IS NULL \
-                   AND session IS NOT NULL AND text != '' AND observed_at >= ?2",
+                   AND session IS NOT NULL AND text != '' AND observed_at >= ?2 \
+                   AND who IS NOT 'said:model'",
             )?;
             let rows = statement
                 .query_map(rusqlite::params![scope, since], |r| {

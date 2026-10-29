@@ -301,6 +301,17 @@ fn decide(engine: &mut Engine, settings: &Settings, candidate: &Candidate, score
     verdict
 }
 
+/// Why the configuration's `promote` gate turns a candidate away, when it does.
+pub(crate) fn refused(engine: &mut Engine, candidate: &Candidate) -> Option<String> {
+    let said = engine.ask("promote", &[candidate.as_json()])?;
+    (said.get("promote").and_then(serde_json::Value::as_bool) == Some(false)).then(|| {
+        said.get("reason")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("a gate refused it")
+            .to_owned()
+    })
+}
+
 /// Keep a candidate that did not earn a place, with the evidence it did earn.
 ///
 /// It lands as scratch, the tier that means *this session's own*: findable, decaying, and below
@@ -382,5 +393,8 @@ fn write(
 
     let witness = witness_for(from, candidate);
 
-    Ok(store.remember(memory, witness, from.now)?)
+    Ok(match &candidate.disputes {
+        Some(held) => store.dispute(held, memory, witness, from.now)?,
+        None => store.remember(memory, witness, from.now)?,
+    })
 }

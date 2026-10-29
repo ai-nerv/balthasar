@@ -486,3 +486,65 @@ fn a_turn_with_no_role_cannot_mint_an_imperative() {
         "01BLANK",
     );
 }
+
+/// Distil two runs: the first says `held`, the second `later`.
+fn two_runs(store: &mut Store, held: &str, later: &str) {
+    let mut engine = Engine::new();
+    let settings = Settings::default();
+    let mut scrollback = Transcript::ephemeral().expect("scrollback");
+    for (run, text) in [("01MARCH", held), ("01AUGUST", later)] {
+        let session = SessionId::new(run);
+        streamed(&mut scrollback, &session, vec![said(1, text)]);
+        distil_run(
+            store,
+            &mut engine,
+            &settings,
+            &scrollback,
+            &session,
+            &ask(false),
+        )
+        .expect("distilled");
+    }
+}
+
+#[test]
+fn a_shared_lead_without_a_change_marker_is_a_disagreement() {
+    let mut store = Store::ephemeral().expect("store");
+    two_runs(
+        &mut store,
+        "remember: we deploy with heroku",
+        "we deploy with fly.io",
+    );
+    let mut every = Recall::of("deploy", NOW);
+    every.history = true;
+    let open: Vec<String> = store
+        .recall(&every)
+        .expect("recall")
+        .into_iter()
+        .filter(|hit| hit.memory.temporal.valid_to.is_none())
+        .map(|hit| hit.memory.text())
+        .collect();
+    assert!(open.iter().any(|t| t.contains("heroku")), "{open:?}");
+    assert!(open.iter().any(|t| t.contains("fly.io")), "{open:?}");
+    let open = store
+        .disagreements(&scope().to_string())
+        .expect("disagreements");
+    assert_eq!(open.len(), 1, "one pair waits on a person: {open:?}");
+}
+
+#[test]
+fn a_change_marker_supersedes() {
+    let mut store = Store::ephemeral().expect("store");
+    two_runs(
+        &mut store,
+        "remember: we deploy with heroku",
+        "we deploy with fly.io instead of heroku",
+    );
+    let found = store.recall(&Recall::of("deploy", NOW)).expect("recall");
+    let texts: Vec<String> = found.iter().map(|hit| hit.memory.text()).collect();
+    assert!(texts.iter().any(|t| t.contains("fly.io")), "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t == "we deploy with heroku"),
+        "{texts:?}"
+    );
+}

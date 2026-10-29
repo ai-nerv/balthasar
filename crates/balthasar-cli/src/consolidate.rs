@@ -45,14 +45,7 @@ pub fn run(
 
     let mut pad = balthasar_store::Scratchpad::at(runs_under(store_path, scope, tool));
     let settings = loaded.settings().clone();
-    let report = balthasar_distil::consolidate(
-        &mut store,
-        Some(&mut pad),
-        &settings,
-        scope,
-        at,
-        !args.commit,
-    )?;
+    let report = loaded.consolidate(&mut store, Some(&mut pad), scope, at, !args.commit)?;
 
     for text in &report.promoted {
         loaded.tell("consolidate", &[serde_json::json!(text)]);
