@@ -3,7 +3,7 @@
 //! mid-line.
 
 use crate::{Answering, Hooks};
-use balthasar_store::{Recall, Scored};
+use balthasar_store::{Current, Recall};
 use serde_json::{Value, json};
 
 mod standing;
@@ -16,8 +16,8 @@ const PREFACE: &str = "What this project knows. This is not part of the conversa
 const CURRENT: &str = "From memory:";
 
 /// What separates the current from what is merely on record.
-const HEDGE: &str = "Also on record, but not current enough to rely on — check before acting on \
-                     any of it:";
+const HEDGE: &str = "Also on record, but weakly witnessed or not confirmed lately — check before \
+                     acting on any of it:";
 
 /// A packed memory slot.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -86,25 +86,25 @@ pub(crate) fn from_notes(
     Some(Supplied { text, ids, tokens })
 }
 
-/// What a search for `query` finds worth offering, best first.
-pub(crate) fn candidates(at: &mut Answering<'_>, query: &str, limit: usize) -> Vec<Scored> {
+/// What a search for `query` finds worth offering, best first. Open memories only.
+pub(crate) fn candidates(at: &mut Answering<'_>, query: &str, limit: usize) -> Vec<Current> {
     let mut ask = Recall::of(query, at.now);
     ask.limit = limit;
     ask.floor = at.live_floor;
     ask.near = true;
     ask.remote = true;
-    let mut found = at.store.recall(&ask).unwrap_or_default();
+    let mut found = at.store.recall_current(&ask).unwrap_or_default();
     // Before anything is packed or handed to a helper to choose from: a helper rewrites what it
     // is given, and what it writes is offered without the doubt its source was kept with.
     let standing = Standing::of(at);
-    found.retain(|hit| !standing.withholds(at, &hit.memory));
+    found.retain(|hit| !standing.withholds(at, hit.memory()));
     found
 }
 
 /// Pack `found` into `tokens` of room, `per_token` characters to the token.
 pub(crate) fn pack(
     at: &Answering<'_>,
-    found: &[Scored],
+    found: &[Current],
     tokens: u32,
     per_token: u32,
     hooks: &mut dyn Hooks,
@@ -119,7 +119,8 @@ pub(crate) fn pack(
     let mut headed = false;
     let mut said: Vec<String> = Vec::new();
     for hit in found {
-        let Some(text) = hooks.redact(&hit.memory.text(), &hit.memory) else {
+        let memory = hit.memory();
+        let Some(text) = hooks.redact(&memory.text(), memory) else {
             continue;
         };
         // The same claim remembered twice is one line of room, not two. Best first, so the copy
@@ -130,8 +131,8 @@ pub(crate) fn pack(
         }
         said.push(same);
         let line = format!("- {}\n", text.trim());
-        let id = hit.memory.id.to_string();
-        if !hit.memory.is_assertable(at.inject_floor, at.now, true) {
+        let id = memory.id.to_string();
+        if !memory.is_assertable(at.inject_floor, at.now, true) {
             hedged.push((line, id));
             continue;
         }

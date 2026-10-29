@@ -219,8 +219,8 @@ pub(crate) fn curate(
     let found = supply::candidates(at, query, CURATE_FROM);
     let mut listed = String::new();
     for hit in &found {
-        if let Some(text) = hooks.redact(&hit.memory.text(), &hit.memory) {
-            listed.push_str(&format!("- {}: {}\n", hit.memory.id, text.trim()));
+        if let Some(text) = hooks.redact(&hit.memory().text(), hit.memory()) {
+            listed.push_str(&format!("- {}: {}\n", hit.memory().id, text.trim()));
         }
     }
     let Some(scrollback) = at.scrollback.as_ref() else {
@@ -624,14 +624,17 @@ fn curation(at: &mut Answering<'_>, job: &Job, text: &str, hooks: &mut dyn Hooks
     let per = hooks.window().estimate_chars_per_token;
     let found: Vec<_> = supply::candidates(at, query, CURATE_FROM)
         .into_iter()
-        .filter(|hit| chosen.contains(&hit.memory.id.to_string()))
+        .filter(|hit| chosen.contains(&hit.memory().id.to_string()))
         .collect();
-    let ids: Vec<String> = found.iter().map(|hit| hit.memory.id.to_string()).collect();
+    let ids: Vec<String> = found
+        .iter()
+        .map(|hit| hit.memory().id.to_string())
+        .collect();
     // A rewrite stands in only for what is current truth: rewritten, a memory kept with doubt
     // would be offered without it, so those are packed as they are, under their own heading.
     let doubted = found
         .iter()
-        .any(|hit| !hit.memory.is_assertable(at.inject_floor, at.now, true));
+        .any(|hit| !hit.memory().is_assertable(at.inject_floor, at.now, true));
     let supplied = if notes.is_empty() || doubted {
         supply::pack(at, &found, room, per, hooks).unwrap_or_default()
     } else {

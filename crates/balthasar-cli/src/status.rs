@@ -46,6 +46,7 @@ pub fn run(
             tiers: vec![balthasar_model::Tier::Fact, balthasar_model::Tier::Habit],
             floor: floors.inject,
             include_archived: false,
+            history: false,
             remote: false,
             relevance: 0.0,
             now: at,

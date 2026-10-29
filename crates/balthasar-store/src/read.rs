@@ -21,7 +21,12 @@ pub struct Recall {
     /// floor: a memory below assertion is still findable.
     pub floor: f64,
     /// Whether to look in the archive too. Only worth it when the live results are weak.
+    ///
+    /// Read only with [`Recall::history`]: an open search never reaches the archive.
     pub include_archived: bool,
+    /// Whether closed memories are candidates, labelled as such. Off by default, and forced
+    /// off for anything bound for a prompt ([`Store::recall_current`]).
+    pub history: bool,
     /// Whether the results are bound for a remote model.
     pub remote: bool,
     /// How much of the question a memory must actually answer to come back at all.
@@ -56,6 +61,7 @@ impl Recall {
             tiers: Vec::new(),
             floor: balthasar_model::floor::LIVE,
             include_archived: false,
+            history: false,
             remote: false,
             relevance: 0.0,
             now,
@@ -126,6 +132,22 @@ impl Store {
         memory.witnesses = self.witnesses_of(&memory.id)?;
         memory.links = self.links_of(&memory.id)?;
         Ok(Some(memory))
+    }
+
+    /// One memory, only while it is open: read from `live_memory`, without witnesses or links.
+    fn get_live(&self, id: &MemoryId) -> Result<Option<Memory>, StoreError> {
+        let found = self
+            .db()
+            .query_row(
+                &format!(
+                    "SELECT {} FROM live_memory AS memory WHERE memory.id = ?1",
+                    row::LIVE_COLUMNS
+                ),
+                params![id.as_str()],
+                |r| Ok(row::memory(r)),
+            )
+            .optional()?;
+        found.transpose()
     }
 
     /// Every piece of evidence for a memory, newest first.
@@ -243,7 +265,12 @@ impl Store {
         let by_entity = if ask.scope_name.is_empty() {
             Vec::new()
         } else {
-            self.by_entity(&ask.scope_name, &ask.query, ask.limit.max(THIN))?
+            self.by_entity(
+                &ask.scope_name,
+                &ask.query,
+                ask.limit.max(THIN),
+                !ask.history,
+            )?
         };
         if !by_entity.is_empty() {
             let held: Vec<String> = candidates
@@ -254,8 +281,13 @@ impl Store {
                 if held.contains(&id.to_string()) {
                     continue;
                 }
-                if let Some(memory) = self.get(id)? {
-                    // Neutral on the lexical axis: it did not match the words.
+                let found = if ask.history {
+                    self.get(id)?
+                } else {
+                    self.get_live(id)?
+                };
+                // Neutral on the lexical axis: it did not match the words.
+                if let Some(memory) = found.filter(|memory| admits(ask, memory)) {
                     candidates.push((memory, 0.0));
                 }
             }
@@ -337,14 +369,14 @@ impl Store {
     /// Candidates from full-text search, with their lexical scores. `bm25` answers a negative
     /// number where more negative is better, so it is mapped into `0..1` before it meets them.
     fn matching(&self, ask: &Recall) -> Result<Vec<(Memory, f64)>, StoreError> {
+        let (table, columns) = source(ask);
         let sql = format!(
-            "SELECT {}, bm25(memory_fts) AS rank FROM memory_fts \
-             JOIN memory ON memory.id = memory_fts.id \
+            "SELECT {columns}, bm25(memory_fts) AS rank FROM memory_fts \
+             JOIN {table} ON memory.id = memory_fts.id \
              WHERE memory_fts MATCH ?1 {} {} \
-             ORDER BY rank LIMIT ?2",
-            row::COLUMNS,
+             ORDER BY rank, memory.id LIMIT ?2",
             tier_clause(&ask.tiers),
-            archive_clause(ask.include_archived),
+            archive_clause(ask),
         );
         let mut statement = self.db().prepare(&sql)?;
         let terms = fts_query(&ask.query);
@@ -372,11 +404,12 @@ impl Store {
 
     /// Everything worth showing, when nobody asked for anything in particular.
     fn everything(&self, ask: &Recall) -> Result<Vec<(Memory, f64)>, StoreError> {
+        let (table, columns) = source(ask);
         let sql = format!(
-            "SELECT {} FROM memory WHERE 1 = 1 {} {} ORDER BY confidence DESC LIMIT ?1",
-            row::COLUMNS,
+            "SELECT {columns} FROM {table} WHERE 1 = 1 {} {} \
+             ORDER BY memory.confidence DESC, memory.id LIMIT ?1",
             tier_clause(&ask.tiers),
-            archive_clause(ask.include_archived),
+            archive_clause(ask),
         );
         let mut statement = self.db().prepare(&sql)?;
         let found = statement
@@ -495,13 +528,29 @@ fn tier_clause(tiers: &[Tier]) -> String {
     format!("AND memory.tier IN ({})", names.join(", "))
 }
 
-/// Whether the archive is in scope.
-fn archive_clause(include: bool) -> &'static str {
-    if include {
+/// Whether the archive is in scope. Nothing for an open search: the view has already left it out.
+fn archive_clause(ask: &Recall) -> &'static str {
+    if !ask.history || ask.include_archived {
         ""
     } else {
         "AND memory.archived_at IS NULL"
     }
+}
+
+/// Where a search reads from, aliased `memory`, and the columns it selects.
+fn source(ask: &Recall) -> (&'static str, &'static str) {
+    if ask.history {
+        ("memory", row::COLUMNS)
+    } else {
+        ("live_memory AS memory", row::LIVE_COLUMNS)
+    }
+}
+
+/// Whether a memory found by its entities passes the filters the SQL applies to the rest.
+fn admits(ask: &Recall, memory: &Memory) -> bool {
+    let tiered = ask.tiers.is_empty() || ask.tiers.contains(&memory.tier);
+    let archived = memory.archived_at.is_some() && !ask.include_archived;
+    tiered && !archived
 }
 
 #[cfg(test)]

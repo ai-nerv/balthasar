@@ -1,5 +1,5 @@
 use super::*;
-use balthasar_model::{Body, Memory, MemoryId, ScopeId, Tier, Timestamp};
+use balthasar_model::{Body, Memory, ScopeId, Tier, Timestamp};
 use balthasar_store::Turn;
 
 const NOW: Timestamp = 1_756_000_000;
@@ -102,27 +102,27 @@ mod mem_duplicate_memory_does_not_fill_budget {
     }
 }
 
-/// A memory certain enough to be written under "From memory:".
-fn memory(text: &str) -> balthasar_store::Scored {
-    let mut held = Memory::new(
-        MemoryId::new(format!("M-{}", text.trim_end_matches(['.', '!']).len())),
-        Tier::Fact,
+/// A claim held in `tier`. Two tiers hold the same words apart, which the store never folds.
+fn keep(store: &mut balthasar_store::Store, text: &str, tier: Tier) {
+    let memory = Memory::new(
+        balthasar_store::mint(NOW),
+        tier,
         ScopeId::new("/w/thing"),
-        Body::fact("project", "rule", text),
+        Body::note(text, balthasar_model::NoteKind::Claim),
         NOW,
     );
-    held.confidence = 1.0;
-    balthasar_store::Scored {
-        memory: held,
-        score: 1.0,
-        semantic: None,
-        lexical: 1.0,
-        entity: 0.0,
-        frecency: 0.0,
-        confidence: 1.0,
-        strength: 1.0,
-        near: true,
+    if tier == Tier::Scratch {
+        store.keep_scratch(memory).expect("kept");
+        return;
     }
+    let witness = balthasar_model::Witness::new(
+        balthasar_model::WitnessId::new(format!("w-{}", text.len())),
+        balthasar_model::WitnessKind::Imperative,
+        balthasar_model::SessionId::new("s1"),
+        ScopeId::new("/w/thing"),
+        NOW,
+    );
+    store.remember(memory, witness, NOW).expect("remembered");
 }
 
 #[test]
@@ -130,7 +130,10 @@ fn a_packed_slot_never_writes_one_claim_twice() {
     struct Plain;
     impl crate::Hooks for Plain {}
     let mut store = balthasar_store::Store::ephemeral().expect("store");
-    let at = Answering {
+    keep(&mut store, "Use uv, not pip.", Tier::Fact);
+    keep(&mut store, "use uv, not pip", Tier::Scratch);
+    keep(&mut store, "Tests run on CI", Tier::Fact);
+    let mut at = Answering {
         store: &mut store,
         scrollback: None,
         scratch: None,
@@ -141,11 +144,7 @@ fn a_packed_slot_never_writes_one_claim_twice() {
         live_floor: 0.0,
         capture: false,
     };
-    let found = [
-        memory("Use uv, not pip."),
-        memory("use uv, not pip"),
-        memory("Tests run on CI"),
-    ];
+    let found = candidates(&mut at, "", 10);
     let packed = pack(&at, &found, 200, 4, &mut Plain).expect("a slot");
     assert_eq!(
         packed.text.matches("uv, not pip").count(),

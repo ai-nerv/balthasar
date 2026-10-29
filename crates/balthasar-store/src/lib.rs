@@ -9,6 +9,7 @@ mod atomic;
 mod binding;
 mod chunking;
 mod collide;
+mod current;
 mod decay;
 mod effects;
 mod entity;
@@ -42,6 +43,7 @@ mod write;
 mod writer;
 
 pub use chunking::{Chunk, covered, cut, revision};
+pub use current::Current;
 pub use decay::{Faded, Weakened};
 pub use effects::{LayoutEffect, LayoutTarget};
 pub use entity::{Entity, Kind as EntityKind, extract as entities_in, rarity};

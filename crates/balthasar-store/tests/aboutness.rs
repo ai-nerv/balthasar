@@ -161,7 +161,9 @@ fn one_projects_entities_do_not_reach_another() {
         "w1",
     );
 
-    let found = store.by_entity("/w/other", "Redis", 10).expect("entities");
+    let found = store
+        .by_entity("/w/other", "Redis", 10, true)
+        .expect("entities");
     assert!(found.is_empty(), "another project's index is empty");
 }
 
@@ -170,7 +172,7 @@ fn a_query_about_nothing_costs_nothing() {
     let store = store();
     assert!(
         store
-            .by_entity(SCOPE, "it does the thing", 10)
+            .by_entity(SCOPE, "it does the thing", 10, true)
             .expect("entities")
             .is_empty()
     );

@@ -23,6 +23,14 @@ pub const COLUMNS: &str = "memory.id, memory.tier, memory.scope, memory.session,
      memory.pinned, memory.confidence, memory.privacy, memory.through, memory.who, \
      memory.archived_at, memory.embedding, memory.embed_model, memory.single_valued";
 
+/// [`COLUMNS`], from `live_memory AS memory`: the view has no closing columns, so both read open.
+pub const LIVE_COLUMNS: &str = "memory.id, memory.tier, memory.scope, memory.session, \
+     memory.body, memory.text, memory.content_hash, \
+     memory.observed_at, memory.happened_at, memory.valid_from, NULL AS valid_to, \
+     memory.importance, memory.strength, memory.last_accessed, memory.access_count, \
+     memory.pinned, memory.confidence, memory.privacy, memory.through, memory.who, \
+     NULL AS archived_at, memory.embedding, memory.embed_model, memory.single_valued";
+
 /// A memory from a row, without its witnesses or links.
 ///
 /// Those are separate tables and separate queries; a caller that needs them asks for them, so

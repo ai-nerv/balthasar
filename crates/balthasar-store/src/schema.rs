@@ -9,7 +9,7 @@
 use rusqlite::Connection;
 
 /// Every migration, in order. The index is the version it produces.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9];
 
 /// What schema a store this build writes is at.
 ///
@@ -444,6 +444,19 @@ const V8: &str = r#"
 ALTER TABLE session ADD COLUMN title_pinned INTEGER;
 "#;
 
+/// The memories that may be offered: open, unarchived, outside the archive tier.
+///
+/// The two closing columns are left out, so a query filtering on them fails to prepare.
+const V9: &str = r#"
+CREATE VIEW live_memory AS
+  SELECT id, tier, scope, session, subject, predicate, object, lead, body, text, content_hash,
+         observed_at, happened_at, valid_from, importance, strength, last_accessed,
+         access_count, pinned, single_valued, confidence, privacy, through, who,
+         embedding, embed_model
+  FROM memory
+  WHERE valid_to IS NULL AND archived_at IS NULL AND tier <> 'archive';
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,7 +657,7 @@ mod tests {
     #[test]
     fn a_step_that_fails_part_way_is_undone_whole_and_runs_again() {
         let connection = Connection::open_in_memory().expect("open");
-        migrate_to(&connection, VERSION - 2).expect("most of the way");
+        migrate_to(&connection, 6).expect("most of the way");
         // The step after this adds a column and then an index; the index's name is taken, so the
         // step dies after its first statement, as it would on a crash.
         connection
@@ -654,7 +667,7 @@ mod tests {
         let at: u32 = connection
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .expect("version");
-        assert_eq!(at, VERSION - 2, "the failed step left no version behind");
+        assert_eq!(at, 6, "the failed step left no version behind");
         connection
             .execute_batch("DROP TABLE squat;")
             .expect("clear the fault");
@@ -699,5 +712,50 @@ mod tests {
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .expect("version");
         assert_eq!(at, VERSION);
+    }
+
+    #[test]
+    fn the_live_view_cannot_be_filtered_on_what_closes_a_memory() {
+        let connection = migrated();
+        for column in ["valid_to", "archived_at"] {
+            let sql = format!("SELECT id FROM live_memory WHERE {column} IS NULL");
+            assert!(
+                connection.prepare(&sql).is_err(),
+                "{column} is not in the view"
+            );
+        }
+        assert!(
+            connection
+                .prepare("SELECT id, text FROM live_memory")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_live_view_leaves_out_closed_archived_and_archive_tier_rows() {
+        let connection = migrated();
+        let insert = "INSERT INTO memory \
+             (id, tier, scope, body, text, content_hash, observed_at, valid_from, \
+              last_accessed, valid_to, archived_at) \
+             VALUES (?, ?, 'global', '{}', '', '', 0, 0, 0, ?, ?)";
+        let rows: [(&str, &str, Option<i64>, Option<i64>); 4] = [
+            ("open", "fact", None, None),
+            ("closed", "fact", Some(5), None),
+            ("archived", "fact", None, Some(5)),
+            ("swept", "archive", None, None),
+        ];
+        for (id, tier, closed, archived) in rows {
+            connection
+                .execute(insert, rusqlite::params![id, tier, closed, archived])
+                .expect("insert");
+        }
+        let ids: Vec<String> = connection
+            .prepare("SELECT id FROM live_memory ORDER BY id")
+            .expect("prepare")
+            .query_map([], |r| r.get(0))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows");
+        assert_eq!(ids, ["open"]);
     }
 }

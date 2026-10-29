@@ -209,7 +209,8 @@ fn gather(
             recall.relevance = RELEVANT_ENOUGH;
         }
 
-        for hit in store.recall(&recall)? {
+        for hit in store.recall_current(&recall)? {
+            let hit = hit.into_scored();
             if section.takes(&hit.memory, *near)
                 && hit
                     .memory

@@ -16,6 +16,7 @@ mod ownership;
 mod preparing;
 mod queue;
 mod reading;
+mod recalling;
 mod recording;
 mod saying;
 mod scheduling;

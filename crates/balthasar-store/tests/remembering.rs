@@ -326,6 +326,8 @@ fn an_archived_memory_leaves_the_live_results() {
 
     let mut deep = Recall::of("passing", AUGUST);
     deep.include_archived = true;
+    assert!(store.recall(&deep).expect("open search").is_empty());
+    deep.history = true;
     assert_eq!(store.recall(&deep).expect("archive search").len(), 1);
 }
 
@@ -536,4 +538,44 @@ fn a_correction_that_fails_part_way_leaves_the_old_answer_standing() {
         )
         .expect("the correction lands once the fault is gone");
     assert!(matches!(again, Landing::Superseded { .. }), "{again:?}");
+}
+
+#[test]
+fn an_open_search_never_finds_a_closed_memory_and_history_does() {
+    let mut store = store();
+    store
+        .remember(
+            fact("project", "deploy", "heroku", MARCH),
+            saw(WitnessKind::Imperative, "s1", MARCH),
+            MARCH,
+        )
+        .expect("first");
+    store
+        .remember(
+            fact("project", "deploy", "fly.io", AUGUST),
+            saw(WitnessKind::Correction, "s2", AUGUST),
+            AUGUST,
+        )
+        .expect("correction");
+
+    let texts = |found: Vec<balthasar_store::Scored>| -> Vec<String> {
+        found.into_iter().map(|hit| hit.memory.text()).collect()
+    };
+    let mut ask = Recall::of("project deploy", AUGUST);
+    ask.floor = 0.0;
+    let open = texts(store.recall(&ask).expect("open"));
+    assert_eq!(open, ["project deploy fly.io"]);
+    let current: Vec<String> = store
+        .recall_current(&ask)
+        .expect("current")
+        .into_iter()
+        .map(|hit| hit.memory().text())
+        .collect();
+    assert_eq!(current, ["project deploy fly.io"]);
+
+    ask.history = true;
+    let all = texts(store.recall(&ask).expect("history"));
+    assert!(all.contains(&"project deploy heroku".to_owned()), "{all:?}");
+    let current = store.recall_current(&ask).expect("current, history asked");
+    assert_eq!(current.len(), 1, "a prompt-bound search ignores history");
 }

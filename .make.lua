@@ -420,6 +420,7 @@ local GATES = {
   { "gate-no-exec",      "balthasar describes procedures and never runs them" },
   { "gate-wire",         "one way of saying a thing crosses a boundary" },
   { "gate-sandbox",      "one Lua VM, and it is sandboxed" },
+  { "gate-served",       "nothing closed or forgotten is offered as memory" },
 }
 
 for _, gate in ipairs(GATES) do
@@ -447,6 +448,7 @@ make.recipe{
     "gate-no-exec",
     "gate-wire",
     "gate-sandbox",
+    "gate-served",
   },
 }
 
