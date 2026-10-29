@@ -19,6 +19,8 @@ pub struct Candidate {
     pub pinned: bool,
     /// What it disagrees with without announcing a change: both are kept, for a person to settle.
     pub disputes: Option<balthasar_model::MemoryId>,
+    /// What it replaces by name, when the turn said so.
+    pub replaces: Option<balthasar_model::MemoryId>,
 }
 
 impl Candidate {
@@ -34,6 +36,7 @@ impl Candidate {
             from: from.into(),
             pinned: false,
             disputes: None,
+            replaces: None,
         }
     }
 
@@ -41,6 +44,13 @@ impl Candidate {
     #[must_use]
     pub fn disputing(mut self, held: balthasar_model::MemoryId) -> Self {
         self.disputes = Some(held);
+        self
+    }
+
+    /// Standing in for `held`, which closes.
+    #[must_use]
+    pub fn replacing(mut self, held: balthasar_model::MemoryId) -> Self {
+        self.replaces = Some(held);
         self
     }
 

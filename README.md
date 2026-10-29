@@ -85,12 +85,14 @@ related
   replaced     project test_command cargo test
 ```
 
-**Evidence has weights, and the weights are the design.** Eight kinds, and what one of each is
-worth. The top three cross alone; the rest have to find company.
+**Evidence has weights, and the weights are the design.** Nine kinds, and what one of each is
+worth. The top four cross alone; the rest have to find company, and recurrence alone (CALLUS) is
+held below assertion until evidence of another kind joins it.
 
 ```
   SAID      ████████████████████  1.00  the person said to remember it — and it pins
   FIX       ████████████████      0.80  the person corrected something
+  CHOICE    ████████████          0.60  the person chose or changed something — never pins
   SCAR      ██████████            0.50  it was expensive to learn
   ─────────────────────────────── 0.50  promote · crosses alone above this line
   MANUAL    ████████              0.40  a peer proposed it over the socket
@@ -102,7 +104,8 @@ worth. The top three cross alone; the rest have to find company.
 ```
 
 TIDE 0.30 plus CALLUS 0.25 is 0.55. Something that scrolled out of a window once and then
-recurred in an unrelated run becomes a fact without anyone having said so.
+recurred in an unrelated run becomes a fact without anyone having said so. Recurrence with
+nothing else is kept, findable, and not asserted.
 
 **Two floors, and they are different floors.** A memory stops being *asserted* long before it
 stops being *findable*. That gap is the answer to staleness: an agent that can say "you told me

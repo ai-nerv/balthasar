@@ -31,6 +31,8 @@ pub enum WitnessKind {
     Inferred,
     /// Typed at the CLI, or written by a peer. Proposes; does not assert.
     Manual,
+    /// The person stated a choice, or changed one. Crosses alone, never pins.
+    Choice,
 }
 
 impl WitnessKind {
@@ -46,6 +48,7 @@ impl WitnessKind {
             Self::Consolidation => 0.2,
             Self::Inferred => 0.35,
             Self::Manual => 0.4,
+            Self::Choice => 0.6,
         }
     }
 
@@ -75,6 +78,7 @@ impl WitnessKind {
             Self::Consolidation => "consolidation",
             Self::Inferred => "inferred",
             Self::Manual => "manual",
+            Self::Choice => "choice",
         }
     }
 }
@@ -210,6 +214,7 @@ impl FromStr for WitnessKind {
             "consolidation" => Ok(Self::Consolidation),
             "inferred" => Ok(Self::Inferred),
             "manual" => Ok(Self::Manual),
+            "choice" => Ok(Self::Choice),
             other => Err(UnknownKind(other.to_owned())),
         }
     }

@@ -33,6 +33,7 @@ pub fn origin(witnesses: &[Witness]) -> &'static str {
     match strongest.map(|w| w.kind) {
         Some(WitnessKind::Imperative) => "you said",
         Some(WitnessKind::Correction) => "you corrected",
+        Some(WitnessKind::Choice) => "you chose",
         Some(WitnessKind::Cost) => "learned from a failure",
         Some(WitnessKind::Manual) => "noted",
         Some(WitnessKind::Inferred) => "inferred",

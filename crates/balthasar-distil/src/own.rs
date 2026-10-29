@@ -53,6 +53,13 @@ pub fn distil_run(
     found
         .candidates
         .extend(crate::clashes(store, &ask.scope, &seen));
+    found.candidates.extend(crate::decisions(
+        store,
+        &ask.scope,
+        &seen,
+        ask.now,
+        &settings.decisions,
+    ));
 
     // Then, if a model is configured and reachable, what the rules could not read. It goes into
     // the same list, through the same floors and the same gate, weaker only by its weight.

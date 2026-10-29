@@ -167,6 +167,8 @@ pub struct Settings {
     pub tool: Option<String>,
     /// Words that mark a user turn as an instruction to remember.
     pub imperatives: Vec<String>,
+    /// Phrases that state a choice, beside the shipped ones.
+    pub decisions: Vec<String>,
     /// Days a session's turns are kept once it has gone quiet. `None` keeps them for good.
     pub retain_days: Option<u32>,
 }
@@ -281,6 +283,7 @@ impl Settings {
             tool: config.string("tool").map(str::to_owned),
             trusted: strings(config, "trusted"),
             imperatives: imperatives(config),
+            decisions: strings(config, "decisions"),
             retain_days: config
                 .number("retain_days")
                 .filter(|days| *days >= 1.0)
@@ -412,6 +415,7 @@ fn witness_weights(config: &Config) -> Vec<(WitnessKind, f64)> {
         WitnessKind::Consolidation,
         WitnessKind::Inferred,
         WitnessKind::Manual,
+        WitnessKind::Choice,
     ];
     KINDS
         .iter()

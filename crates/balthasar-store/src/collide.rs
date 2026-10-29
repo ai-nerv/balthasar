@@ -188,4 +188,15 @@ impl Store {
         self.rescore(held, now)?;
         Ok(Landing::Added(id))
     }
+
+    /// Write a claim that replaces `held` by name: its interval closes and this one stands in.
+    pub fn replace(
+        &mut self,
+        held: &MemoryId,
+        memory: Memory,
+        witness: Witness,
+        now: Timestamp,
+    ) -> Result<Landing, StoreError> {
+        self.supersede(held, memory, witness, now)
+    }
 }

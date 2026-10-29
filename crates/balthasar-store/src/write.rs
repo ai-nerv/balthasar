@@ -228,7 +228,7 @@ impl Store {
     /// is what its own witnesses argue.
     ///
     /// All of it is one transaction: a failure part-way leaves the old answer standing.
-    fn supersede(
+    pub(crate) fn supersede(
         &mut self,
         old: &MemoryId,
         new: Memory,

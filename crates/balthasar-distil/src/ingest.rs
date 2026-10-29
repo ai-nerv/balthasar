@@ -133,6 +133,13 @@ pub fn ingest(
         found
             .candidates
             .extend(crate::clashes(store, &ask.scope, &turns));
+        found.candidates.extend(crate::decisions(
+            store,
+            &ask.scope,
+            &turns,
+            ask.now,
+            &settings.decisions,
+        ));
         report.proposed += found.candidates.len();
         let from = Provenance {
             scope: ask.scope.clone(),
@@ -342,7 +349,7 @@ fn channel_of(
     use balthasar_model::{Channel, Domain, WitnessKind};
     match candidate.witness {
         WitnessKind::Imperative => (Channel::UserInstruction, None),
-        WitnessKind::Correction => (Channel::UserCorrection, None),
+        WitnessKind::Correction | WitnessKind::Choice => (Channel::UserCorrection, None),
         WitnessKind::Cost => (Channel::ToolObservation, None),
         WitnessKind::Inferred => (Channel::ModelInference, Some(Domain::model())),
         WitnessKind::Repetition | WitnessKind::Consolidation => (Channel::Consolidation, None),
@@ -411,8 +418,9 @@ fn write(
 
     let witness = witness_for(from, candidate);
 
-    Ok(match &candidate.disputes {
-        Some(held) => store.dispute(held, memory, witness, from.now)?,
-        None => store.remember(memory, witness, from.now)?,
+    Ok(match (&candidate.replaces, &candidate.disputes) {
+        (Some(held), _) => store.replace(held, memory, witness, from.now)?,
+        (None, Some(held)) => store.dispute(held, memory, witness, from.now)?,
+        (None, None) => store.remember(memory, witness, from.now)?,
     })
 }
