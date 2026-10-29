@@ -167,12 +167,28 @@ const NEGATORS: &[&str] = &["not", "no", "never", "none", "nor", "without", "can
 /// person's correction as agreement with the thing they were correcting.
 #[must_use]
 fn denies(a: &str, b: &str) -> bool {
-    let negative = |text: &str| {
-        crate::normalised(text)
-            .split_whitespace()
-            .any(|word| NEGATORS.contains(&word))
-    };
     negative(a) != negative(b)
+}
+
+/// Contractions written without their apostrophe.
+const CONTRACTED: &[&str] = &[
+    "dont", "doesnt", "didnt", "isnt", "arent", "wasnt", "werent", "wont", "wouldnt", "cant",
+    "couldnt", "shouldnt", "mustnt", "havent", "hasnt", "hadnt", "neednt",
+];
+
+/// Whether a claim is negated anywhere: a negating word, or a contraction ending in `n't`.
+#[must_use]
+pub fn negative(text: &str) -> bool {
+    crate::normalised(text).split_whitespace().any(negates)
+}
+
+/// Whether one word negates.
+fn negates(word: &str) -> bool {
+    let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '\u{2019}');
+    NEGATORS.contains(&word)
+        || CONTRACTED.contains(&word)
+        || word.ends_with("n't")
+        || word.ends_with("n\u{2019}t")
 }
 
 /// Whether each claim says something the other does not.
@@ -209,7 +225,7 @@ pub fn claim_overlap(a: &str, b: &str) -> f32 {
 fn content(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for word in crate::normalised(text).split_whitespace() {
-        if GRAMMAR.contains(&word) {
+        if GRAMMAR.contains(&word) || negates(word) {
             continue;
         }
         let stemmed = stem(word);
@@ -269,6 +285,28 @@ mod tests {
                 "`{denied}` was taken as another way of saying `{said}`"
             );
         }
+    }
+
+    #[test]
+    fn a_contracted_denial_is_not_corroboration() {
+        for (said, denied) in [
+            ("we deploy on fridays", "we don't deploy on fridays"),
+            ("we deploy on fridays", "we dont deploy on fridays"),
+            ("we deploy on fridays", "we don\u{2019}t deploy on fridays"),
+            ("the job retries", "the job won't retry"),
+            ("the cache is shared", "the cache isn't shared"),
+            ("you can force push to main", "you can't force push to main"),
+            ("we keep the old schema", "we no longer keep the old schema"),
+        ] {
+            assert!(
+                !same_claim(said, denied),
+                "`{denied}` corroborated `{said}`"
+            );
+        }
+        assert!(same_claim(
+            "we don't deploy on fridays",
+            "we do not deploy on fridays"
+        ));
     }
 
     /// And the words that do that must still be free where they are not the difference.

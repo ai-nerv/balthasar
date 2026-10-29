@@ -179,7 +179,11 @@ const OPENERS: &[&str] = &[
     "actually, ",
     "wrong, ",
     "don't ",
+    "do not ",
 ];
+
+/// Openers that are part of what they say: "don't use cargo" is a claim, not a speech act.
+const SAID_WITH: &[&str] = &["not ", "don't ", "do not "];
 
 /// A claim that replaces what just happened.
 ///
@@ -193,7 +197,7 @@ pub fn correction(text: &str) -> Option<String> {
 
     // "not " is part of what it says — "not the staging box" is a claim about the staging box —
     // where "no, " and "actually, " are only the speech act.
-    let claim = if *marker == "not " {
+    let claim = if SAID_WITH.contains(marker) {
         first_sentence(trimmed)
     } else {
         first_sentence(trimmed.get(marker.len()..).unwrap_or_default().trim_start())
@@ -453,6 +457,20 @@ mod tests {
         // these words is prose.
         assert_eq!(correction("i would not say no, that is fine"), None);
         assert_eq!(correction("the answer is no, apparently"), None);
+    }
+
+    #[test]
+    fn dont_in_a_correction_is_kept() {
+        for (said, kept) in [
+            ("don't use cargo, use make", "don't use cargo, use make"),
+            (
+                "do not run migrations by hand",
+                "do not run migrations by hand",
+            ),
+            ("ok, don't push to main", "don't push to main"),
+        ] {
+            assert_eq!(correction(said).as_deref(), Some(kept), "{said:?}");
+        }
     }
 
     #[test]
