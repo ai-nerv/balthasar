@@ -87,3 +87,108 @@ fn independent_processes_exclude_until_release_or_crash() {
         assert!(root.join("transcript.db.writers").is_dir());
     }
 }
+
+#[test]
+fn independent_reader_checks_committed_rows() {
+    let Some(path) = std::env::var_os("BALTHASAR_REPLAY_TEST_PATH") else {
+        return;
+    };
+    let count: usize = std::env::var("BALTHASAR_REPLAY_TEST_COUNT")
+        .expect("expected count")
+        .parse()
+        .expect("count");
+    let store = Transcript::open(Path::new(&path)).expect("reader store");
+    let rows = store.replay(&key()).expect("reader replay");
+    assert_eq!(rows.len(), count, "all acknowledged rows remain visible");
+    for (index, row) in rows.iter().enumerate() {
+        assert_eq!(row.cursor, index as u64 + 1);
+        assert_eq!(row.text, format!("turn-{}", row.cursor));
+    }
+}
+
+fn read_in_process(path: &Path, count: usize) {
+    let mut child = Child(
+        Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "writer::tests::processes::independent_reader_checks_committed_rows",
+                "--nocapture",
+            ])
+            .env("BALTHASAR_REPLAY_TEST_PATH", path)
+            .env("BALTHASAR_REPLAY_TEST_COUNT", count.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("reader child"),
+    );
+    assert!(until(|| child.0.try_wait().expect("reader status")).success());
+}
+
+fn replay_visibility(boundary: &str) {
+    let root = Scratch::new("writer-replay", boundary);
+    let path = root.join("transcript.db");
+    let store = Transcript::open(&path).expect("writer store");
+    for cursor in 1..=3 {
+        let turn = crate::Turn {
+            cursor,
+            role: "assistant".into(),
+            kind: "prose".into(),
+            text: format!("turn-{cursor}"),
+            ..crate::Turn::default()
+        };
+        assert_eq!(
+            store.insert(&key(), &turn).expect("commit"),
+            crate::Inserted::Fresh
+        );
+        match boundary {
+            "reservation" => {
+                let held = store
+                    .reserve_writer(&key())
+                    .expect("reserve")
+                    .expect("free");
+                held.check().expect("validate");
+                read_in_process(&path, cursor as usize);
+            }
+            "mutation" => {
+                let _held = store
+                    .reserve_mutation(&key())
+                    .expect("mutation")
+                    .expect("free");
+                read_in_process(&path, cursor as usize);
+            }
+            "maintenance" => {
+                let held = store.maintenance().expect("maintenance").expect("free");
+                assert!(held.available(key().as_str()).expect("probe"));
+                read_in_process(&path, cursor as usize);
+            }
+            "reopen" => {
+                drop(Transcript::open(&path).expect("same-process reader"));
+                read_in_process(&path, cursor as usize);
+            }
+            _ => panic!("unknown boundary"),
+        }
+    }
+    drop(store);
+    read_in_process(&path, 3);
+}
+
+#[test]
+fn writer_reservation_preserves_sqlite_locks_and_live_replay() {
+    replay_visibility("reservation");
+}
+
+#[test]
+fn mutation_guards_preserve_sqlite_locks_and_live_replay() {
+    replay_visibility("mutation");
+}
+
+#[test]
+fn maintenance_guards_preserve_sqlite_locks_and_live_replay() {
+    replay_visibility("maintenance");
+}
+
+#[test]
+fn reopening_a_store_preserves_sqlite_locks_and_live_replay() {
+    replay_visibility("reopen");
+}
