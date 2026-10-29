@@ -202,8 +202,8 @@ fn run_session(
     }
 
     // All three, or the run is not forgotten.
-    let memories = balthasar_store::purge_session(&mut store, &session)?;
     let gone = balthasar_store::purge_run(&held, &session)?;
+    let memories = balthasar_store::purge_session(&mut store, &session)?;
     let mut pad = balthasar_store::Scratchpad::at(crate::runs_under(store_path, scope, tool));
     let scratch = balthasar_store::purge_scratch(&mut pad, &session)?;
 

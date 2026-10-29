@@ -18,8 +18,8 @@ pub use frame::{
 pub use key::{Guard, Key, REFUSED as KEY_REFUSED};
 pub use peer::{AGENT_VARS, Peer, named_in, program_name};
 pub use serve::{
-    Listener, legacy_socket_dir, legacy_socket_path, socket_dir, socket_dirs, socket_path,
-    tool_descriptor,
+    ConnectionState, Listener, legacy_socket_dir, legacy_socket_path, socket_dir, socket_dirs,
+    socket_path, tool_descriptor,
 };
 pub use stale::lock_path;
 pub use stop::hold as hold_stop_signals;

@@ -14,6 +14,10 @@ members = [
   "crates/balthasar",
 ]
 resolver = "3"
+exclude = ["vendor/candle-core"]
+
+[patch.crates-io]
+candle-core = { path = "vendor/candle-core" }
 
 [workspace.package]
 edition = "2024"

@@ -154,7 +154,7 @@ done
 body_of "$frame" send | grep -q 'n > MAX_FRAME' || broke "send() writes a frame over MAX_FRAME"
 body_of "$frame" recv_within | grep -q 'n > MAX_FRAME' || broke "recv_within() reads a frame over MAX_FRAME"
 body_of "$serve" say | grep -q '> frame::MAX_FRAME' || broke "say() writes a reply over the cap"
-body_of "$serve" converse_within | grep -q 'body.is_empty()' || broke "a frame of length zero is answered as a call"
+body_of "$serve" converse_retained | grep -q 'body.is_empty()' || broke "a frame of length zero is answered as a call"
 body_of "$call" framed | grep -q '<= CAP' || broke "call frames a request over CAP"
 body_of "$call" exchange | grep -q 'length == 0 || length > CAP' || broke "call reads a reply over CAP or of length zero"
 limit=$(sed -n 's/^local MAX_FRAME = \([0-9]*\)$/\1/p' "$client")

@@ -39,6 +39,7 @@ mod transcript;
 mod turns;
 mod usage;
 mod write;
+mod writer;
 
 pub use chunking::{Chunk, covered, cut, revision};
 pub use decay::{Faded, Weakened};
@@ -73,6 +74,7 @@ pub use transcript::{Run, State, Transcript, Turn, transcript_path};
 pub use turns::{Inserted, Noticed, RawPart, same as same_turn};
 pub use usage::{Candidate, Injection, RecallRun, Signals, Trace, TracedAction, Use, Verdict};
 pub use write::Landing;
+pub use writer::{Mutation, Writer};
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};

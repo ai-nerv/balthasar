@@ -1,6 +1,7 @@
 //! Atomic transcript application and replay of cross-store layout effects.
 
 use crate::Answering;
+use crate::events::{self, LayoutOutcome};
 use balthasar_model::{SessionId, Witness, WitnessId, WitnessKind};
 use balthasar_store::{LayoutEffect, LayoutTarget, State, StoreError};
 use serde_json::{Value, json};
@@ -14,6 +15,23 @@ pub(crate) fn confirm(
     id: &str,
     usage: Option<&Value>,
 ) -> Result<(), StoreError> {
+    match commit(at, session, id, usage) {
+        Ok(true) => events::layout(LayoutOutcome::Applied),
+        Ok(false) => events::layout(LayoutOutcome::IgnoredRepeated),
+        Err(why) => {
+            events::layout(LayoutOutcome::ApplicationFailed);
+            return Err(why);
+        }
+    }
+    replay(at, session)
+}
+
+fn commit(
+    at: &Answering<'_>,
+    session: &SessionId,
+    id: &str,
+    usage: Option<&Value>,
+) -> Result<bool, StoreError> {
     let scrollback = at
         .scrollback
         .as_ref()
@@ -36,7 +54,7 @@ pub(crate) fn confirm(
             })
             .filter(|n| *n > 0);
         if !scrollback.confirm(id, real, at.now)? {
-            return Ok(());
+            return Ok(false);
         }
         let run = scrollback.run_of(session)?;
         let outline = scrollback.outline(session)?;
@@ -95,16 +113,28 @@ pub(crate) fn confirm(
                 scrollback.set_factor(&proposal.model, next.clamp(0.5, 4.0))?;
             }
         }
-        Ok(())
-    })?;
-    replay(at, session)
+        Ok(true)
+    })
 }
 
 pub(crate) fn replay(at: &mut Answering<'_>, session: &SessionId) -> Result<(), StoreError> {
+    match recover(at, session) {
+        Ok(true) => events::layout(LayoutOutcome::Recovered),
+        Ok(false) => {}
+        Err(why) => {
+            events::layout(LayoutOutcome::RecoveryFailed);
+            return Err(why);
+        }
+    }
+    Ok(())
+}
+
+fn recover(at: &mut Answering<'_>, session: &SessionId) -> Result<bool, StoreError> {
     let Some(scrollback) = at.scrollback.as_ref() else {
-        return Ok(());
+        return Ok(false);
     };
     let effects = scrollback.layout_effects(session, &at.agent, &at.scope)?;
+    let pending = !effects.is_empty();
     for effect in effects {
         if at.run_id(session)? != effect.run {
             return Err(StoreError::Foreign(
@@ -167,5 +197,5 @@ pub(crate) fn replay(at: &mut Answering<'_>, session: &SessionId) -> Result<(), 
             scrollback.finish_layout_effect(&effect)?;
         }
     }
-    Ok(())
+    Ok(pending)
 }

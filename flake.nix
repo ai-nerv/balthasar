@@ -42,6 +42,7 @@
                 ./Cargo.lock
                 ./crates
                 ./config
+                ./vendor
               ];
             };
 

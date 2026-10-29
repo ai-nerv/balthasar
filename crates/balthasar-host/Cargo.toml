@@ -17,6 +17,7 @@ balthasar-store.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+rustix = { workspace = true, features = ["fs", "stdio"] }
 
 [dev-dependencies]
 balthasar-lua.workspace = true

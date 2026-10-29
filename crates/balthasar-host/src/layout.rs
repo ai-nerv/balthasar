@@ -1,6 +1,7 @@
 //! `layout`, `applied` and `overflowed`: what one request holds, what the harness confirmed it
 //! sent, and a tighter answer when the provider refused one as too long.
 
+use crate::events::{self, LayoutOutcome};
 use crate::supply::{self, Supplied};
 use crate::window::stub_for;
 use crate::{Answering, Hooks};
@@ -24,6 +25,19 @@ const REPLY: u32 = 8_192;
 
 /// `layout(session, request)`: what the next request should hold.
 pub fn layout(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
+    decision(decide(at, request, hooks))
+}
+
+fn decision(reply: Reply) -> Reply {
+    events::layout(if reply.ok {
+        LayoutOutcome::Decided
+    } else {
+        LayoutOutcome::Failed
+    });
+    reply
+}
+
+fn decide(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
     let Some(session) = session_of(request) else {
         return Reply::refused("layout needs a session");
     };
@@ -37,10 +51,12 @@ pub fn layout(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) 
 /// `applied(session, {id, usage})`: the provider accepted what layout `id` described.
 pub fn applied(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(session) = session_of(request) else {
+        events::layout(LayoutOutcome::ApplicationFailed);
         return Reply::refused("applied needs a session");
     };
     let said = request.args.get(1);
     let Some(id) = said.and_then(|s| s.as_str().or_else(|| s.get("id")?.as_str())) else {
+        events::layout(LayoutOutcome::ApplicationFailed);
         return Reply::refused("applied needs the layout's id");
     };
     match crate::applying::confirm(at, &session, id, said.and_then(|s| s.get("usage"))) {
@@ -60,6 +76,10 @@ pub fn applied(at: &mut Answering<'_>, request: &Request) -> Reply {
 
 /// `overflowed(session, {id, said})`: the provider refused layout `id` as too long.
 pub fn overflowed(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
+    decision(reconsider(at, request, hooks))
+}
+
+fn reconsider(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
     let Some(session) = session_of(request) else {
         return Reply::refused("overflowed needs a session");
     };

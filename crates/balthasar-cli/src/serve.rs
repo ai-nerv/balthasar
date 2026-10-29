@@ -18,6 +18,10 @@ pub struct ServeArgs {
     /// End this when the process with this id ends, and let the kernel be what enforces it.
     #[arg(long, value_name = "PID")]
     tied: Option<u32>,
+
+    /// Receive the parent's private event descriptor and restore native stdin.
+    #[arg(long, hide = true)]
+    event_bootstrap: bool,
 }
 
 /// Answer one question and exit.
@@ -75,6 +79,13 @@ pub fn serve(
     if let Some(caller) = args.tied {
         tie_to_caller(caller)?;
     }
+    let _events = if args.event_bootstrap {
+        let sender = balthasar_host::events::forwarding::receive_stdin()
+            .map_err(|_| anyhow::anyhow!("invalid native event bootstrap"))?;
+        balthasar_host::events::forwarding::Forwarder::activate(sender).ok()
+    } else {
+        None
+    };
     // Before any socket exists: the key its coordinator wrote on stdin, else one of its own.
     let told = told_key()?;
     let minted = told.is_none();
@@ -128,8 +139,10 @@ pub fn serve(
     let capture = loaded.settings().ledger().capture;
 
     let agent = agent_here();
-    let guard = balthasar_ipc::Guard::new(key, needs_key);
-    let served = listener.serve(guard, |peer: &Peer, request: Request| {
+    let guard = balthasar_ipc::Guard::new(key, needs_key)
+        .with_request_context(balthasar_host::events::requests::revision());
+    let served = listener.serve_observed_scoped::<balthasar_host::Ownership>(guard, |peer: &Peer, ownership, request: Request, context| {
+        balthasar_host::events::requests::with_peer(peer, context, || {
         let named = named_by_kernel(peer).unwrap_or_else(|| fallback.clone());
         if !has_room(opened.len(), opened.contains_key(&named), named == fallback) {
             return Reply::refused(format!(
@@ -178,7 +191,7 @@ pub fn serve(
             capture,
         };
         let reply =
-            balthasar_host::answer_hooked(&mut at, &Door::Socket(peer.clone()), &request, loaded);
+            balthasar_host::answer_scoped_hooked(&mut at, &Door::Socket(peer.clone()), &request, loaded, ownership);
         retire(
             held,
             &request,
@@ -187,6 +200,7 @@ pub fn serve(
             now,
         );
         reply
+        })
     });
 
     // The socket goes before the stores: closing a store checkpoints its WAL and fsyncs.

@@ -435,3 +435,13 @@ consuming machine: an input's `nixConfig` is not inherited.
 
 Here, `make nix-build` builds it into `result/`, `make nix-check` checks the flake, and
 `make nix-download-check` fetches it from the cache without building anything.
+
+## Acknowledgements
+
+Thanks to [Muninn](https://github.com/ilien-dev/muninn) by ilien (2026), a local memory engine
+for coding agents. Its design notes and its pre-registered, published measurements shaped the
+next round of work here: keeping a replaced decision out of the model's view by construction,
+an index of what is on record that the model can ask into by id, commits read as evidence that
+a value changed, and a compaction summary checked against what actually ran. Nothing is copied
+from it. Muninn is AGPL-3.0-only and balthasar is MIT, so what balthasar takes from it is the
+ideas, written fresh.

@@ -189,6 +189,7 @@ pub struct Run {
 pub struct Transcript {
     connection: Connection,
     path: PathBuf,
+    identity: Option<(u64, u64)>,
 }
 
 /// Where a project's scrollback lives, beside the memory store and named after it.
@@ -206,6 +207,7 @@ impl Transcript {
     /// the WAL default of `NORMAL`, which can lose the last transactions to a power cut.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         crate::private::before_open(path)?;
+        let identity = crate::writer::identity(path)?;
         let connection = Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -218,6 +220,7 @@ impl Transcript {
         Ok(Self {
             connection,
             path: path.to_owned(),
+            identity: Some(identity),
         })
     }
 
@@ -228,6 +231,7 @@ impl Transcript {
         Ok(Self {
             connection,
             path: PathBuf::from(":memory:"),
+            identity: None,
         })
     }
 
@@ -240,6 +244,56 @@ impl Transcript {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Reserve a transcript's writer without waiting; `None` means it is held.
+    pub fn reserve_writer(&self, session: &SessionId) -> Result<Option<crate::Writer>, StoreError> {
+        let identity = self.identity.ok_or_else(|| {
+            StoreError::Foreign("writer reservations require a persistent transcript store".into())
+        })?;
+        crate::writer::reserve(&self.path, identity, session.as_str())
+    }
+
+    /// Whether this transcript has a persistent store identity.
+    pub fn is_persistent(&self) -> bool {
+        self.identity.is_some()
+    }
+
+    pub(crate) fn maintenance(&self) -> Result<Option<crate::writer::Maintenance>, StoreError> {
+        let identity = self.identity.ok_or_else(|| {
+            StoreError::Foreign(
+                "maintenance admission requires a persistent transcript store".into(),
+            )
+        })?;
+        crate::writer::maintenance(&self.path, identity)
+    }
+
+    /// Fence a mutation against an exclusive writer without excluding other unreserved calls.
+    pub fn reserve_mutation(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<crate::Mutation>, StoreError> {
+        let identity = self.identity.ok_or_else(|| {
+            StoreError::Foreign("mutation guards require a persistent transcript store".into())
+        })?;
+        crate::writer::mutation(&self.path, identity, session.as_str())
+    }
+
+    /// Validate a reservation against this store and transcript key.
+    pub fn check_writer(
+        &self,
+        writer: &crate::Writer,
+        session: &SessionId,
+    ) -> Result<(), StoreError> {
+        if !self
+            .identity
+            .is_some_and(|identity| writer.matches(identity, session.as_str()))
+        {
+            return Err(StoreError::Foreign(
+                "writer belongs to another store or transcript".into(),
+            ));
+        }
+        writer.check()
     }
 
     /// Record that a run has started, or take the one already recorded.

@@ -109,12 +109,34 @@ pub fn purge_run(
             .query_map([session.as_str()], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?
     };
+    let maintenance = maintenance(scrollback)?;
+    if let Some(maintenance) = &maintenance {
+        for transcript in &transcripts {
+            if !maintenance.available(transcript)? {
+                return Err(StoreError::Foreign(
+                    "a transcript in this run has a writer".into(),
+                ));
+            }
+        }
+    }
     let mut gone = 0;
     for transcript in transcripts {
         gone += purge_transcript(scrollback, &balthasar_model::SessionId::new(transcript))?;
     }
     tx.commit()?;
     Ok(gone)
+}
+
+fn maintenance(
+    scrollback: &crate::Transcript,
+) -> Result<Option<crate::writer::Maintenance>, StoreError> {
+    if !scrollback.is_persistent() {
+        return Ok(None);
+    }
+    scrollback
+        .maintenance()?
+        .map(Some)
+        .ok_or_else(|| StoreError::Foreign("transcript reservation admission is busy".into()))
 }
 
 fn purge_transcript(
@@ -493,7 +515,17 @@ pub fn prune_turns(
         scrollback.db(),
         rusqlite::TransactionBehavior::Immediate,
     )?;
-    let expired = expired_in(&tx, before, live)?;
+    let mut expired = expired_in(&tx, before, live)?;
+    let maintenance = maintenance(scrollback)?;
+    if let Some(maintenance) = &maintenance {
+        let mut available = Vec::new();
+        for entry in expired {
+            if maintenance.available(entry.session.as_str())? {
+                available.push(entry);
+            }
+        }
+        expired = available;
+    }
     if expired.is_empty() {
         return Ok(Pruned::default());
     }

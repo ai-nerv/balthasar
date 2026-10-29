@@ -92,8 +92,38 @@ pub fn answer_hooked(
     request: &Request,
     hooks: &mut dyn crate::Hooks,
 ) -> Reply {
+    answer_connection(at, door, request, hooks, None)
+}
+
+/// Answer a call using the writer state of this socket connection.
+pub fn answer_scoped_hooked(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
+    ownership: &mut crate::Ownership,
+) -> Reply {
+    answer_connection(at, door, request, hooks, Some(ownership))
+}
+
+fn answer_connection(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
+    mut ownership: Option<&mut crate::Ownership>,
+) -> Reply {
     let began = std::time::Instant::now();
-    let reply = answering(at, door, request, hooks);
+    let reply = if let Some(reply) =
+        crate::ownership::special(at, door, request, ownership.as_deref_mut())
+    {
+        reply
+    } else {
+        match crate::ownership::fence(at, request, ownership.as_deref()) {
+            Ok(_writer) => answering(at, door, request, hooks),
+            Err(why) => Reply::failed(why.to_string()),
+        }
+    };
     if balthasar_model::noted::enabled() {
         balthasar_model::noted!("verb: {}", described(request, &reply, began.elapsed()));
     }
@@ -687,16 +717,16 @@ fn forget_run(at: &mut Answering<'_>, door: &Door, handle: &str, purge: bool) ->
         return Reply::refused("removing a run is the owner's — a peer may archive it");
     }
 
-    let memories = match balthasar_store::purge_session(at.store, &session) {
-        Ok(n) => n,
-        Err(why) => return Reply::refused(why.to_string()),
-    };
     let gone = match at.scrollback.as_ref() {
         Some(held) => match balthasar_store::purge_run(held, &session) {
             Ok(n) => n,
             Err(why) => return Reply::refused(why.to_string()),
         },
         None => 0,
+    };
+    let memories = match balthasar_store::purge_session(at.store, &session) {
+        Ok(n) => n,
+        Err(why) => return Reply::refused(why.to_string()),
     };
     let scratch = match at.scratch.as_mut() {
         Some(pad) => balthasar_store::purge_scratch(pad, &session).unwrap_or(false),
