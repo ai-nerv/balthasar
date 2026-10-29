@@ -132,7 +132,16 @@ pub(crate) fn pack(
         said.push(same);
         let line = format!("- {}\n", text.trim());
         let id = memory.id.to_string();
-        if !memory.is_assertable(at.inject_floor, at.now, true) {
+        let shown = at
+            .store
+            .presentation_of(memory)
+            .unwrap_or(balthasar_model::Presentation::Evidence);
+        if !shown.may_inject() {
+            continue;
+        }
+        if shown != balthasar_model::Presentation::Asserted
+            || !memory.is_assertable(at.inject_floor, at.now, true)
+        {
             hedged.push((line, id));
             continue;
         }

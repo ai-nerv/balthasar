@@ -126,7 +126,12 @@ pub fn read(text: &str, extra: &[String]) -> Option<Instruction> {
     let insistent = is_insistent(text, &normalised);
 
     let mut markers: Vec<String> = KEEP.iter().map(|m| (*m).to_owned()).collect();
-    markers.extend(extra.iter().map(|m| squash(&m.to_lowercase())));
+    markers.extend(
+        extra
+            .iter()
+            .map(|m| squash(&m.to_lowercase()))
+            .filter(|m| !POLARITY.contains(&m.as_str())),
+    );
     markers.extend(INSIST.iter().map(|m| (*m).to_owned()));
     let asks = markers.clone();
     markers.extend(POLARITY.iter().map(|m| (*m).to_owned()));

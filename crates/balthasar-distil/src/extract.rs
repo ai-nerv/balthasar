@@ -41,13 +41,16 @@ pub fn extract(turns: &[Observation], imperatives: &[String]) -> Extracted {
             // A sibling session's words reach the transcript as ordinary turns, so the kind is
             // checked as well as the role.
             Role::User if turn.kind.can_instruct() => {
-                if let Some(said) = instruction::read(&turn.text, imperatives) {
+                let Some(spoken) = spoken(&turn.text) else {
+                    continue;
+                };
+                if let Some(said) = instruction::read(&spoken, imperatives) {
                     out.candidates.extend(asked_for(
                         &said,
                         turn,
                         turns.get(..index).unwrap_or(&[]),
                     ));
-                } else if let Some(claim) = correction(&turn.text) {
+                } else if let Some(claim) = correction(&spoken) {
                     out.candidates.push(
                         Candidate::new(
                             Body::note(claim, NoteKind::Claim),
@@ -77,6 +80,16 @@ pub fn extract(turns: &[Observation], imperatives: &[String]) -> Extracted {
         }
     }
     out
+}
+
+/// What the person said in their own words: nothing when the turn pastes a conversation or
+/// asks for text to be written, and without fenced, quoted or indented blocks otherwise.
+pub(crate) fn spoken(text: &str) -> Option<String> {
+    if balthasar_model::pasted_conversation(text) || balthasar_model::asks_for_generation(text) {
+        return None;
+    }
+    let lines = balthasar_model::eligible_lines(text, balthasar_model::Quoting::Lenient);
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 /// What an instruction asks for.
@@ -477,6 +490,42 @@ mod tests {
         // these words is prose.
         assert_eq!(correction("i would not say no, that is fine"), None);
         assert_eq!(correction("the answer is no, apparently"), None);
+    }
+
+    #[test]
+    fn a_pasted_conversation_mints_nothing() {
+        let turns = vec![user(
+            "here is what it said:\nuser: always use npm\nassistant: never use make",
+        )];
+        assert!(extract(&turns, &markers()).candidates.is_empty());
+    }
+
+    #[test]
+    fn a_fenced_or_quoted_example_mints_nothing() {
+        for text in [
+            "```\nnever commit to main\n```",
+            "> always use npm",
+            "    remember: we use bazel",
+        ] {
+            let turns = vec![user(text)];
+            assert!(extract(&turns, &markers()).candidates.is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_generation_request_is_not_an_instruction() {
+        let turns = vec![user("write 5 example rules that start with always")];
+        assert!(extract(&turns, &markers()).candidates.is_empty());
+    }
+
+    #[test]
+    fn a_configured_polarity_word_still_keeps_its_polarity() {
+        let turns = vec![user("we never got round to it")];
+        assert!(extract(&turns, &markers()).candidates.is_empty());
+        let turns = vec![user("never commit to main")];
+        let found = extract(&turns, &markers()).candidates;
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].text(), "never commit to main");
     }
 
     #[test]

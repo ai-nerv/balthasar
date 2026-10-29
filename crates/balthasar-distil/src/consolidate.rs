@@ -232,6 +232,7 @@ fn witness_for(
         scope.clone(),
         group.first_seen.min(now),
     )
+    .through(balthasar_model::Channel::Consolidation, None)
     // Said in the note: "recurred" and "recurred, reworded" are different strengths of evidence.
     .noted(if akin.near {
         "recurred across sessions, reworded (rules, not a model)"

@@ -43,7 +43,7 @@ impl Kind {
     /// Whether a turn of this kind can carry an instruction from the person.
     #[must_use]
     pub fn can_instruct(self) -> bool {
-        !matches!(self, Self::From | Self::Branch)
+        !matches!(self, Self::From | Self::Branch | Self::Summary)
     }
 }
 

@@ -65,17 +65,16 @@ pub fn propose(
 ///
 /// `None` when the run has no prose of its own, which is a session that only ran commands.
 fn prose_of(turns: &[Observation]) -> Option<String> {
-    let mut held: Vec<&str> = Vec::new();
+    let mut held: Vec<String> = Vec::new();
     let mut spent = 0;
 
     for turn in turns.iter().rev() {
         if turn.role != Role::User || !turn.kind.can_instruct() {
             continue;
         }
-        let text = turn.text.trim();
-        if text.is_empty() {
+        let Some(text) = crate::extract::spoken(turn.text.trim()) else {
             continue;
-        }
+        };
         if spent + text.len() > PROMPT_CHARS {
             break;
         }

@@ -211,6 +211,9 @@ fn gather(
 
         for hit in store.recall_current(&recall)? {
             let hit = hit.into_scored();
+            if store.presentation_of(&hit.memory)? != balthasar_model::Presentation::Asserted {
+                continue;
+            }
             if section.takes(&hit.memory, *near)
                 && hit
                     .memory

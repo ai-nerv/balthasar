@@ -12,6 +12,7 @@ mod change;
 mod channel;
 mod claim;
 mod confidence;
+mod eligible;
 pub mod floor;
 mod guard;
 mod habit;
@@ -37,6 +38,7 @@ pub use claim::{
     claim_overlap, content_words, lead, negative, same_claim, same_claim_different_value,
 };
 pub use confidence::{Contradiction, of as confidence_of};
+pub use eligible::{Quoting, asks_for_generation, eligible_lines, pasted_conversation};
 pub use guard::{looks_like_injection, presentation_for, witness_for};
 pub use habit::{Avoidance, Environment, Polarity, Record, Standing};
 pub use id::{AgentId, MemoryId, ScopeId, SessionId, WitnessId};

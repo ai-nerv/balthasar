@@ -46,5 +46,19 @@ for table in link relation_view entity recall_candidate injection_memory action_
     fi
 done
 
+# 5. Evidence says which channel it arrived on. A production file that mints a witness and names
+#    no channel leaves it at the default, where the ceilings and the imperative check do not apply.
+for file in $(grep -rl 'Witness::new(' crates --include='*.rs' \
+        | grep -v '/tests/' | grep -v 'balthasar-testkit' | grep -v 'balthasar-model/src/' \
+        | grep -v 'tests.rs$' | grep -v 'balthasar-cli/src/eval.rs'); do
+    # Only the code before a file's test module.
+    code=$(awk '/#\[cfg\(test\)\]/{exit} {print}' "$file")
+    printf '%s\n' "$code" | grep -q 'Witness::new(' || continue
+    if ! printf '%s\n' "$code" | grep -q '\.through('; then
+        echo "gate-untrusted: $file mints a witness without naming its channel" >&2
+        fail=1
+    fi
+done
+
 [ "$fail" -eq 0 ] || exit 1
 echo "gate-untrusted: ok"

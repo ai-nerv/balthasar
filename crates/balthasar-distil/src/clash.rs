@@ -36,7 +36,10 @@ pub fn clashes(store: &Store, scope: &ScopeId, turns: &[Observation]) -> Vec<Can
         .iter()
         .filter(|t| t.role == Role::User && t.kind.can_instruct())
     {
-        for said in assertions(&turn.text) {
+        let Some(spoken) = crate::extract::spoken(&turn.text) else {
+            continue;
+        };
+        for said in assertions(&spoken) {
             let Ok(Some((id, held))) = store.what_this_revises(scope, &said) else {
                 continue;
             };

@@ -451,8 +451,15 @@ fn remember(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         at.now,
     );
     let witness = match door.who() {
-        Some(who) => witness.noted(who),
-        None => witness.noted("typed at the command line"),
+        Some(who) => witness
+            .through(
+                balthasar_model::Channel::PeerAssertion,
+                Some(balthasar_model::Domain::new(format!("peer:{who}"))),
+            )
+            .noted(who),
+        None => witness
+            .through(balthasar_model::Channel::ManualWrite, None)
+            .noted("typed at the command line"),
     };
 
     let now = at.now;

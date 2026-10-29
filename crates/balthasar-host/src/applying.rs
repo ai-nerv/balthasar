@@ -160,6 +160,7 @@ fn recover(at: &mut Answering<'_>, session: &SessionId) -> Result<bool, StoreErr
             effect.at,
         )
         .at_cursor(effect.cursor)
+        .through(balthasar_model::Channel::Consolidation, None)
         .noted("left the context window (rules, not a model)");
         let scrollback = at
             .scrollback
