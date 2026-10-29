@@ -53,6 +53,12 @@ balthasar.load("sections.lua")
 --
 -- balthasar.retain_days = 90
 
+-- When `serve` climbs the ladder by itself: a session quiet this many seconds is distilled, and
+-- once a day the commits are read and what recurred is consolidated. `false` leaves both to
+-- `balthasar distil` and `balthasar consolidate --now`.
+--
+-- balthasar.ladder = { after_idle_s = 600, daily = true }
+
 -- ------------------------------------------------------------------ which memory
 
 -- Which store a directory belongs to. Nothing registered means the repository root, so five

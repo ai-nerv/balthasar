@@ -27,7 +27,7 @@ pub use handler::{ASKED, TOLD};
 pub use helpers::glob_paths;
 pub use plugins::{Roots, Trust, installed, runtimepath, vouched_for};
 pub use project::PROJECT_SETTINGS;
-pub use settings::{Budget, Commits, Decay, Floors, Ledger, Settings, Weights};
+pub use settings::{Budget, Commits, Decay, Floors, Ladder, Ledger, Settings, Weights};
 
 /// What went wrong while reading a configuration.
 #[derive(Debug, thiserror::Error)]

@@ -29,6 +29,7 @@ mod placed;
 mod private;
 mod purge;
 mod read;
+mod read_through;
 mod relate;
 mod retiring;
 mod row;
@@ -56,7 +57,7 @@ pub use episode::Episode;
 pub use export::Row as TrainingRow;
 pub use extraction::ExtractionProgress;
 pub use generation::{Generation, Piece, Ready, Stale};
-pub use health::{Check, FIXES, State as HealthState, health, summary as health_summary};
+pub use health::{Check, FIXES, LADDER, State as HealthState, health, summary as health_summary};
 pub use jobs::{Job, JobState};
 pub use laid::{Prompt, Proposal, Summary};
 pub use mint::mint;
@@ -71,6 +72,7 @@ pub use purge::{
     purge, purge_domain, purge_run, purge_scratch, purge_session,
 };
 pub use read::{Cluster, Recall};
+pub use read_through::RunRead;
 pub use relate::Reach;
 pub use schema::VERSION as SCHEMA_VERSION;
 pub use score::{Scored, Weights, cosine, coverage, frecency, fts_query};

@@ -7,14 +7,15 @@
 use crate::{DistilError, Ingest, Kind, Observation, Provenance, Report, Role, extract};
 use balthasar_lua::{Engine, Settings};
 use balthasar_model::SessionId;
-use balthasar_store::{Store, Transcript, Turn};
+use balthasar_store::{RunRead, Store, Transcript, Turn};
 
 /// What names this reader in a stamp and in a witness note.
 pub const SOURCE: &str = "transcript";
 
 /// Run the extractors over one run's turns.
 ///
-/// Idempotent by the same stamp machinery an ingest uses; bumping
+/// Idempotent by the same stamp machinery an ingest uses, which also keeps how far the run was
+/// read: a run that went on is read from there, never twice over. Bumping
 /// [`EXTRACTOR_VERSION`](crate::EXTRACTOR_VERSION) makes a better rule read every run again.
 ///
 /// `ask.source` should be [`SOURCE`].
@@ -31,13 +32,20 @@ pub fn distil_run(
         ..Report::default()
     };
 
-    if !ask.dry_run && store.already_read(SOURCE, session.as_str(), crate::EXTRACTOR_VERSION)? {
-        report.already_read += 1;
-        return Ok(report);
-    }
-
-    let turns = held.replay(session)?;
+    let read = if ask.dry_run {
+        RunRead::Unread
+    } else {
+        store.read_of(SOURCE, session.as_str(), crate::EXTRACTOR_VERSION)?
+    };
+    let turns: Vec<Turn> = held
+        .replay(session)?
+        .into_iter()
+        .filter(|turn| read.pending(turn.cursor))
+        .collect();
     if turns.is_empty() {
+        if read != RunRead::Unread {
+            report.already_read += 1;
+        }
         return Ok(report);
     }
     report.sessions = 1;
@@ -84,7 +92,14 @@ pub fn distil_run(
     crate::ingest::land(store, engine, settings, &from, &found, &mut report)?;
 
     if !ask.dry_run {
-        store.stamp(SOURCE, session.as_str(), crate::EXTRACTOR_VERSION, ask.now)?;
+        let through = turns.last().map_or(0, |turn| turn.cursor);
+        store.stamp_through(
+            SOURCE,
+            session.as_str(),
+            crate::EXTRACTOR_VERSION,
+            through,
+            ask.now,
+        )?;
     }
     Ok(report)
 }
@@ -98,7 +113,9 @@ pub fn undistilled(
 ) -> Result<Vec<SessionId>, DistilError> {
     let mut out = Vec::new();
     for run in held.runs(cap)? {
-        if !store.already_read(SOURCE, run.session.as_str(), crate::EXTRACTOR_VERSION)? {
+        let read = store.read_of(SOURCE, run.session.as_str(), crate::EXTRACTOR_VERSION)?;
+        let next = held.next_cursor(&run.session)?;
+        if read == RunRead::Unread || (next > 0 && read.pending(next - 1)) {
             out.push(run.session);
         }
     }

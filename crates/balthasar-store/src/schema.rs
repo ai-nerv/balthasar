@@ -9,7 +9,7 @@
 use rusqlite::Connection;
 
 /// Every migration, in order. The index is the version it produces.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10];
 
 /// What schema a store this build writes is at.
 ///
@@ -460,6 +460,10 @@ CREATE VIEW live_memory AS
   WHERE valid_to IS NULL AND archived_at IS NULL AND tier <> 'archive';
 CREATE INDEX memory_catalog ON memory(scope, valid_from DESC, id DESC)
   WHERE valid_to IS NULL AND archived_at IS NULL;
+"#;
+
+const V10: &str = r#"
+ALTER TABLE stamp ADD COLUMN through INTEGER;
 "#;
 
 #[cfg(test)]

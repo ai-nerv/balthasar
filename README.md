@@ -137,6 +137,12 @@ is vocabulary, not a value, unless it is spelled like a name. The commands are c
 way: closing is not deleting, the witness names the commit, and `balthasar settle <old> <new>
 --keep <old>` reopens it.
 
+**The ladder climbs on its own.** `serve` distils a session once it has been quiet ten minutes,
+and once a day reads the commits and consolidates, on a thread of its own and never started by a
+`layout` call. A pass reads for thirty seconds at most and leaves the rest to the next; a run that
+goes on is read from where it stopped. `balthasar.ladder = false` turns it off, and `status`
+turns cold when turns have waited more than two days for a consolidation.
+
 **What was said is searchable.** A claim stated once, never repeated and never extracted lives
 in the transcript and nowhere else. `recall` answers from it too, as evidence — never as truth.
 

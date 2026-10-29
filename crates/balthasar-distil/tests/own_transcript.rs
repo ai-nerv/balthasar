@@ -548,3 +548,44 @@ fn a_change_marker_supersedes() {
         "{texts:?}"
     );
 }
+
+#[test]
+fn a_run_that_goes_on_is_read_from_where_it_stopped() {
+    let mut store = Store::ephemeral().expect("store");
+    let mut engine = Engine::new();
+    let settings = Settings::default();
+    let mut held = Transcript::ephemeral().expect("scrollback");
+    let session = SessionId::new("01GOESON");
+    streamed(
+        &mut held,
+        &session,
+        vec![said(1, "remember: we deploy with fly.io")],
+    );
+    let mut read = |store: &mut Store, held: &Transcript| {
+        distil_run(store, &mut engine, &settings, held, &session, &ask(false)).expect("distil")
+    };
+    assert_eq!(read(&mut store, &held).promoted, 1);
+    assert!(undistilled(&store, &held, 10).expect("waiting").is_empty());
+
+    held.write(&session, &said(2, "remember: the docs live in docs/site"))
+        .expect("turn");
+    assert_eq!(
+        undistilled(&store, &held, 10).expect("waiting"),
+        vec![session.clone()],
+        "a run that went on is waiting again"
+    );
+    let again = read(&mut store, &held);
+    assert_eq!((again.observations, again.promoted), (1, 1), "{again:?}");
+
+    let found = store.recall(&Recall::of("deploy", NOW)).expect("recall");
+    let deploy = found
+        .iter()
+        .find(|scored| scored.memory.text().contains("fly.io"))
+        .expect("still known");
+    assert_eq!(
+        store.witnesses_of(&deploy.memory.id).expect("why").len(),
+        1,
+        "the first turn was not read twice"
+    );
+    assert_eq!(read(&mut store, &held).already_read, 1);
+}

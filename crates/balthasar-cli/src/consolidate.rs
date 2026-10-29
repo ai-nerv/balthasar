@@ -52,6 +52,10 @@ pub fn run(
         balthasar_distil::CommitsRead::default()
     };
     let report = loaded.consolidate(&mut store, Some(&mut pad), scope, at, !args.commit)?;
+    if args.commit {
+        let ladder = balthasar_model::SessionId::new(balthasar_store::LADDER);
+        held.set_counter(&ladder, "consolidated", u64::try_from(at).unwrap_or(0))?;
+    }
 
     for text in &report.promoted {
         loaded.tell("consolidate", &[serde_json::json!(text)]);

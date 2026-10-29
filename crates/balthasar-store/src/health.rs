@@ -47,11 +47,15 @@ impl Check {
 }
 
 /// Every command a check names as its fix.
-pub const FIXES: &[&str] = &[SAVE, REINDEX, RETRY];
+pub const FIXES: &[&str] = &[SAVE, REINDEX, RETRY, CONSOLIDATE];
+
+/// The run whose counters hold when the ladder last climbed: `distilled` and `consolidated`.
+pub const LADDER: &str = "ladder";
 
 const SAVE: &str = "balthasar export";
 const REINDEX: &str = "balthasar reindex --text";
 const RETRY: &str = "balthasar api jobs '\"<session>\"' '{\"retry_extraction\":true}'";
+const CONSOLIDATE: &str = "balthasar consolidate --now";
 
 /// Every check on `store`, and on `scrollback` when there is one.
 pub fn health(store: &Store, scrollback: Option<&Transcript>) -> Result<Vec<Check>, StoreError> {
@@ -139,6 +143,25 @@ fn transcript_checks(scrollback: &Transcript) -> Result<Vec<Check>, StoreError> 
             State::Cold,
             format!("{aside} layout effect(s) set aside"),
             None,
+        )
+    });
+
+    let consolidated = scrollback
+        .counter(&balthasar_model::SessionId::new(LADDER), "consolidated")?
+        .map_or(0, |at| i64::try_from(at).unwrap_or(i64::MAX));
+    let waiting: i64 = scrollback.db().query_row(
+        "SELECT count(*) FROM turn WHERE at > ?1 AND at < (SELECT max(at) FROM turn) - ?2",
+        rusqlite::params![consolidated, 2 * crate::DAY],
+        |r| r.get(0),
+    )?;
+    out.push(if waiting == 0 {
+        Check::new("ladder", State::Ok, "consolidated lately".into(), None)
+    } else {
+        Check::new(
+            "ladder",
+            State::Cold,
+            format!("{waiting} turn(s) waited over two days for a consolidation"),
+            Some(CONSOLIDATE),
         )
     });
     Ok(out)

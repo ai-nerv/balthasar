@@ -140,3 +140,48 @@ fn health_sees_a_missing_index_row_and_reindex_mends_it() {
     let checks = balthasar_store::health(&store, None).expect("health");
     assert!(!balthasar_store::health_summary(&checks).contains("RED"));
 }
+
+#[test]
+fn health_turns_cold_when_turns_wait_days_for_a_consolidation() {
+    let store = Store::ephemeral().expect("store");
+    let held = balthasar_store::Transcript::ephemeral().expect("scrollback");
+    let said = |at: Timestamp| {
+        let turn = balthasar_store::Turn {
+            at,
+            role: "user".into(),
+            kind: "prose".into(),
+            text: format!("said at {at}"),
+            cursor: u64::try_from(at - T0).unwrap_or(0),
+            ..balthasar_store::Turn::default()
+        };
+        held.insert(&SessionId::new("run"), &turn).expect("turn");
+    };
+    let ladder = |checks: &[balthasar_store::Check]| {
+        checks
+            .iter()
+            .find(|c| c.name == "ladder")
+            .map(|c| c.state)
+            .expect("a ladder check")
+    };
+    said(T0);
+    let fresh = balthasar_store::health(&store, Some(&held)).expect("health");
+    assert_eq!(
+        ladder(&fresh),
+        balthasar_store::HealthState::Ok,
+        "a fresh run"
+    );
+
+    said(T0 + 3 * DAY);
+    let cold = balthasar_store::health(&store, Some(&held)).expect("health");
+    assert_eq!(ladder(&cold), balthasar_store::HealthState::Cold);
+    assert!(
+        balthasar_store::health_summary(&cold).contains("cold: ladder"),
+        "{cold:?}"
+    );
+
+    let mark = SessionId::new(balthasar_store::LADDER);
+    held.set_counter(&mark, "consolidated", (T0 + 3 * DAY) as u64)
+        .expect("consolidated");
+    let warm = balthasar_store::health(&store, Some(&held)).expect("health");
+    assert_eq!(ladder(&warm), balthasar_store::HealthState::Ok);
+}

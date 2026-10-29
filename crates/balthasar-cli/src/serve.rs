@@ -166,6 +166,11 @@ pub fn serve(
                             store_path, scope, &which,
                         )),
                         retired: None,
+                        ladder: crate::ladder::Ladder::new(
+                            store_path.map(Path::to_path_buf),
+                            scope.clone(),
+                            which.clone(),
+                        ),
                     })
                 });
                 match made {
@@ -199,12 +204,24 @@ pub fn serve(
             loaded.settings().retained_since(now),
             now,
         );
+        if request.call == "observe"
+            && reply.ok
+            && let Some(session) = request.args.first().and_then(|v| v.as_str())
+        {
+            held.ladder.heard(session, now);
+        }
+        held.ladder.tick(&request.call, loaded.settings().ladder, now);
         reply
         })
     });
 
     // The socket goes before the stores: closing a store checkpoints its WAL and fsyncs.
     drop(listener);
+    if loaded.settings().ladder.is_some() {
+        for held in opened.values_mut() {
+            held.ladder.finish(now());
+        }
+    }
     served?;
     Ok(())
 }
@@ -301,6 +318,8 @@ struct Opened {
     store: balthasar_store::Store,
     scrollback: balthasar_store::Transcript,
     scratch: balthasar_store::Scratchpad,
+    /// The passes this store climbs on its own.
+    ladder: crate::ladder::Ladder,
     /// When turn retention last ran on these stores.
     retired: Option<balthasar_model::Timestamp>,
 }
@@ -472,6 +491,14 @@ mod retiring {
             scrollback: balthasar_store::Transcript::ephemeral().expect("scrollback"),
             scratch: balthasar_store::Scratchpad::at(dir),
             retired: None,
+            ladder: crate::ladder::Ladder::new(
+                Some(dir.join("memory.db")),
+                balthasar_model::ScopeId::new("/w"),
+                crate::Which {
+                    tool: balthasar_store::Tool::default(),
+                    named: false,
+                },
+            ),
         }
     }
 

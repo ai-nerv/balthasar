@@ -12,6 +12,7 @@ mod eval;
 mod forget;
 mod ingest;
 mod init;
+mod ladder;
 mod loaded;
 mod promote;
 mod recall;

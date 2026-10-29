@@ -171,6 +171,8 @@ pub struct Settings {
     pub decisions: Vec<String>,
     /// How commits are read, or `None` when the configuration turned it off.
     pub commits: Option<Commits>,
+    /// When `serve` distils and consolidates on its own, or `None` when it does not.
+    pub ladder: Option<Ladder>,
     /// Days a session's turns are kept once it has gone quiet. `None` keeps them for good.
     pub retain_days: Option<u32>,
 }
@@ -287,6 +289,7 @@ impl Settings {
             imperatives: imperatives(config),
             decisions: strings(config, "decisions"),
             commits: commits(config),
+            ladder: ladder(config),
             retain_days: config
                 .number("retain_days")
                 .filter(|days| *days >= 1.0)
@@ -452,6 +455,43 @@ fn commits(config: &Config) -> Option<Commits> {
     Some(Commits {
         log: words("log", base.log),
         grep: words("grep", base.grep),
+    })
+}
+
+/// When `serve` climbs the ladder by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ladder {
+    /// Seconds a session is quiet before what it said is distilled.
+    pub after_idle_s: u64,
+    /// Whether a consolidation pass, commits included, runs once a day.
+    pub daily: bool,
+}
+
+impl Default for Ladder {
+    fn default() -> Self {
+        Self {
+            after_idle_s: 600,
+            daily: true,
+        }
+    }
+}
+
+/// `balthasar.ladder`: the shipped cadence, a table changing it, or `false` for none.
+fn ladder(config: &Config) -> Option<Ladder> {
+    let said = config.get("ladder");
+    if said.and_then(serde_json::Value::as_bool) == Some(false) {
+        return None;
+    }
+    let base = Ladder::default();
+    Some(Ladder {
+        after_idle_s: said
+            .and_then(|s| s.get("after_idle_s"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(base.after_idle_s),
+        daily: said
+            .and_then(|s| s.get("daily"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(base.daily),
     })
 }
 
