@@ -207,6 +207,50 @@ pub(crate) fn moved(rows: &[balthasar_store::Turn], held: Option<&Value>) -> boo
         .any(|turn| turn.error || turn.role == "user")
 }
 
+/// What a person says to let a run go on.
+const GOING_ON: &[&str] = &[
+    "ok", "okay", "yes", "yep", "sure", "thanks", "thank", "you", "continue", "go", "on", "ahead",
+    "proceed", "next", "please", "fine", "good", "great", "done", "do", "it",
+];
+
+/// Whether `query` only lets the run go on: at most three words, none of them asking for
+/// anything a search could look for.
+pub(crate) fn acknowledges(query: &str) -> bool {
+    let words: Vec<String> = query
+        .split_whitespace()
+        .map(|word| {
+            word.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect();
+    !words.is_empty()
+        && words.len() <= 3
+        && words.iter().all(|word| GOING_ON.contains(&word.as_str()))
+}
+
+/// The slot a prompt that only `acknowledges` takes over from the one before, when nothing
+/// written in between changes what is worth offering; it then counts as settled at `through`.
+pub(crate) fn carried(
+    query: &str,
+    before: Option<Value>,
+    rows: &[balthasar_store::Turn],
+    through: u64,
+) -> Option<Value> {
+    let mut held = before.filter(|_| acknowledges(query))?;
+    let earlier: Vec<balthasar_store::Turn> = rows
+        .iter()
+        .filter(|turn| turn.cursor < through)
+        .cloned()
+        .collect();
+    if moved(&earlier, Some(&held)) {
+        return None;
+    }
+    held.as_object_mut()?
+        .insert("through".to_owned(), json!(through));
+    Some(held)
+}
+
 #[cfg(test)]
 #[path = "supply/tests.rs"]
 mod tests;

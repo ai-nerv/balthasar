@@ -308,6 +308,10 @@ the latest prompt. Nothing is recorded by answering: `applied {id, usage}` marks
 and corrects the model's token estimate from the provider's count, and `overflowed {id, said}`
 answers a tighter layout. The rules are `balthasar.window` in `init.lua`.
 
+Memory is chosen once per prompt. A prompt that only lets the run go on — three words at most,
+all of them like "ok", "go on" or "thanks" — keeps the previous prompt's memory byte for byte,
+unless a tool failed or someone else spoke in between.
+
 balthasar never calls a model. When a summary is due, or memory could be curated, or notes
 extracted from a finished turn, the layout (or `jobs` between turns) hands the harness a job —
 an instruction, an input, a schema — and `job_done` brings the answer back. Notes are pinned or

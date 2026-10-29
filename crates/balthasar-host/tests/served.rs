@@ -424,3 +424,54 @@ fn with_the_ledger_off_nothing_delivered_is_recorded() {
             .is_empty()
     );
 }
+
+/// A layout for a prompt that says only `query`, after the turn at `cursor`.
+fn said_next(held: &mut Held, cursor: u64, query: &str, round: u64) -> Value {
+    let turn = json!({ "cursor": cursor, "role": "user", "kind": "user", "tokens": 2,
+                       "text": query });
+    let reply = held.ask(&Door::Owner, "observe", vec![json!(SESSION), turn]);
+    assert!(reply.ok, "{:?}", reply.error);
+    held.one(
+        "layout",
+        json!({ "round": round, "window": 200_000, "reply": 8_000,
+                "fixed": { "system": 600, "tools": 400 }, "query": query, "idle_s": 5,
+                "helpers": [] }),
+    )
+}
+
+#[test]
+fn an_acknowledgement_keeps_the_memory_slot_byte_for_byte() {
+    let mut held = Held::seeded();
+    held.asked();
+    let first = memory_slot(&held.one("layout", window()));
+    assert!(first.contains("QWNEWVALUE"), "{first}");
+    for (cursor, said) in [(1, "ok"), (2, "go on"), (3, "Thanks!")] {
+        let next = memory_slot(&said_next(&mut held, cursor, said, 0));
+        assert_eq!(next, first, "{said:?} changed the slot");
+    }
+}
+
+#[test]
+fn an_acknowledgement_after_a_failure_looks_again() {
+    let mut held = Held::seeded();
+    held.asked();
+    let first = memory_slot(&held.one("layout", window()));
+    let failed = json!({ "cursor": 1, "role": "tool", "kind": "tool_result", "text": "boom",
+                         "error": true });
+    let reply = held.ask(&Door::Owner, "observe", vec![json!(SESSION), failed]);
+    assert!(reply.ok, "{:?}", reply.error);
+    let next = memory_slot(&said_next(&mut held, 2, "ok", 0));
+    assert_ne!(next, first, "a failure can make something else relevant");
+}
+
+#[test]
+fn a_short_request_is_not_an_acknowledgement() {
+    let mut held = Held::seeded();
+    held.asked();
+    let first = memory_slot(&held.one("layout", window()));
+    let next = memory_slot(&said_next(&mut held, 1, "fix the parser", 0));
+    assert_ne!(
+        next, first,
+        "three words asking for something are a question"
+    );
+}

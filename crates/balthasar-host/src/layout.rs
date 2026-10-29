@@ -143,7 +143,15 @@ fn lay_out(
     // since hit an error or been spoken to, which can make something relevant that was not.
     let through = turns.last().map_or(0, |turn| turn.cursor);
     let moved = supply::moved(&turns, prompt.memory.as_ref());
-    let memory = if let Some(kept) = Supplied::kept(prompt.memory.as_ref(), &query, moved) {
+    let carried = prompt
+        .memory
+        .as_ref()
+        .filter(|_| supply::acknowledges(&query))
+        .and_then(|held| held.get("query"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let wanted = carried.as_deref().unwrap_or(&query);
+    let memory = if let Some(kept) = Supplied::kept(prompt.memory.as_ref(), wanted, moved) {
         kept
     } else {
         let found = supply::candidates(at, &query, CANDIDATES);
@@ -371,19 +379,22 @@ fn gather(
     let summary =
         crate::preparing::projection(scrollback, session, scrollback.summary(session).map_err(e)?)
             .map_err(e)?;
-    let mark = turns
+    let asked_at = turns
         .iter()
         .rev()
         .find(|t| t.role == "user")
-        .map_or_else(|| format!("q:{query}"), |t| t.cursor.to_string());
-    let mut prompt = scrollback
-        .prompt(session)
-        .map_err(e)?
-        .filter(|p| p.mark == mark)
-        .unwrap_or(Prompt {
+        .map(|t| t.cursor);
+    let mark = asked_at.map_or_else(|| format!("q:{query}"), |cursor| cursor.to_string());
+    let mut prompt = match scrollback.prompt(session).map_err(e)? {
+        Some(held) if held.mark == mark => held,
+        before => Prompt {
             mark,
+            memory: asked_at.and_then(|at| {
+                crate::supply::carried(query, before.and_then(|p| p.memory), &turns, at)
+            }),
             ..Prompt::default()
-        });
+        },
+    };
     if let Some(helpers) = asked["helpers"].as_array() {
         prompt.helpers = helpers
             .iter()

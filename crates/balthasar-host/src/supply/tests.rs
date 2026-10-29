@@ -154,3 +154,31 @@ fn a_packed_slot_never_writes_one_claim_twice() {
     );
     assert!(packed.text.contains("Tests run on CI"), "{}", packed.text);
 }
+
+#[test]
+fn going_on_is_an_acknowledgement() {
+    for said in [
+        "ok",
+        "OK.",
+        "yes please",
+        "go on",
+        "thank you!",
+        "continue",
+        "do it",
+    ] {
+        assert!(super::acknowledges(said), "{said:?}");
+    }
+}
+
+#[test]
+fn a_request_is_not() {
+    for said in [
+        "",
+        "fix the parser",
+        "ok fix it now please",
+        "yes, use make",
+        "deploy",
+    ] {
+        assert!(!super::acknowledges(said), "{said:?}");
+    }
+}
