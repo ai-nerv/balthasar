@@ -61,6 +61,9 @@ pub struct Strength {
     pub access_count: u32,
     /// Pinned memories do not decay at all.
     pub pinned: bool,
+    /// When `value` was last computed; `last_accessed` when never.
+    #[serde(default)]
+    pub as_of: Option<Timestamp>,
 }
 
 impl Strength {
@@ -73,7 +76,14 @@ impl Strength {
             last_accessed: now,
             access_count: 0,
             pinned: false,
+            as_of: None,
         }
+    }
+
+    /// When `value` was true.
+    #[must_use]
+    pub fn base(&self) -> Timestamp {
+        self.as_of.unwrap_or(self.last_accessed)
     }
 
     /// The decay constant actually applied, after inertia.
@@ -98,7 +108,7 @@ impl Strength {
         if self.pinned {
             return 1.0;
         }
-        let days = ((now - self.last_accessed).max(0)) as f64 / 86_400.0;
+        let days = ((now - self.base()).max(0)) as f64 / 86_400.0;
         (self.value * (-self.effective_rate() * days).exp()).clamp(0.0, 1.0)
     }
 
@@ -111,7 +121,7 @@ impl Strength {
         if self.pinned {
             return 1.0;
         }
-        let days = ((now - self.last_accessed).max(0)) as f64 / 86_400.0;
+        let days = ((now - self.base()).max(0)) as f64 / 86_400.0;
         let rate = self.effective_rate() * crate::tempo(tier);
         (self.value * (-rate * days).exp()).clamp(0.0, 1.0)
     }
@@ -121,13 +131,14 @@ impl Strength {
             return;
         }
         self.value = self.at(now);
-        self.last_accessed = now;
+        self.as_of = Some(now);
     }
 
     /// Recall reinforces: back to full, and one more reason to resist fading next time.
     pub fn touch(&mut self, now: Timestamp) {
         self.value = 1.0;
         self.last_accessed = now;
+        self.as_of = None;
         self.access_count = self.access_count.saturating_add(1);
     }
 

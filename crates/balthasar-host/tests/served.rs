@@ -223,3 +223,31 @@ fn the_owner_may_ask_for_history_and_sees_the_replaced_answer() {
     assert!(text.contains("QWOLDVALUE"), "{text}");
     assert!(text.contains("QWNEWVALUE"), "{text}");
 }
+
+#[test]
+fn a_delivered_memory_gains_access_count() {
+    let mut held = Held::seeded();
+    held.asked();
+    let laid = held.one("layout", window());
+    let delivered: Vec<String> = laid["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .filter(|slot| slot["kind"] == "memory")
+        .flat_map(|slot| slot["ids"].as_array().cloned().unwrap_or_default())
+        .filter_map(|id| id.as_str().map(str::to_owned))
+        .collect();
+    assert!(!delivered.is_empty(), "something was delivered: {laid}");
+    held.one(
+        "applied",
+        json!({ "id": laid["id"], "usage": { "input": 900, "output": 10 } }),
+    );
+    for id in delivered {
+        let memory = held
+            .store
+            .get(&balthasar_model::MemoryId::new(id))
+            .expect("read")
+            .expect("there");
+        assert_eq!(memory.strength.access_count, 1, "{}", memory.text());
+    }
+}

@@ -73,31 +73,6 @@ impl Store {
         Ok(Landing::Added(id))
     }
 
-    /// Write a claim that disputes `held` instead of replacing it: both stay open, each counts
-    /// against the other until a person settles them. A restatement of something held
-    /// reinforces it as [`Store::remember`] would.
-    pub fn dispute(
-        &mut self,
-        held: &MemoryId,
-        memory: Memory,
-        witness: Witness,
-        now: Timestamp,
-    ) -> Result<Landing, StoreError> {
-        if let Some(existing) = self.standing(&memory)?
-            && existing != *held
-            && self.says_the_same(&existing, &memory)?
-        {
-            self.attach(&existing, witness, now)?;
-            return Ok(Landing::Reinforced(existing));
-        }
-        let id = self.insert(memory, &witness, now)?;
-        self.link(&id, held, LinkRelation::Contradicts, now)?;
-        self.link(held, &id, LinkRelation::Contradicts, now)?;
-        self.rescore(&id, now)?;
-        self.rescore(held, now)?;
-        Ok(Landing::Added(id))
-    }
-
     /// Write a memory with nothing attached. See [`Store::keep_scratch`].
     fn insert_unwitnessed(
         &mut self,
@@ -108,7 +83,7 @@ impl Store {
     }
 
     /// Write a memory and its first witness.
-    fn insert(
+    pub(crate) fn insert(
         &mut self,
         mut memory: Memory,
         witness: &Witness,
@@ -146,9 +121,10 @@ impl Store {
              (id, tier, scope, session, subject, predicate, object, body, text, content_hash, \
               observed_at, happened_at, valid_from, valid_to, \
               importance, strength, last_accessed, access_count, pinned, \
-              confidence, privacy, through, who, archived_at, single_valued, lead) \
+              confidence, privacy, through, who, archived_at, single_valued, lead, \
+              confirmed_at, strength_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
-                     ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+                     ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
             params![
                 memory.id.as_str(),
                 row::tier_str(memory.tier),
@@ -176,6 +152,8 @@ impl Store {
                 memory.archived_at,
                 i64::from(single),
                 lead,
+                memory.temporal.confirmed_at,
+                memory.strength.as_of,
             ],
         )?;
         tx.execute(
@@ -204,9 +182,23 @@ impl Store {
         witness: Witness,
         now: Timestamp,
     ) -> Result<f64, StoreError> {
+        let another_run: bool = self.db().query_row(
+            "SELECT NOT EXISTS (SELECT 1 FROM witness WHERE memory = ?1 AND session = ?2)",
+            params![id.as_str(), witness.session.as_str()],
+            |r| r.get(0),
+        )?;
         {
             let tx = self.db_mut().savepoint()?;
             write_witness(&tx, id, &witness)?;
+            // Said again by another run: confirmed now, and back to full strength.
+            if another_run {
+                tx.execute(
+                    "UPDATE memory SET confirmed_at = max(coalesce(confirmed_at, observed_at), ?2), \
+                     strength = 1.0, strength_at = NULL, \
+                     last_accessed = max(last_accessed, ?2) WHERE id = ?1",
+                    params![id.as_str(), witness.at],
+                )?;
+            }
             tx.commit()?;
         }
         self.rescore(id, now)
@@ -306,7 +298,7 @@ impl Store {
     /// Note that a memory was recalled: reinforce it, so what is needed stops fading.
     pub fn touch(&mut self, id: &MemoryId, now: Timestamp) -> Result<(), StoreError> {
         self.db().execute(
-            "UPDATE memory SET strength = 1.0, last_accessed = ?2, \
+            "UPDATE memory SET strength = 1.0, strength_at = NULL, last_accessed = ?2, \
              access_count = access_count + 1 WHERE id = ?1",
             params![id.as_str(), now],
         )?;

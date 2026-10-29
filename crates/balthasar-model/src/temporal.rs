@@ -12,9 +12,11 @@ pub struct Temporal {
     /// `None` means "the same as `observed_at`" rather than "unknown".
     pub happened_at: Option<Timestamp>,
     pub valid_from: Timestamp,
-    /// When it stopped. `None` is the whole point: it means *still true*, and it is what the
-    /// partial unique index keys on so the database itself forbids two live answers to one slot.
+    /// When it stopped. `None` means *still true*, which the partial unique index keys on.
     pub valid_to: Option<Timestamp>,
+    /// When another run last said it again. Staleness counts from here, or from `observed_at`.
+    #[serde(default)]
+    pub confirmed_at: Option<Timestamp>,
 }
 
 impl Temporal {
@@ -26,6 +28,7 @@ impl Temporal {
             happened_at: None,
             valid_from: now,
             valid_to: None,
+            confirmed_at: None,
         }
     }
 
@@ -39,6 +42,7 @@ impl Temporal {
             happened_at: Some(then),
             valid_from: then,
             valid_to: None,
+            confirmed_at: None,
         }
     }
 
@@ -46,6 +50,13 @@ impl Temporal {
     #[must_use]
     pub fn when(&self) -> Timestamp {
         self.happened_at.unwrap_or(self.observed_at)
+    }
+
+    /// When it was last told: the latest confirmation, or when it was first observed.
+    #[must_use]
+    pub fn confirmed(&self) -> Timestamp {
+        self.confirmed_at
+            .map_or(self.observed_at, |at| at.max(self.observed_at))
     }
 
     /// Whether the claim is still standing.

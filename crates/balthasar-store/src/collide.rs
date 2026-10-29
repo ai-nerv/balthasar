@@ -5,8 +5,8 @@
 //! throw away the evidence it agreed with; a revision that reinforced would leave a project
 //! asserting a value nobody still holds.
 
-use crate::{Store, StoreError, row};
-use balthasar_model::{Memory, MemoryId};
+use crate::{Landing, Store, StoreError, row};
+use balthasar_model::{LinkRelation, Memory, MemoryId, Timestamp, Witness};
 use rusqlite::{OptionalExtension, params};
 
 impl Store {
@@ -162,5 +162,30 @@ impl Store {
         // Word for word, or the same claim in other words. The second is what makes a restatement
         // reinforce what is already held instead of superseding it.
         Ok(hash == arriving.content_hash || balthasar_model::same_claim(&text, &arriving.text()))
+    }
+
+    /// Write a claim that disputes `held` instead of replacing it: both stay open, each counts
+    /// against the other until a person settles them. A restatement of something held
+    /// reinforces it as [`Store::remember`] would.
+    pub fn dispute(
+        &mut self,
+        held: &MemoryId,
+        memory: Memory,
+        witness: Witness,
+        now: Timestamp,
+    ) -> Result<Landing, StoreError> {
+        if let Some(existing) = self.standing(&memory)?
+            && existing != *held
+            && self.says_the_same(&existing, &memory)?
+        {
+            self.attach(&existing, witness, now)?;
+            return Ok(Landing::Reinforced(existing));
+        }
+        let id = self.insert(memory, &witness, now)?;
+        self.link(&id, held, LinkRelation::Contradicts, now)?;
+        self.link(held, &id, LinkRelation::Contradicts, now)?;
+        self.rescore(&id, now)?;
+        self.rescore(held, now)?;
+        Ok(Landing::Added(id))
     }
 }

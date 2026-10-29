@@ -444,15 +444,18 @@ const V8: &str = r#"
 ALTER TABLE session ADD COLUMN title_pinned INTEGER;
 "#;
 
-/// The memories that may be offered: open, unarchived, outside the archive tier.
+/// When another run last said a memory again, when its strength was computed, and the memories
+/// that may be offered: open, unarchived, outside the archive tier.
 ///
-/// The two closing columns are left out, so a query filtering on them fails to prepare.
+/// The view leaves out the two closing columns, so a query filtering on them fails to prepare.
 const V9: &str = r#"
+ALTER TABLE memory ADD COLUMN confirmed_at INTEGER;
+ALTER TABLE memory ADD COLUMN strength_at INTEGER;
 CREATE VIEW live_memory AS
   SELECT id, tier, scope, session, subject, predicate, object, lead, body, text, content_hash,
          observed_at, happened_at, valid_from, importance, strength, last_accessed,
          access_count, pinned, single_valued, confidence, privacy, through, who,
-         embedding, embed_model
+         embedding, embed_model, confirmed_at, strength_at
   FROM memory
   WHERE valid_to IS NULL AND archived_at IS NULL AND tier <> 'archive';
 "#;

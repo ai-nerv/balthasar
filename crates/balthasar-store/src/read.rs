@@ -319,7 +319,7 @@ impl Store {
                     .iter()
                     .find(|(id, _)| *id == memory.id)
                     .map_or(0.0, |(_, worth)| *worth);
-                let strength = memory.strength.at(ask.now);
+                let strength = memory.strength.at_tier(memory.tier, ask.now);
                 let confidence = memory.confidence;
                 let frecency = frecency(
                     memory.strength.access_count,

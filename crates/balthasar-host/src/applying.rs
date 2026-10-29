@@ -16,7 +16,10 @@ pub(crate) fn confirm(
     usage: Option<&Value>,
 ) -> Result<(), StoreError> {
     match commit(at, session, id, usage) {
-        Ok(true) => events::layout(LayoutOutcome::Applied),
+        Ok(true) => {
+            events::layout(LayoutOutcome::Applied);
+            delivered(at, id)?;
+        }
         Ok(false) => events::layout(LayoutOutcome::IgnoredRepeated),
         Err(why) => {
             events::layout(LayoutOutcome::ApplicationFailed);
@@ -24,6 +27,35 @@ pub(crate) fn confirm(
         }
     }
     replay(at, session)
+}
+
+/// Reinforce every memory a confirmed layout put in front of the model.
+fn delivered(at: &mut Answering<'_>, id: &str) -> Result<(), StoreError> {
+    let Some(proposal) = at
+        .scrollback
+        .as_ref()
+        .map(|scrollback| scrollback.proposal(id))
+        .transpose()?
+        .flatten()
+    else {
+        return Ok(());
+    };
+    let ids: Vec<String> = proposal
+        .body
+        .get("slots")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|slot| slot["kind"] == "memory")
+        .filter_map(|slot| slot["ids"].as_array())
+        .flatten()
+        .filter_map(|id| id.as_str().map(str::to_owned))
+        .collect();
+    for memory in ids {
+        at.store
+            .touch(&balthasar_model::MemoryId::new(memory), at.now)?;
+    }
+    Ok(())
 }
 
 fn commit(
