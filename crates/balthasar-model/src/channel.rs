@@ -45,6 +45,8 @@ pub enum Channel {
     ImportedHistory,
     /// Somebody wrote it at the command line.
     ManualWrite,
+    /// What the project's own repository says: its commits and its tracked files.
+    Repository,
 }
 
 impl Channel {
@@ -86,9 +88,10 @@ impl Channel {
             Self::UserInstruction | Self::UserCorrection | Self::ManualWrite => {
                 crate::Presentation::Asserted
             }
-            Self::ToolObservation | Self::PeerAssertion | Self::Consolidation => {
-                crate::Presentation::Asserted
-            }
+            Self::ToolObservation
+            | Self::PeerAssertion
+            | Self::Consolidation
+            | Self::Repository => crate::Presentation::Asserted,
             // A model's opinion is a suggestion until something observed agrees with it.
             Self::ModelInference | Self::DistillerSummary => crate::Presentation::Advisory,
             // Nothing that arrived from outside is stated as true on its own say-so.
@@ -110,6 +113,7 @@ impl Channel {
             Self::Consolidation => "consolidation",
             Self::ImportedHistory => "imported-history",
             Self::ManualWrite => "manual-write",
+            Self::Repository => "repository",
         }
     }
 }
@@ -129,6 +133,7 @@ impl FromStr for Channel {
             "consolidation" => Ok(Self::Consolidation),
             "imported-history" => Ok(Self::ImportedHistory),
             "manual-write" => Ok(Self::ManualWrite),
+            "repository" => Ok(Self::Repository),
             _ => Err(()),
         }
     }

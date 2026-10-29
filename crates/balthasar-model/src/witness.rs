@@ -31,6 +31,8 @@ pub enum WitnessKind {
     Inferred,
     /// Typed at the CLI, or written by a peer. Proposes; does not assert.
     Manual,
+    /// The repository changed a value a memory named. Crosses alone, never pins.
+    Commit,
     /// The person stated a choice, or changed one. Crosses alone, never pins.
     Choice,
 }
@@ -49,6 +51,7 @@ impl WitnessKind {
             Self::Inferred => 0.35,
             Self::Manual => 0.4,
             Self::Choice => 0.6,
+            Self::Commit => 0.5,
         }
     }
 
@@ -79,6 +82,7 @@ impl WitnessKind {
             Self::Inferred => "inferred",
             Self::Manual => "manual",
             Self::Choice => "choice",
+            Self::Commit => "commit",
         }
     }
 }
@@ -215,6 +219,7 @@ impl FromStr for WitnessKind {
             "inferred" => Ok(Self::Inferred),
             "manual" => Ok(Self::Manual),
             "choice" => Ok(Self::Choice),
+            "commit" => Ok(Self::Commit),
             other => Err(UnknownKind(other.to_owned())),
         }
     }

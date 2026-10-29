@@ -643,3 +643,32 @@ fn weak_evidence_disputes_a_claim_and_strong_evidence_replaces_it() {
         .expect("strong");
     assert!(matches!(strong, Landing::Superseded { .. }), "{strong:?}");
 }
+
+#[test]
+fn settle_reopens_a_wrong_closure() {
+    let mut store = store();
+    let old = store
+        .remember(
+            note("we deploy with heroku", MARCH),
+            saw(WitnessKind::Imperative, "s1", MARCH),
+            MARCH,
+        )
+        .expect("held")
+        .id()
+        .clone();
+    let new = store
+        .replace(
+            &old,
+            note("we deploy with render", AUGUST),
+            saw(WitnessKind::Commit, "commit:abc", AUGUST),
+            AUGUST,
+        )
+        .expect("replaced")
+        .id()
+        .clone();
+    store.settle(&old, &new, AUGUST + 1).expect("settled");
+    let kept = store.get(&old).expect("read").expect("there");
+    let dropped = store.get(&new).expect("read").expect("there");
+    assert!(kept.temporal.valid_to.is_none(), "reopened");
+    assert!(dropped.temporal.valid_to.is_some(), "closed");
+}

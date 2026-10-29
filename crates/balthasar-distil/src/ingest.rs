@@ -351,6 +351,7 @@ fn channel_of(
         WitnessKind::Imperative => (Channel::UserInstruction, None),
         WitnessKind::Correction | WitnessKind::Choice => (Channel::UserCorrection, None),
         WitnessKind::Cost => (Channel::ToolObservation, None),
+        WitnessKind::Commit => (Channel::Repository, Some(Domain::new("repo"))),
         WitnessKind::Inferred => (Channel::ModelInference, Some(Domain::model())),
         WitnessKind::Repetition | WitnessKind::Consolidation => (Channel::Consolidation, None),
         WitnessKind::Distillation => (Channel::DistillerSummary, None),

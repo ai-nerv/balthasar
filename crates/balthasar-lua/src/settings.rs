@@ -169,6 +169,8 @@ pub struct Settings {
     pub imperatives: Vec<String>,
     /// Phrases that state a choice, beside the shipped ones.
     pub decisions: Vec<String>,
+    /// How commits are read, or `None` when the configuration turned it off.
+    pub commits: Option<Commits>,
     /// Days a session's turns are kept once it has gone quiet. `None` keeps them for good.
     pub retain_days: Option<u32>,
 }
@@ -284,6 +286,7 @@ impl Settings {
             trusted: strings(config, "trusted"),
             imperatives: imperatives(config),
             decisions: strings(config, "decisions"),
+            commits: commits(config),
             retain_days: config
                 .number("retain_days")
                 .filter(|days| *days >= 1.0)
@@ -392,6 +395,66 @@ fn strings(config: &Config, name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The commands commits are read with: `{repo}`, `{count}` and `{word}` are each one argument.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Commits {
+    /// What prints diffs, newest first.
+    pub log: Vec<String>,
+    /// What lists the tracked files holding a word.
+    pub grep: Vec<String>,
+}
+
+impl Default for Commits {
+    fn default() -> Self {
+        let owned = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect();
+        Self {
+            log: owned(&[
+                "git",
+                "-C",
+                "{repo}",
+                "log",
+                "-U0",
+                "-p",
+                "-M",
+                "--no-merges",
+                "--no-color",
+                "--format=%x1e%H%x1f%ct%x1f%s",
+                "-n",
+                "{count}",
+            ]),
+            grep: owned(&[
+                "git", "-C", "{repo}", "grep", "-F", "-i", "-l", "--", "{word}",
+            ]),
+        }
+    }
+}
+
+/// `balthasar.commits`: the shipped commands, a table replacing either, or `false` for none.
+fn commits(config: &Config) -> Option<Commits> {
+    let said = config.get("commits");
+    if said.and_then(serde_json::Value::as_bool) == Some(false) {
+        return None;
+    }
+    let base = Commits::default();
+    let words = |name: &str, fallback: Vec<String>| {
+        said.and_then(|s| s.get(name))
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|argv| !argv.is_empty())
+            .unwrap_or(fallback)
+    };
+    Some(Commits {
+        log: words("log", base.log),
+        grep: words("grep", base.grep),
+    })
+}
+
 /// The words that mark a turn as an instruction, defaulting to the shipped list.
 fn imperatives(config: &Config) -> Vec<String> {
     let said = strings(config, "imperatives");
@@ -416,6 +479,7 @@ fn witness_weights(config: &Config) -> Vec<(WitnessKind, f64)> {
         WitnessKind::Inferred,
         WitnessKind::Manual,
         WitnessKind::Choice,
+        WitnessKind::Commit,
     ];
     KINDS
         .iter()

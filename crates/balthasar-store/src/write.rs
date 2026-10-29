@@ -401,6 +401,11 @@ impl Store {
             "UPDATE memory SET valid_to = ?2 WHERE id = ?1 AND valid_to IS NULL",
             params![drop.as_str(), now],
         )?;
+        // What a person keeps stands again, if something closed it.
+        self.db().execute(
+            "UPDATE memory SET valid_to = NULL WHERE id = ?1",
+            params![keep.as_str()],
+        )?;
         self.link(keep, drop, balthasar_model::LinkRelation::Supersedes, now)?;
         self.rescore(drop, now)?;
         self.rescore(keep, now)?;

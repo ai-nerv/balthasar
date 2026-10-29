@@ -7,6 +7,7 @@ mod akin;
 mod candidate;
 mod child;
 mod clash;
+mod commits;
 mod consolidate;
 mod decision;
 mod derive;
@@ -23,6 +24,7 @@ mod segment;
 pub use akin::{Akin, merge};
 pub use candidate::{Candidate, Decided, Verdict, weigh};
 pub use clash::clashes;
+pub use commits::{Read as CommitsRead, read_commits};
 pub use consolidate::{Consolidated, DISTINCT_SESSIONS, RUNS_PER_PASS, consolidate};
 pub use decision::decisions;
 pub use derive::{

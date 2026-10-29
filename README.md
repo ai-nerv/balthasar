@@ -123,9 +123,19 @@ those a note cites.
 same thing surfacing in unrelated runs is a property of the world. Confidence counts sessions,
 not mentions.
 
-**A contradiction is a correction.** A turn that disagrees with what the project already holds
-is read as a correction whatever words it used — so "we moved off Heroku last month" lands,
-though it carries no marker any word list would catch.
+**A contradiction is a correction, when it says so.** A turn that disagrees with what the project
+already holds and announces the change ("we moved off Heroku", "instead of", "no longer") replaces
+it. One that only disagrees is kept beside it as a disagreement, each counting against the other,
+until `balthasar settle` decides.
+
+**The code is a witness.** `balthasar consolidate --now` reads the commits since its last pass.
+A one-line change that drops a value a memory names closes that memory and records what the
+line became, witnessed by the commit; a value no tracked file holds any more closes with nothing
+in its place. Deleted and renamed files say nothing, and a word in more than three tracked files
+is vocabulary, not a value, unless it is spelled like a name. The commands are configurable
+(`balthasar.commits`, or `false` for none). Anyone who can land a commit can close a memory this
+way: closing is not deleting, the witness names the commit, and `balthasar settle <old> <new>
+--keep <old>` reopens it.
 
 **What was said is searchable.** A claim stated once, never repeated and never extracted lives
 in the transcript and nowhere else. `recall` answers from it too, as evidence — never as truth.

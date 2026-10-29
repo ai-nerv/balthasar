@@ -30,6 +30,7 @@ mod private;
 mod purge;
 mod read;
 mod relate;
+mod retiring;
 mod row;
 mod schema;
 mod score;

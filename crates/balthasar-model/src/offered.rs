@@ -34,6 +34,7 @@ pub fn origin(witnesses: &[Witness]) -> &'static str {
         Some(WitnessKind::Imperative) => "you said",
         Some(WitnessKind::Correction) => "you corrected",
         Some(WitnessKind::Choice) => "you chose",
+        Some(WitnessKind::Commit) => "the code says",
         Some(WitnessKind::Cost) => "learned from a failure",
         Some(WitnessKind::Manual) => "noted",
         Some(WitnessKind::Inferred) => "inferred",
