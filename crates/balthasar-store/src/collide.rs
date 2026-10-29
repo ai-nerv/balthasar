@@ -46,6 +46,9 @@ impl Store {
                     .optional()?;
                 if let Some(same) = same {
                     Some(same)
+                } else if memory.tier == balthasar_model::Tier::Habit {
+                    // The habit whose step just failed is the one this revises.
+                    self.undone_by(memory)?
                 } else if let Some(restated) = self.restated_by(memory)? {
                     // The same claim in other words is the same claim.
                     Some(restated)
@@ -118,6 +121,35 @@ impl Store {
             .map(|(id, _)| id))
     }
 
+    /// The open habit whose step names the command this habit's trigger says failed.
+    fn undone_by(&self, memory: &Memory) -> Result<Option<String>, StoreError> {
+        let balthasar_model::Body::Habit { trigger, .. } = &memory.body else {
+            return Ok(None);
+        };
+        let Some(failed) = trigger.split('`').nth(1).filter(|c| !c.is_empty()) else {
+            return Ok(None);
+        };
+        let mut statement = self.db().prepare(
+            "SELECT id, body FROM memory WHERE scope = ?1 AND tier = 'habit' \
+               AND valid_to IS NULL AND archived_at IS NULL \
+             ORDER BY observed_at DESC, id LIMIT 64",
+        )?;
+        let held = statement
+            .query_map(params![memory.scope.as_str()], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(held
+            .into_iter()
+            .find(|(_, body)| {
+                serde_json::from_str::<balthasar_model::Body>(body).is_ok_and(|body| {
+                    matches!(&body, balthasar_model::Body::Habit { steps, .. }
+                        if steps.iter().any(|step| step == failed))
+                })
+            })
+            .map(|(id, _)| id))
+    }
+
     /// The live claim this one revises, if it revises anything. Bucketed on the opening two
     /// words, and settled by the word-prefix rule rather than by the bucket.
     fn revised_by(&self, memory: &Memory) -> Result<Option<String>, StoreError> {
@@ -160,8 +192,11 @@ impl Store {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         // Word for word, or the same claim in other words. The second is what makes a restatement
-        // reinforce what is already held instead of superseding it.
-        Ok(hash == arriving.content_hash || balthasar_model::same_claim(&text, &arriving.text()))
+        // reinforce what is already held instead of superseding it; a habit is its trigger, so
+        // only its own words restate it.
+        Ok(hash == arriving.content_hash
+            || arriving.tier != balthasar_model::Tier::Habit
+                && balthasar_model::same_claim(&text, &arriving.text()))
     }
 
     /// Write a claim that disputes `held` instead of replacing it: both stay open, each counts
