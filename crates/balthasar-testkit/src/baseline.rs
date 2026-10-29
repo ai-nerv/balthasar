@@ -48,6 +48,8 @@ pub struct Baseline {
     pub recall_relevance: f64,
     /// Of what was asserted, how much was not superseded.
     pub assertion_accuracy: f64,
+    /// Closed or archived memories served across the run. Only zero is acceptable.
+    pub stale_served: usize,
     /// Estimated tokens handed to a model across the whole run.
     pub injected_tokens: usize,
     /// What the store grew to.
@@ -133,6 +135,7 @@ impl Baseline {
             recall_precision: cost.recall_precision(),
             recall_relevance: cost.recall_relevance(),
             assertion_accuracy: cost.assertion_accuracy(),
+            stale_served: cost.stale_served,
             injected_tokens: cost.injected_tokens,
             store_bytes: cost.store_bytes,
             recall_p50_ms: cost.recall_ms(0.50),
@@ -147,7 +150,7 @@ impl Baseline {
     #[must_use]
     pub fn logical(&self) -> String {
         format!(
-            "{}/{}/{}/{}/{:.6}/{:.6}/{:.6}/{}/{:.6}/{:.6}/{:.6}/{}",
+            "{}/{}/{}/{}/{:.6}/{:.6}/{:.6}/{}/{:.6}/{:.6}/{:.6}/{}/{}",
             self.run_id,
             self.schema_version,
             self.config_fingerprint,
@@ -160,6 +163,7 @@ impl Baseline {
             self.recall_relevance,
             self.assertion_accuracy,
             self.injected_tokens,
+            self.stale_served,
         )
     }
 }

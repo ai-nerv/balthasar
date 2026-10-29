@@ -170,3 +170,59 @@ fn the_control_arm_is_reported_and_cannot_go_missing() {
         "the easy control still cannot beat memory"
     );
 }
+
+/// One arm of a run, with what it cost.
+fn measured(scenario: &Scenario, arm: balthasar_testkit::Arm) -> balthasar_testkit::Measured {
+    balthasar_testkit::measure_arm(scenario, arm)
+        .expect("a run")
+        .1
+}
+
+#[test]
+fn a_changed_decision_is_stated_old_only_where_it_changed() {
+    for scenario in [
+        Scenario::decision_changes(10, START),
+        Scenario::decision_changes_amid(10, 10, START),
+    ] {
+        let score = run_arm(&scenario, balthasar_testkit::Arm::Memory);
+        let cost = measured(&scenario, balthasar_testkit::Arm::Memory);
+        assert_eq!(cost.stale_served, 0, "nothing closed is served");
+        assert!(
+            cost.asserted_stale <= 1,
+            "the old value, once, the session it changed: {}",
+            cost.asserted_stale
+        );
+        assert!(
+            score.rediscoveries <= 2 + scenario.sessions.len() - 10,
+            "each decision learned once: {score:?}"
+        );
+    }
+}
+
+#[test]
+fn rendering_closed_memories_as_current_writes_the_old_value() {
+    // The render-matched control: the same store, what it closed stated as current.
+    let scenario = Scenario::decision_changes(10, START);
+    let shipped = measured(&scenario, balthasar_testkit::Arm::Memory);
+    let control = measured(&scenario, balthasar_testkit::Arm::History);
+    assert!(control.stale_served > 0, "{control:?}");
+    assert!(
+        control.asserted_stale > shipped.asserted_stale,
+        "the control writes the old value more: {} against {}",
+        control.asserted_stale,
+        shipped.asserted_stale
+    );
+}
+
+#[test]
+fn as_many_tokens_of_nothing_relevant_know_nothing() {
+    // The length-matched control: what balthasar spends, spent on memories that answer nothing.
+    let scenario = Scenario::decision_changes(10, START);
+    let shipped = measured(&scenario, balthasar_testkit::Arm::Memory);
+    let control = measured(&scenario, balthasar_testkit::Arm::Unrelated);
+    assert_eq!(control.injected_tokens, shipped.injected_tokens);
+    assert_eq!(
+        run_arm(&scenario, balthasar_testkit::Arm::Unrelated).recalls,
+        0
+    );
+}

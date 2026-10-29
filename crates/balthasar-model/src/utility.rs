@@ -161,6 +161,8 @@ pub enum Presentation {
     Advisory,
     /// Historical or uncertain material, offered for reasoning rather than belief.
     Evidence,
+    /// Named in the catalogue by its handle and first line, never stated as true.
+    Listed,
     /// Kept and findable, never placed in an ordinary context.
     Quarantined,
 }
@@ -193,6 +195,7 @@ impl Presentation {
             Self::Asserted => "asserted",
             Self::Advisory => "advisory",
             Self::Evidence => "evidence",
+            Self::Listed => "listed",
             Self::Quarantined => "quarantined",
         }
     }
@@ -206,6 +209,7 @@ impl FromStr for Presentation {
             "asserted" => Ok(Self::Asserted),
             "advisory" => Ok(Self::Advisory),
             "evidence" => Ok(Self::Evidence),
+            "listed" => Ok(Self::Listed),
             "quarantined" => Ok(Self::Quarantined),
             _ => Err(()),
         }

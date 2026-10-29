@@ -16,6 +16,7 @@ mod ladder;
 mod loaded;
 mod promote;
 mod recall;
+mod receipt;
 mod reindex;
 mod relate;
 mod remember;

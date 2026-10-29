@@ -64,6 +64,8 @@ pub struct Measured {
     pub asserted_wrong: usize,
     /// Encounters where something relevant was findable, whether or not it was asserted.
     pub relevant_found: usize,
+    /// Served memories that were closed or archived: never acceptable above zero.
+    pub stale_served: usize,
     /// Assertions naming the command that had already failed, without naming its replacement.
     pub asserted_stale: usize,
     /// Encounters in total.
@@ -130,6 +132,18 @@ pub enum Arm {
     Nothing,
     /// Every earlier session's text carried forward, truncated to a token budget.
     InWindow(usize),
+    /// balthasar, with closed and archived memories rendered as current.
+    History,
+    /// As many tokens as balthasar would send, of memories that answer nothing asked.
+    Unrelated,
+}
+
+impl Arm {
+    /// Whether this arm keeps a store between sessions.
+    #[must_use]
+    pub fn keeps_a_store(self) -> bool {
+        matches!(self, Self::Memory | Self::History | Self::Unrelated)
+    }
 }
 
 /// How much window the in-window arm gets.
@@ -161,7 +175,7 @@ pub fn measure(scenario: &Scenario, with_memory: bool) -> Result<(Score, Measure
 
 /// The same, for one named arm.
 pub fn measure_arm(scenario: &Scenario, arm: Arm) -> Result<(Score, Measured), DistilError> {
-    let with_memory = arm == Arm::Memory;
+    let with_memory = arm.keeps_a_store();
     // The text an agent with no memory system would still have, oldest dropped first.
     let mut window: Vec<String> = Vec::new();
     let mut store = Store::ephemeral()?;
@@ -180,7 +194,14 @@ pub fn measure_arm(scenario: &Scenario, arm: Arm) -> Result<(Score, Measured), D
         for lesson in &session.lessons {
             cost.encounters += 1;
             let looked = match arm {
-                Arm::Memory => look(&store, &scope, lesson, session.at, &mut cost),
+                Arm::Memory => look(&store, &scope, lesson, session.at, false, &mut cost),
+                Arm::History => look(&store, &scope, lesson, session.at, true, &mut cost),
+                Arm::Unrelated => {
+                    let mut asked = Measured::default();
+                    look(&store, &scope, lesson, session.at, false, &mut asked);
+                    cost.injected_tokens += asked.injected_tokens;
+                    false
+                }
                 Arm::Nothing => false,
                 // No retrieval: knowing means the answer is still in the window.
                 Arm::InWindow(_) => window.iter().any(|held| held.contains(&lesson.right)),
@@ -229,26 +250,43 @@ pub fn measure_arm(scenario: &Scenario, arm: Arm) -> Result<(Score, Measured), D
 /// Whether the project already holds something that would have saved this session the trouble,
 /// and what asking cost.
 ///
-///
 /// The findable set is read at the retrieval floor and the asserted set at the injection floor,
 /// from one query, because the gap between them is the thing the two floors exist to create.
+/// `history` searches the whole record and states what it finds there closed as current.
 fn look(
     store: &Store,
     scope: &ScopeId,
     lesson: &Lesson,
     at: Timestamp,
+    history: bool,
     cost: &mut Measured,
 ) -> bool {
     let mut ask = balthasar_store::Recall::of(&lesson.intent, at);
     ask.limit = 10;
     ask.floor = floor::LIVE;
     ask.near = true;
+    ask.history = history;
 
     let started = std::time::Instant::now();
-    let found = store.recall(&ask);
+    let found = if history {
+        store.recall(&ask)
+    } else {
+        store.recall_current(&ask).map(|found| {
+            found
+                .into_iter()
+                .map(balthasar_store::Current::into_scored)
+                .collect()
+        })
+    };
     cost.recall_us.push(started.elapsed().as_micros() as u64);
 
     let Ok(found) = found else { return false };
+    let closed = |hit: &balthasar_store::Scored| {
+        hit.memory.temporal.valid_to.is_some()
+            || hit.memory.archived_at.is_some()
+            || hit.memory.tier == balthasar_model::Tier::Archive
+    };
+    cost.stale_served += found.iter().filter(|h| closed(h)).count();
     let mine: Vec<_> = found.iter().filter(|h| h.memory.scope == *scope).collect();
 
     if mine.iter().any(|h| h.memory.text().contains(&lesson.right)) {
@@ -257,7 +295,7 @@ fn look(
 
     let mut knew = false;
     for hit in mine {
-        if !hit.memory.is_assertable(floor::INJECT, at, false) {
+        if !(closed(hit) || hit.memory.is_assertable(floor::INJECT, at, false)) {
             continue;
         }
         // What a harness would have been handed, counted for every assertion, right or wrong.
@@ -274,6 +312,7 @@ fn look(
     }
     knew
 }
+
 /// Record what a session did, as a harness streaming its turns would.
 fn observe(
     store: &mut Store,

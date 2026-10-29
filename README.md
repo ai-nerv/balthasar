@@ -203,6 +203,12 @@ That is the whole defensible claim, and printing it is not optional — a benchm
 losing is impossible measures nothing. Synthetic and reproducible on purpose: no clock, no model,
 no network, no embedder, and every point is the rule-based path with no distiller in the loop.
 
+`stale served` counts closed or archived memories put in front of a model, and any rise rejects
+an experiment outright. `balthasar eval --manifest m.json --artifact out/` registers a run before
+it measures anything: the hypothesis, primary metric, guardrails and stop rule go into a receipt
+that is never replaced, so a red result stays. `oslo make perf` holds `layout` and `recall` to a
+p95 at 20,000 live memories.
+
 ### A project has many sessions
 
 Durable memory is the project's and every session in it reads it. What a session holds on its

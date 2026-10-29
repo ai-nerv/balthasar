@@ -163,6 +163,55 @@ impl Scenario {
         }
     }
 
+    /// A decision that changes halfway: the deploy goes through one command, then through
+    /// another, and the first becomes the thing that fails.
+    #[must_use]
+    pub fn decision_changes(sessions: usize, start: Timestamp) -> Self {
+        Self::decision_changes_amid(sessions, 0, start)
+    }
+
+    /// The same, with `between` sessions of unrelated decisions after the change is made.
+    #[must_use]
+    pub fn decision_changes_amid(sessions: usize, between: usize, start: Timestamp) -> Self {
+        const UNRELATED: &[(&str, &str, &str)] = &[
+            ("lint the sources", "cargo clippy", "make lint"),
+            ("format the sources", "cargo fmt", "make fmt"),
+            ("build the docs", "cargo doc", "make docs"),
+            ("bench the parser", "cargo bench", "make bench"),
+            ("audit the dependencies", "cargo audit", "make audit"),
+            ("package a release", "cargo package", "make dist"),
+            ("seed the database", "npm run seed", "make seed"),
+            ("rotate the logs", "npm run rotate", "make rotate"),
+            ("refresh the fixtures", "cargo fixtures", "make fixtures"),
+            ("render the diagrams", "npm run diagrams", "make diagrams"),
+        ];
+        let before = Lesson::new("deploy the site", "npm run deploy", "make deploy");
+        let after = Lesson::new("deploy the site", "make deploy", "just deploy");
+        let half = sessions / 2;
+        let mut met: Vec<Lesson> = (0..half).map(|_| before.clone()).collect();
+        met.extend(
+            UNRELATED
+                .iter()
+                .cycle()
+                .take(between)
+                .map(|(intent, wrong, right)| Lesson::new(intent, wrong, right)),
+        );
+        met.extend((half..sessions).map(|_| after.clone()));
+        Self {
+            project: "/w/thing".to_owned(),
+            sessions: met
+                .into_iter()
+                .enumerate()
+                .map(|(n, lesson)| Session {
+                    id: format!("01SESSION{n:04}"),
+                    at: start + n as Timestamp * DAY,
+                    asked: lesson.intent.clone(),
+                    lessons: vec![lesson],
+                })
+                .collect(),
+        }
+    }
+
     /// Every distinct lesson in the scenario.
     #[must_use]
     pub fn lessons(&self) -> Vec<Lesson> {

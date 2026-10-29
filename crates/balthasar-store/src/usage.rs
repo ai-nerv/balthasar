@@ -446,6 +446,29 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
+
+    /// The same, with how each was presented.
+    pub fn presented_in(
+        &self,
+        injection: &str,
+    ) -> Result<Vec<(MemoryId, Presentation)>, StoreError> {
+        let mut statement = self.db().prepare(
+            "SELECT memory_id, presentation_mode FROM injection_memory \
+             WHERE injection_id = ?1 ORDER BY position",
+        )?;
+        let rows = statement
+            .query_map(params![injection], |r| {
+                Ok((
+                    MemoryId::new(r.get::<_, String>(0)?),
+                    r.get::<_, String>(1)?
+                        .parse()
+                        .unwrap_or(Presentation::Evidence),
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// One action, as the ledger recorded it.
     pub fn use_of(&self, action: &str) -> Result<Option<Use>, StoreError> {
         let held = self

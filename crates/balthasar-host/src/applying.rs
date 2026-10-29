@@ -18,7 +18,7 @@ pub(crate) fn confirm(
     match commit(at, session, id, usage) {
         Ok(true) => {
             events::layout(LayoutOutcome::Applied);
-            delivered(at, id)?;
+            delivered(at, session, id)?;
         }
         Ok(false) => events::layout(LayoutOutcome::IgnoredRepeated),
         Err(why) => {
@@ -29,8 +29,9 @@ pub(crate) fn confirm(
     replay(at, session)
 }
 
-/// Reinforce every memory a confirmed layout put in front of the model.
-fn delivered(at: &mut Answering<'_>, id: &str) -> Result<(), StoreError> {
+/// Reinforce every memory a confirmed layout put in front of the model, and, when the ledger is
+/// on, record what it delivered and how: stated, hedged or listed in the catalogue.
+fn delivered(at: &mut Answering<'_>, session: &SessionId, id: &str) -> Result<(), StoreError> {
     let Some(proposal) = at
         .scrollback
         .as_ref()
@@ -40,22 +41,63 @@ fn delivered(at: &mut Answering<'_>, id: &str) -> Result<(), StoreError> {
     else {
         return Ok(());
     };
-    let ids: Vec<String> = proposal
-        .body
-        .get("slots")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|slot| slot["kind"] == "memory")
-        .filter_map(|slot| slot["ids"].as_array())
-        .flatten()
-        .filter_map(|id| id.as_str().map(str::to_owned))
-        .collect();
-    for memory in ids {
-        at.store
-            .touch(&balthasar_model::MemoryId::new(memory), at.now)?;
+    let slot = |kind: &str| -> (Vec<balthasar_model::MemoryId>, usize) {
+        let held: Vec<&Value> = proposal
+            .body
+            .get("slots")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|slot| slot["kind"] == kind)
+            .collect();
+        let ids = held
+            .iter()
+            .filter_map(|slot| slot["ids"].as_array())
+            .flatten()
+            .filter_map(|id| id.as_str().map(balthasar_model::MemoryId::new))
+            .collect();
+        let tokens: u64 = held.iter().filter_map(|slot| slot["tokens"].as_u64()).sum();
+        (ids, usize::try_from(tokens).unwrap_or(usize::MAX))
+    };
+    let (memories, memory_tokens) = slot("memory");
+    let (listed, catalog_tokens) = slot("catalog");
+    for memory in &memories {
+        at.store.touch(memory, at.now)?;
     }
-    Ok(())
+    if !at.capture || memories.is_empty() && listed.is_empty() {
+        return Ok(());
+    }
+    let mut modes = Vec::new();
+    for memory in &memories {
+        let Some(held) = at.store.get(memory)? else {
+            continue;
+        };
+        let witnesses = at.store.witnesses_of(memory)?;
+        let mode = balthasar_store::presented(&held, &witnesses);
+        let mode = if mode.may_assert() && held.is_assertable(at.inject_floor, at.now, true) {
+            mode
+        } else {
+            mode.and(balthasar_model::Presentation::Evidence)
+        };
+        modes.push((memory.clone(), mode));
+    }
+    for memory in listed {
+        if !modes.iter().any(|(held, _)| *held == memory) {
+            modes.push((memory, balthasar_model::Presentation::Listed));
+        }
+    }
+    at.store.note_injection(
+        &balthasar_store::Injection {
+            id: format!("applied-{id}"),
+            recall: None,
+            session: Some(session.clone()),
+            created_at: at.now,
+            token_count: memory_tokens + catalog_tokens,
+            remote: true,
+            policy: "layout".to_owned(),
+        },
+        &modes,
+    )
 }
 
 fn commit(

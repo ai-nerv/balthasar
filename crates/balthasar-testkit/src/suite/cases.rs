@@ -421,6 +421,30 @@ pub fn corpus() -> Vec<Case> {
                 why: "a preference is an instruction and is carried",
             }],
         },
+        Case {
+            name: "a never keeps its never",
+            category: Category::Preference,
+            project: "/w/thing",
+            script: vec![Act::Said {
+                session: "s1",
+                at: day(0),
+                text: "never run cargo publish from a feature branch",
+            }],
+            probes: vec![
+                Probe {
+                    asks: "cargo publish",
+                    at: day(2),
+                    expect: Expect::Asserted("never run cargo publish"),
+                    why: "the instruction is carried with its polarity",
+                },
+                Probe {
+                    asks: "cargo publish",
+                    at: day(2),
+                    expect: Expect::NotAsserted("always run cargo publish"),
+                    why: "and nothing turned it into its opposite",
+                },
+            ],
+        },
         // ── abstention ──────────────────────────────────────────────────────
         Case {
             name: "nothing was ever said about it",

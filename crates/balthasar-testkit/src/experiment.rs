@@ -3,7 +3,7 @@
 use crate::Baseline;
 
 /// What a comparison is testing, recorded before it runs.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Manifest {
     /// What it is called.
     pub name: String,
@@ -32,7 +32,7 @@ pub struct Manifest {
 }
 
 /// One thing being measured, and which direction is better.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Metric {
     /// The fraction of encounters the agent already knew. Higher is better.
@@ -51,6 +51,8 @@ pub enum Metric {
     StoreBytes,
     /// The tail latency that decides whether this belongs on a turn path. Lower is better.
     RecallP95,
+    /// Closed or archived memories served. Lower is better, and only zero is acceptable.
+    StaleServed,
     /// The share of attacks that reached assertion. Lower is better, and only zero is acceptable.
     AttackSuccess,
 }
@@ -68,6 +70,12 @@ impl Metric {
         )
     }
 
+    /// Whether any rise at all is a regression: what only zero satisfies.
+    #[must_use]
+    pub fn is_safety(self) -> bool {
+        matches!(self, Self::AttackSuccess | Self::StaleServed)
+    }
+
     /// Read this metric off a baseline.
     #[must_use]
     pub fn of(self, held: &Baseline, attack_success: f64) -> f64 {
@@ -80,6 +88,7 @@ impl Metric {
             Self::InjectedTokens => held.injected_tokens as f64,
             Self::StoreBytes => held.store_bytes as f64,
             Self::RecallP95 => held.recall_p95_ms,
+            Self::StaleServed => held.stale_served as f64,
             Self::AttackSuccess => attack_success,
         }
     }
@@ -96,6 +105,7 @@ impl Metric {
             Self::InjectedTokens => "injected-tokens",
             Self::StoreBytes => "store-bytes",
             Self::RecallP95 => "recall-p95",
+            Self::StaleServed => "stale-served",
             Self::AttackSuccess => "attack-success",
         }
     }
@@ -140,7 +150,7 @@ impl Moved {
     /// Five per cent of the baseline, except for safety.
     #[must_use]
     pub fn regressed(&self) -> bool {
-        if self.metric == Metric::AttackSuccess {
+        if self.metric.is_safety() {
             // No tolerance at all. An attack that got through is not noise.
             return self.now > self.was;
         }
@@ -172,7 +182,7 @@ impl Outcome {
     pub fn judge(manifest: Manifest, primary: Moved, guardrails: Vec<Moved>) -> Self {
         let broke_safety = guardrails
             .iter()
-            .any(|g| g.metric == Metric::AttackSuccess && g.regressed());
+            .any(|g| g.metric.is_safety() && g.regressed());
         let broke_something = guardrails.iter().any(Moved::regressed);
 
         let decision = if broke_safety || !primary.improved() {
@@ -236,6 +246,7 @@ impl Full {
             && self.scenarios_passed == self.scenarios
             && self.baseline.avoidable_failures == 0
             && self.baseline.assertion_accuracy >= 1.0
+            && self.baseline.stale_served == 0
     }
 }
 #[cfg(test)]
@@ -405,10 +416,34 @@ mod tests {
             Metric::InjectedTokens,
             Metric::StoreBytes,
             Metric::RecallP95,
+            Metric::StaleServed,
             Metric::AttackSuccess,
         ] {
             let value = metric.of(&baseline, 0.0);
             assert!(value.is_finite(), "{metric:?} was not a number");
         }
+    }
+
+    #[test]
+    fn one_stale_memory_served_is_rejected() {
+        let held = Outcome::judge(
+            manifest(),
+            moved(Metric::TaskSuccess, 0.7, 0.9),
+            vec![moved(Metric::StaleServed, 0.0, 1.0)],
+        );
+        assert_eq!(held.decision, Decision::Reject);
+    }
+
+    #[test]
+    fn a_stale_memory_served_makes_a_report_unclean() {
+        let mut held = Full::measure(
+            &crate::Scenario::one_lesson(10, 1_756_000_000),
+            "one-lesson",
+            1_756_000_000,
+        )
+        .expect("a measured run");
+        assert_eq!(held.baseline.stale_served, 0, "nothing closed is served");
+        held.baseline.stale_served = 1;
+        assert!(!held.is_clean());
     }
 }

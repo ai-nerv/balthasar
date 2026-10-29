@@ -25,6 +25,7 @@ struct Held {
     store: Store,
     scrollback: Transcript,
     now: Timestamp,
+    capture: bool,
 }
 
 fn saw(kind: WitnessKind, run: &str, at: Timestamp) -> Witness {
@@ -48,6 +49,7 @@ impl Held {
             store: Store::ephemeral().expect("store"),
             scrollback: Transcript::ephemeral().expect("scrollback"),
             now: NOW,
+            capture: false,
         };
         let old = Body::fact("transport", "codec", "QWOLDVALUE");
         let new = Body::fact("transport", "codec", "QWNEWVALUE");
@@ -92,7 +94,7 @@ impl Held {
             now: self.now,
             inject_floor: floor::INJECT,
             live_floor: floor::LIVE,
-            capture: false,
+            capture: self.capture,
         };
         let request = Request {
             call: call.into(),
@@ -359,4 +361,66 @@ fn catalog_bytes_are_stable_without_changes() {
     ));
     assert!(!first.is_empty());
     assert_eq!(first, again);
+}
+
+#[test]
+fn the_ledger_records_what_a_layout_delivered_and_how() {
+    let mut held = Held::seeded();
+    held.capture = true;
+    held.asked();
+    let laid = held.one("layout", window());
+    let ids = |kind: &str| -> Vec<String> {
+        laid["slots"]
+            .as_array()
+            .expect("slots")
+            .iter()
+            .filter(|slot| slot["kind"] == kind)
+            .flat_map(|slot| slot["ids"].as_array().cloned().unwrap_or_default())
+            .filter_map(|id| id.as_str().map(str::to_owned))
+            .collect()
+    };
+    let (memory, catalog) = (ids("memory"), ids("catalog"));
+    assert!(!memory.is_empty() && !catalog.is_empty(), "{laid}");
+    held.one(
+        "applied",
+        json!({ "id": laid["id"], "usage": { "input": 900, "output": 10 } }),
+    );
+
+    let id = laid["id"].as_str().expect("an id");
+    let ledger = held
+        .store
+        .presented_in(&format!("applied-{id}"))
+        .expect("ledger");
+    for memory in &memory {
+        let (_, mode) = ledger
+            .iter()
+            .find(|(held, _)| held.as_str() == memory)
+            .expect("each delivered memory is recorded");
+        assert_ne!(*mode, balthasar_model::Presentation::Listed);
+    }
+    for listed in catalog.iter().filter(|id| !memory.contains(id)) {
+        assert!(
+            ledger.iter().any(|(held, mode)| held.as_str() == listed
+                && *mode == balthasar_model::Presentation::Listed),
+            "{listed} was listed"
+        );
+    }
+}
+
+#[test]
+fn with_the_ledger_off_nothing_delivered_is_recorded() {
+    let mut held = Held::seeded();
+    held.asked();
+    let laid = held.one("layout", window());
+    held.one(
+        "applied",
+        json!({ "id": laid["id"], "usage": { "input": 900, "output": 10 } }),
+    );
+    let id = laid["id"].as_str().expect("an id");
+    assert!(
+        held.store
+            .presented_in(&format!("applied-{id}"))
+            .expect("ledger")
+            .is_empty()
+    );
 }
