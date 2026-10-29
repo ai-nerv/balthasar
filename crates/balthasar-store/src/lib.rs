@@ -113,8 +113,9 @@ impl Store {
     /// cannot outlive the memory it is evidence for. `secure_delete` on, because SQLite does not
     /// zero a freed page by default and the words stay in the file where `strings` finds them.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        private::before_open(path)?;
+        let opening = private::before_open(path)?;
         let connection = Connection::open(path)?;
+        drop(opening);
         // A busy store is a store being consolidated. Waiting is right; failing is not.
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;

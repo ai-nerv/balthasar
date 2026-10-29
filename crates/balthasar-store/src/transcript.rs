@@ -206,9 +206,10 @@ impl Transcript {
     /// Open the scrollback at `path`, creating it if need be. `synchronous = FULL` rather than
     /// the WAL default of `NORMAL`, which can lose the last transactions to a power cut.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        crate::private::before_open(path)?;
+        let opening = crate::private::before_open(path)?;
         let identity = crate::writer::identity(path)?;
         let connection = Connection::open(path)?;
+        drop(opening);
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;

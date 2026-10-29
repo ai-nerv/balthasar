@@ -23,6 +23,10 @@ fn status_wire_is_exact_and_final_count_excludes_status_frames() {
 #[test]
 fn all_attempts_including_failed_final_are_rate_limited() {
     let (socket, mut sender) = pair();
+    let alias = socket.try_clone().expect("inherited collector descriptor");
+    socket
+        .shutdown(std::net::Shutdown::Both)
+        .expect("close collector");
     drop(socket);
     let now = Instant::now();
     assert_eq!(
@@ -40,6 +44,7 @@ fn all_attempts_including_failed_final_are_rate_limited() {
     assert_eq!(sender.next_revision, 3);
     assert_eq!(sender.loss().unavailable, 2);
     assert!(sender.into_fresh().is_none());
+    drop(alias);
 }
 
 #[test]

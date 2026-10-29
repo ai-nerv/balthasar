@@ -1,9 +1,9 @@
 //! Store-scoped, nonblocking transcript writer reservations.
 
 use crate::StoreError;
-use rustix::fs::{Mode, OFlags, openat};
+use rustix::fs::{AtFlags, FileType, Mode, OFlags, openat, statat};
 use sha2::{Digest, Sha256};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, Metadata, TryLockError};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -101,6 +101,24 @@ fn private(meta: &Metadata, directory: bool) -> std::io::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::unnecessary_cast)]
+fn check_database(parent: &File, name: &OsStr, expected: (u64, u64)) -> std::io::Result<()> {
+    let meta = statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
+    if FileType::from_raw_mode(meta.st_mode) != FileType::RegularFile
+        || meta.st_nlink != 1
+        || meta.st_uid != rustix::process::getuid().as_raw()
+        || meta.st_mode & 0o077 != 0
+    {
+        return Err(refused(
+            "writer reservation requires private owner-only files",
+        ));
+    }
+    if (meta.st_dev as u64, meta.st_ino as u64) != expected {
+        return Err(refused("transcript store identity changed"));
+    }
+    Ok(())
+}
+
 pub(crate) fn reserve(
     path: &Path,
     expected: (u64, u64),
@@ -164,12 +182,7 @@ fn acquire(
         DIRECTORY,
         Mode::empty(),
     )?);
-    let opened = File::from(openat(&parent, &database, FILE, Mode::empty())?);
-    let metadata = opened.metadata()?;
-    private(&metadata, false)?;
-    if inode(&metadata) != expected {
-        return Err(refused("transcript store identity changed"));
-    }
+    check_database(&parent, &database, expected)?;
     let mut namespace = database.clone();
     namespace.push(".writers");
     match rustix::fs::mkdirat(&parent, &namespace, Mode::from_raw_mode(0o700)) {
@@ -222,12 +235,7 @@ impl Writer {
     }
 
     fn validate(&self) -> std::io::Result<()> {
-        let database = File::from(openat(&self.parent, &self.database, FILE, Mode::empty())?);
-        let meta = database.metadata()?;
-        private(&meta, false)?;
-        if inode(&meta) != self.identity {
-            return Err(refused("transcript store identity changed"));
-        }
+        check_database(&self.parent, &self.database, self.identity)?;
         let directory = File::from(openat(
             &self.parent,
             &self.namespace,
