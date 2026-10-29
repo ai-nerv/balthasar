@@ -138,6 +138,9 @@ fn without_failures(summary: &str) -> String {
             listing = true;
             continue;
         }
+        if plain.starts_with(crate::verifying::PREFIX) {
+            continue;
+        }
         if listing && (plain.starts_with("- [") || plain.starts_with('(') || plain.is_empty()) {
             continue;
         }
@@ -176,6 +179,13 @@ fn with_failures(
         .iter()
         .filter(|turn| turn.is_tool() && (turn.error || turn.ok == Some(false)))
         .collect();
+    let doubted = crate::verifying::unverified(own, &rows.turns);
+    let own = if doubted.is_empty() {
+        own.to_owned()
+    } else {
+        format!("{own}\n\n{}", doubted.join("\n"))
+    };
+    let own = own.as_str();
     if failed.is_empty() {
         return Ok(own.to_owned());
     }

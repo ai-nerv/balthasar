@@ -26,6 +26,7 @@ mod sizing;
 mod supply;
 mod titling;
 mod verbs;
+mod verifying;
 mod window;
 pub mod working;
 
