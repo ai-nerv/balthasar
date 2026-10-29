@@ -84,6 +84,8 @@ pub struct Held {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Budget {
     pub window: u32,
+    /// What the whole input may reach, fixed costs included.
+    pub limit: u32,
     pub fixed: u32,
     pub reply: u32,
     pub room: u32,
@@ -150,6 +152,7 @@ pub fn budget(rules: &Rules, ask: &Ask, factor: f64) -> Budget {
     );
     Budget {
         window: ask.window,
+        limit,
         fixed,
         reply: ask.reply,
         room,
@@ -386,8 +389,8 @@ pub fn account(layout: &mut Layout, rows: &[Row], held: &Held, factor: f64) {
     let budget = &mut layout.budget;
     budget.used = used;
     budget.estimated_input = used.saturating_add(budget.fixed);
-    layout.fits =
-        u64::from(budget.estimated_input) + u64::from(budget.reply) <= u64::from(budget.window);
+    layout.fits = budget.estimated_input <= budget.limit
+        && u64::from(budget.estimated_input) + u64::from(budget.reply) <= u64::from(budget.window);
 }
 
 /// What `slots` cost after the factor, the fixed items aside.

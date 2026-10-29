@@ -142,7 +142,10 @@ fn commit(
                     Some((old, _)) => old * 0.7 + ratio * 0.3,
                     None => ratio,
                 };
-                scrollback.set_factor(&proposal.model, next.clamp(0.5, 4.0))?;
+                scrollback.set_factor(
+                    &proposal.model,
+                    next.clamp(crate::sizing::FACTOR.0, crate::sizing::FACTOR.1),
+                )?;
             }
         }
         Ok(true)
@@ -169,9 +172,8 @@ fn recover(at: &mut Answering<'_>, session: &SessionId) -> Result<bool, StoreErr
     let pending = !effects.is_empty();
     for effect in effects {
         if at.run_id(session)? != effect.run {
-            return Err(StoreError::Foreign(
-                "layout effect has a conflicting scratch run".into(),
-            ));
+            set_aside(at, &effect, "layout effect has a conflicting scratch run")?;
+            continue;
         }
         let key = json!([
             effect.scope.as_str(),
@@ -219,9 +221,12 @@ fn recover(at: &mut Answering<'_>, session: &SessionId) -> Result<bool, StoreErr
                     || memory.session.as_ref() != Some(&effect.run)
                     || memory.text() != effect.text
                 {
-                    return Err(StoreError::Foreign(
-                        "layout effect target no longer matches its source".into(),
-                    ));
+                    set_aside(
+                        at,
+                        &effect,
+                        "layout effect target no longer matches its source",
+                    )?;
+                    continue;
                 }
                 store.attach(&id, witness, now)?;
             }
@@ -231,4 +236,13 @@ fn recover(at: &mut Answering<'_>, session: &SessionId) -> Result<bool, StoreErr
         }
     }
     Ok(pending)
+}
+
+/// Record why an effect cannot be applied, and stop it holding up the session's layouts.
+fn set_aside(at: &Answering<'_>, effect: &LayoutEffect, why: &str) -> Result<(), StoreError> {
+    events::layout(LayoutOutcome::RecoveryFailed);
+    match at.scrollback.as_ref() {
+        Some(scrollback) => scrollback.fail_layout_effect(effect, why),
+        None => Ok(()),
+    }
 }

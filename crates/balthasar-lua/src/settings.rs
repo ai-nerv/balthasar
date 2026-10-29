@@ -30,6 +30,19 @@ impl Default for Floors {
     }
 }
 
+impl Floors {
+    /// Each floor no lower than `owner`'s.
+    #[must_use]
+    pub fn at_least(&self, owner: &Self) -> Self {
+        Self {
+            inject: self.inject.max(owner.inject),
+            live: self.live.max(owner.live),
+            promote: self.promote.max(owner.promote),
+            hold: self.hold.max(owner.hold),
+        }
+    }
+}
+
 /// How fast each class fades.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Decay {

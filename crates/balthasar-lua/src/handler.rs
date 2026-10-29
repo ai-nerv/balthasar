@@ -17,6 +17,7 @@ pub const ASKED: &[&str] = &[
     "promote",
     "importance",
     "redact",
+    "withhold",
     "outcome",
 ];
 

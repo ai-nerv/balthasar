@@ -60,7 +60,7 @@ pub(super) fn same_rule(a: &str, b: &str) -> bool {
 pub(super) fn unquoted(input: &str) -> Vec<&str> {
     balthasar_model::eligible_lines(
         input,
-        balthasar_model::Quoting::Strict { inline_code: false },
+        balthasar_model::Quoting::Strict { inline_code: true },
     )
 }
 

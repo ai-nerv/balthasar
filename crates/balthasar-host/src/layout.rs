@@ -127,6 +127,9 @@ fn lay_out(
         tight: prompt.overflows,
     };
     let counting = balthasar_buffer::Counting::read(asked["counting"].as_str());
+    if let Err(why) = balthasar_buffer::Room::of(rules.policy, Some(ask.window), ask.reply) {
+        return Err(format!("no request fits this window: {why:?}"));
+    }
     let caps = balthasar_buffer::budget(&rules, &ask, factor);
     let project_notes = crate::notes::projection::project(
         at,
@@ -281,7 +284,7 @@ fn lay_out(
     let b = laid.budget;
     let body = json!({
         "budget": {
-            "window": b.window, "fixed": b.fixed, "reply": b.reply, "room": b.room,
+            "window": b.window, "limit": b.limit, "fixed": b.fixed, "reply": b.reply, "room": b.room,
             "conversation": b.conversation, "memory": b.memory, "pinned": b.pinned,
             "summary": b.summary, "used": b.used, "estimated_input": b.estimated_input,
             "factor": (b.factor * 1000.0).round() / 1000.0,
@@ -430,7 +433,7 @@ fn by_policy(
     factor: f64,
 ) {
     let b = laid.budget;
-    let budget = json!({ "window": b.window, "fixed": b.fixed, "reply": b.reply, "room": b.room,
+    let budget = json!({ "window": b.window, "limit": b.limit, "fixed": b.fixed, "reply": b.reply, "room": b.room,
         "conversation": b.conversation, "memory": b.memory, "pinned": b.pinned,
         "summary": b.summary, "factor": b.factor });
     let shown: Vec<&Row> = rows
@@ -628,7 +631,10 @@ fn tighten(
         .filter(|f| *f > old)
         .unwrap_or(old * 1.25);
     scrollback
-        .set_factor(&proposal.model, next.clamp(0.5, 8.0))
+        .set_factor(
+            &proposal.model,
+            next.clamp(crate::sizing::FACTOR.0, crate::sizing::FACTOR.1),
+        )
         .map_err(e)?;
     // Believed from here on, for this session: laying out again for a window the provider has
     // just said it does not have is the same refusal again.

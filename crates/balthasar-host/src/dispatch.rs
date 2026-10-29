@@ -202,7 +202,7 @@ fn answering(
         // Shipped in the binary and identical for every session, so it answers like `verbs`.
         "client" => Reply::one(serde_json::json!(balthasar_lua::CLIENT)),
         "status" => status(at),
-        "recall" => crate::recalling::recall(at, door, request),
+        "recall" => crate::recalling::recall(at, door, request, hooks),
         "why" => why(at, request),
         "sessions" => sessions(at, request),
         "rename" => rename(at, request),

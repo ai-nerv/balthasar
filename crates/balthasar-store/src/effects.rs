@@ -109,6 +109,24 @@ impl Transcript {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// Set an effect aside that can no longer be applied, with the reason, so later layouts go on.
+    pub fn fail_layout_effect(&self, effect: &LayoutEffect, why: &str) -> Result<(), StoreError> {
+        self.db().execute(
+            "UPDATE layout_effect SET done = 1, failed = ?3 WHERE layout = ?1 AND cursor = ?2",
+            params![effect.layout, effect.cursor, why],
+        )?;
+        Ok(())
+    }
+
+    /// How many effects were set aside as failed.
+    pub fn failed_layout_effects(&self) -> Result<u64, StoreError> {
+        Ok(self.db().query_row(
+            "SELECT count(*) FROM layout_effect WHERE failed IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
     /// Acknowledge a resolved effect and discard its captured text.
     pub fn finish_layout_effect(&self, effect: &LayoutEffect) -> Result<(), StoreError> {
         let changed = self.db().execute(
@@ -139,6 +157,7 @@ pub(crate) const ADDED: &[(&str, &str)] = &[
         "INTEGER NOT NULL DEFAULT 0 CHECK (resolved IN (0, 1))",
     ),
     ("target", "TEXT"),
+    ("failed", "TEXT"),
 ];
 
 /// Create what is missing, inside the transaction the caller holds.

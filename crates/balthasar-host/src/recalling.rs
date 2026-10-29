@@ -7,7 +7,12 @@ use balthasar_model::SessionId;
 use balthasar_store::Recall;
 
 /// Search.
-pub(crate) fn recall(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
+pub(crate) fn recall(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
+) -> Reply {
     let query = request.args.first().and_then(|v| v.as_str()).unwrap_or("");
     let opts = request.args.get(1);
     let limit = opts
@@ -77,9 +82,29 @@ pub(crate) fn recall(at: &mut Answering<'_>, door: &Door, request: &Request) -> 
     }
     // Names are resolved once for the whole result set.
     let names = session_names(at);
+    // What a peer is handed passes the same redaction as the memory slot.
+    let mut redacted: Vec<Option<String>> = vec![None; found.len()];
+    if !matches!(door, Door::Owner) {
+        let mut kept = Vec::with_capacity(found.len());
+        redacted.clear();
+        for hit in found {
+            if let Some(text) = hooks.redact(&hit.memory.text(), &hit.memory) {
+                redacted.push(Some(text));
+                kept.push(hit);
+            }
+        }
+        found = kept;
+    }
     let described: Vec<serde_json::Value> = found
         .iter()
-        .map(|hit| describe(&hit.memory, at.inject_floor, at.now, &names))
+        .zip(&redacted)
+        .map(|(hit, text)| {
+            let mut row = describe(&hit.memory, at.inject_floor, at.now, &names);
+            if let (Some(text), Some(fields)) = (text, row.as_object_mut()) {
+                fields.insert("text".to_owned(), serde_json::json!(text));
+            }
+            row
+        })
         .collect();
 
     // Handing memories to a caller about to put them in a context is an injection.

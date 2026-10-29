@@ -96,11 +96,11 @@ balthasar.load("sections.lua")
 --   policy = nil,        -- function(budget, items) -> { slots = {...}, why = "..." }
 -- }
 --
--- With no helper models available (`helpers` empty in a `layout` call), nothing paid runs in the
--- background: no summaries, no notes, no working state. The layout is still deterministic and
--- still bounded -- old tool results are stubbed and the oldest whole groups are dropped -- so a
--- session works, with less carried forward. A model whose window nobody reported is refused
--- explicitly rather than assumed roomy.
+-- With no helper models available (`helpers` empty in a `layout` call), no notes, curation or
+-- working state are prepared. A summary is still asked for when a cut is due, falling back to the
+-- main model. The layout stays deterministic and bounded -- old tool results are stubbed and the
+-- oldest whole groups are dropped. A window nobody reported is taken as 200,000; a window that
+-- cannot hold the reply is refused.
 
 
 -- How notes are kept (Letta-style). Pinned notes are in every request; the rest are listed by
