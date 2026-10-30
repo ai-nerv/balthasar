@@ -133,6 +133,13 @@ pub fn ingest(
         found
             .candidates
             .extend(crate::clashes(store, &ask.scope, &turns));
+        found.candidates.extend(crate::decisions(
+            store,
+            &ask.scope,
+            &turns,
+            ask.now,
+            &settings.decisions,
+        ));
         report.proposed += found.candidates.len();
         let from = Provenance {
             scope: ask.scope.clone(),
@@ -301,6 +308,17 @@ fn decide(engine: &mut Engine, settings: &Settings, candidate: &Candidate, score
     verdict
 }
 
+/// Why the configuration's `promote` gate turns a candidate away, when it does.
+pub(crate) fn refused(engine: &mut Engine, candidate: &Candidate) -> Option<String> {
+    let said = engine.ask("promote", &[candidate.as_json()])?;
+    (said.get("promote").and_then(serde_json::Value::as_bool) == Some(false)).then(|| {
+        said.get("reason")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("a gate refused it")
+            .to_owned()
+    })
+}
+
 /// Keep a candidate that did not earn a place, with the evidence it did earn.
 ///
 /// It lands as scratch, the tier that means *this session's own*: findable, decaying, and below
@@ -324,8 +342,26 @@ fn hold(store: &mut Store, from: &Provenance, candidate: &Candidate) -> Result<(
     Ok(())
 }
 
+/// The channel a candidate's evidence arrived on, from the path that proposed it.
+fn channel_of(
+    candidate: &Candidate,
+) -> (balthasar_model::Channel, Option<balthasar_model::Domain>) {
+    use balthasar_model::{Channel, Domain, WitnessKind};
+    match candidate.witness {
+        WitnessKind::Imperative => (Channel::UserInstruction, None),
+        WitnessKind::Correction | WitnessKind::Choice => (Channel::UserCorrection, None),
+        WitnessKind::Cost => (Channel::ToolObservation, None),
+        WitnessKind::Commit => (Channel::Repository, Some(Domain::new("repo"))),
+        WitnessKind::Inferred => (Channel::ModelInference, Some(Domain::model())),
+        WitnessKind::Repetition | WitnessKind::Consolidation => (Channel::Consolidation, None),
+        WitnessKind::Distillation => (Channel::DistillerSummary, None),
+        WitnessKind::Manual => (Channel::PeerAssertion, None),
+    }
+}
+
 /// The evidence one candidate carries, whichever verdict it got.
 fn witness_for(from: &Provenance, candidate: &Candidate) -> Witness {
+    let (channel, domain) = channel_of(candidate);
     let witness = Witness::new(
         WitnessId::new(format!(
             "{}:{}:{}",
@@ -333,11 +369,12 @@ fn witness_for(from: &Provenance, candidate: &Candidate) -> Witness {
             candidate.cursor.unwrap_or(0),
             &balthasar_model::content_hash(&candidate.text())[..8]
         )),
-        candidate.witness,
+        balthasar_model::witness_for(channel, candidate.witness),
         from.session.clone(),
         from.scope.clone(),
         from.happened,
     )
+    .through(channel, domain)
     // What produced it, in its own terms: a model-proposed claim already names its backend, and
     // appending "rules, not a model" to that would state the opposite of the truth.
     .noted(
@@ -382,5 +419,9 @@ fn write(
 
     let witness = witness_for(from, candidate);
 
-    Ok(store.remember(memory, witness, from.now)?)
+    Ok(match (&candidate.replaces, &candidate.disputes) {
+        (Some(held), _) => store.replace(held, memory, witness, from.now)?,
+        (None, Some(held)) => store.dispute(held, memory, witness, from.now)?,
+        (None, None) => store.remember(memory, witness, from.now)?,
+    })
 }

@@ -1,6 +1,7 @@
 //! Atomic transcript application and replay of cross-store layout effects.
 
 use crate::Answering;
+use crate::events::{self, LayoutOutcome};
 use balthasar_model::{SessionId, Witness, WitnessId, WitnessKind};
 use balthasar_store::{LayoutEffect, LayoutTarget, State, StoreError};
 use serde_json::{Value, json};
@@ -14,6 +15,97 @@ pub(crate) fn confirm(
     id: &str,
     usage: Option<&Value>,
 ) -> Result<(), StoreError> {
+    match commit(at, session, id, usage) {
+        Ok(true) => {
+            events::layout(LayoutOutcome::Applied);
+            delivered(at, session, id)?;
+        }
+        Ok(false) => events::layout(LayoutOutcome::IgnoredRepeated),
+        Err(why) => {
+            events::layout(LayoutOutcome::ApplicationFailed);
+            return Err(why);
+        }
+    }
+    replay(at, session)
+}
+
+/// Reinforce every memory a confirmed layout put in front of the model, and, when the ledger is
+/// on, record what it delivered and how: stated, hedged or listed in the catalogue.
+fn delivered(at: &mut Answering<'_>, session: &SessionId, id: &str) -> Result<(), StoreError> {
+    let Some(proposal) = at
+        .scrollback
+        .as_ref()
+        .map(|scrollback| scrollback.proposal(id))
+        .transpose()?
+        .flatten()
+    else {
+        return Ok(());
+    };
+    let slot = |kind: &str| -> (Vec<balthasar_model::MemoryId>, usize) {
+        let held: Vec<&Value> = proposal
+            .body
+            .get("slots")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|slot| slot["kind"] == kind)
+            .collect();
+        let ids = held
+            .iter()
+            .filter_map(|slot| slot["ids"].as_array())
+            .flatten()
+            .filter_map(|id| id.as_str().map(balthasar_model::MemoryId::new))
+            .collect();
+        let tokens: u64 = held.iter().filter_map(|slot| slot["tokens"].as_u64()).sum();
+        (ids, usize::try_from(tokens).unwrap_or(usize::MAX))
+    };
+    let (memories, memory_tokens) = slot("memory");
+    let (listed, catalog_tokens) = slot("catalog");
+    for memory in &memories {
+        at.store.touch(memory, at.now)?;
+    }
+    if !at.capture || memories.is_empty() && listed.is_empty() {
+        return Ok(());
+    }
+    let mut modes = Vec::new();
+    for memory in &memories {
+        let Some(held) = at.store.get(memory)? else {
+            continue;
+        };
+        let witnesses = at.store.witnesses_of(memory)?;
+        let mode = balthasar_store::presented(&held, &witnesses);
+        let mode = if mode.may_assert() && held.is_assertable(at.inject_floor, at.now, true) {
+            mode
+        } else {
+            mode.and(balthasar_model::Presentation::Evidence)
+        };
+        modes.push((memory.clone(), mode));
+    }
+    for memory in listed {
+        if !modes.iter().any(|(held, _)| *held == memory) {
+            modes.push((memory, balthasar_model::Presentation::Listed));
+        }
+    }
+    at.store.note_injection(
+        &balthasar_store::Injection {
+            id: format!("applied-{id}"),
+            recall: None,
+            session: Some(session.clone()),
+            created_at: at.now,
+            token_count: memory_tokens + catalog_tokens,
+            remote: true,
+            policy: "layout".to_owned(),
+        },
+        &modes,
+    )
+}
+
+fn commit(
+    at: &Answering<'_>,
+    session: &SessionId,
+    id: &str,
+    usage: Option<&Value>,
+) -> Result<bool, StoreError> {
     let scrollback = at
         .scrollback
         .as_ref()
@@ -36,7 +128,7 @@ pub(crate) fn confirm(
             })
             .filter(|n| *n > 0);
         if !scrollback.confirm(id, real, at.now)? {
-            return Ok(());
+            return Ok(false);
         }
         let run = scrollback.run_of(session)?;
         let outline = scrollback.outline(session)?;
@@ -92,24 +184,38 @@ pub(crate) fn confirm(
                     Some((old, _)) => old * 0.7 + ratio * 0.3,
                     None => ratio,
                 };
-                scrollback.set_factor(&proposal.model, next.clamp(0.5, 4.0))?;
+                scrollback.set_factor(
+                    &proposal.model,
+                    next.clamp(crate::sizing::FACTOR.0, crate::sizing::FACTOR.1),
+                )?;
             }
         }
-        Ok(())
-    })?;
-    replay(at, session)
+        Ok(true)
+    })
 }
 
 pub(crate) fn replay(at: &mut Answering<'_>, session: &SessionId) -> Result<(), StoreError> {
+    match recover(at, session) {
+        Ok(true) => events::layout(LayoutOutcome::Recovered),
+        Ok(false) => {}
+        Err(why) => {
+            events::layout(LayoutOutcome::RecoveryFailed);
+            return Err(why);
+        }
+    }
+    Ok(())
+}
+
+fn recover(at: &mut Answering<'_>, session: &SessionId) -> Result<bool, StoreError> {
     let Some(scrollback) = at.scrollback.as_ref() else {
-        return Ok(());
+        return Ok(false);
     };
     let effects = scrollback.layout_effects(session, &at.agent, &at.scope)?;
+    let pending = !effects.is_empty();
     for effect in effects {
         if at.run_id(session)? != effect.run {
-            return Err(StoreError::Foreign(
-                "layout effect has a conflicting scratch run".into(),
-            ));
+            set_aside(at, &effect, "layout effect has a conflicting scratch run")?;
+            continue;
         }
         let key = json!([
             effect.scope.as_str(),
@@ -130,6 +236,7 @@ pub(crate) fn replay(at: &mut Answering<'_>, session: &SessionId) -> Result<(), 
             effect.at,
         )
         .at_cursor(effect.cursor)
+        .through(balthasar_model::Channel::Consolidation, None)
         .noted("left the context window (rules, not a model)");
         let scrollback = at
             .scrollback
@@ -156,9 +263,12 @@ pub(crate) fn replay(at: &mut Answering<'_>, session: &SessionId) -> Result<(), 
                     || memory.session.as_ref() != Some(&effect.run)
                     || memory.text() != effect.text
                 {
-                    return Err(StoreError::Foreign(
-                        "layout effect target no longer matches its source".into(),
-                    ));
+                    set_aside(
+                        at,
+                        &effect,
+                        "layout effect target no longer matches its source",
+                    )?;
+                    continue;
                 }
                 store.attach(&id, witness, now)?;
             }
@@ -167,5 +277,14 @@ pub(crate) fn replay(at: &mut Answering<'_>, session: &SessionId) -> Result<(), 
             scrollback.finish_layout_effect(&effect)?;
         }
     }
-    Ok(())
+    Ok(pending)
+}
+
+/// Record why an effect cannot be applied, and stop it holding up the session's layouts.
+fn set_aside(at: &Answering<'_>, effect: &LayoutEffect, why: &str) -> Result<(), StoreError> {
+    events::layout(LayoutOutcome::RecoveryFailed);
+    match at.scrollback.as_ref() {
+        Some(scrollback) => scrollback.fail_layout_effect(effect, why),
+        None => Ok(()),
+    }
 }

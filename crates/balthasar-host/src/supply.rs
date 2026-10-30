@@ -3,7 +3,7 @@
 //! mid-line.
 
 use crate::{Answering, Hooks};
-use balthasar_store::{Recall, Scored};
+use balthasar_store::{Current, Recall};
 use serde_json::{Value, json};
 
 mod standing;
@@ -16,8 +16,8 @@ const PREFACE: &str = "What this project knows. This is not part of the conversa
 const CURRENT: &str = "From memory:";
 
 /// What separates the current from what is merely on record.
-const HEDGE: &str = "Also on record, but not current enough to rely on — check before acting on \
-                     any of it:";
+const HEDGE: &str = "Also on record, but weakly witnessed or not confirmed lately — check before \
+                     acting on any of it:";
 
 /// A packed memory slot.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -86,25 +86,25 @@ pub(crate) fn from_notes(
     Some(Supplied { text, ids, tokens })
 }
 
-/// What a search for `query` finds worth offering, best first.
-pub(crate) fn candidates(at: &mut Answering<'_>, query: &str, limit: usize) -> Vec<Scored> {
+/// What a search for `query` finds worth offering, best first. Open memories only.
+pub(crate) fn candidates(at: &mut Answering<'_>, query: &str, limit: usize) -> Vec<Current> {
     let mut ask = Recall::of(query, at.now);
     ask.limit = limit;
     ask.floor = at.live_floor;
     ask.near = true;
     ask.remote = true;
-    let mut found = at.store.recall(&ask).unwrap_or_default();
+    let mut found = at.store.recall_current(&ask).unwrap_or_default();
     // Before anything is packed or handed to a helper to choose from: a helper rewrites what it
     // is given, and what it writes is offered without the doubt its source was kept with.
     let standing = Standing::of(at);
-    found.retain(|hit| !standing.withholds(at, &hit.memory));
+    found.retain(|hit| !standing.withholds(at, hit.memory()));
     found
 }
 
 /// Pack `found` into `tokens` of room, `per_token` characters to the token.
 pub(crate) fn pack(
     at: &Answering<'_>,
-    found: &[Scored],
+    found: &[Current],
     tokens: u32,
     per_token: u32,
     hooks: &mut dyn Hooks,
@@ -119,7 +119,8 @@ pub(crate) fn pack(
     let mut headed = false;
     let mut said: Vec<String> = Vec::new();
     for hit in found {
-        let Some(text) = hooks.redact(&hit.memory.text(), &hit.memory) else {
+        let memory = hit.memory();
+        let Some(text) = hooks.redact(&memory.text(), memory) else {
             continue;
         };
         // The same claim remembered twice is one line of room, not two. Best first, so the copy
@@ -129,12 +130,24 @@ pub(crate) fn pack(
             continue;
         }
         said.push(same);
-        let line = format!("- {}\n", text.trim());
-        let id = hit.memory.id.to_string();
-        if !hit.memory.is_assertable(at.inject_floor, at.now, true) {
-            hedged.push((line, id));
+        let id = memory.id.to_string();
+        let witnesses = at.store.witnesses_of(&memory.id).unwrap_or_default();
+        let shown = balthasar_store::presented(memory, &witnesses);
+        if !shown.may_inject() {
             continue;
         }
+        if shown != balthasar_model::Presentation::Asserted
+            || !memory.is_assertable(at.inject_floor, at.now, true)
+        {
+            let doubt = balthasar_model::offered::doubt(memory, at.inject_floor, at.now);
+            let line = balthasar_model::offered::line(memory, &text, &witnesses, Some(&doubt));
+            hedged.push((format!("{line}\n"), id));
+            continue;
+        }
+        let line = format!(
+            "{}\n",
+            balthasar_model::offered::line(memory, &text, &witnesses, None)
+        );
         let heading = if headed { 0 } else { CURRENT.len() + 1 };
         if out.len() + heading + line.len() > total {
             continue;
@@ -192,6 +205,50 @@ pub(crate) fn moved(rows: &[balthasar_store::Turn], held: Option<&Value>) -> boo
     rows.iter()
         .filter(|turn| turn.cursor > through)
         .any(|turn| turn.error || turn.role == "user")
+}
+
+/// What a person says to let a run go on.
+const GOING_ON: &[&str] = &[
+    "ok", "okay", "yes", "yep", "sure", "thanks", "thank", "you", "continue", "go", "on", "ahead",
+    "proceed", "next", "please", "fine", "good", "great", "done", "do", "it",
+];
+
+/// Whether `query` only lets the run go on: at most three words, none of them asking for
+/// anything a search could look for.
+pub(crate) fn acknowledges(query: &str) -> bool {
+    let words: Vec<String> = query
+        .split_whitespace()
+        .map(|word| {
+            word.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect();
+    !words.is_empty()
+        && words.len() <= 3
+        && words.iter().all(|word| GOING_ON.contains(&word.as_str()))
+}
+
+/// The slot a prompt that only `acknowledges` takes over from the one before, when nothing
+/// written in between changes what is worth offering; it then counts as settled at `through`.
+pub(crate) fn carried(
+    query: &str,
+    before: Option<Value>,
+    rows: &[balthasar_store::Turn],
+    through: u64,
+) -> Option<Value> {
+    let mut held = before.filter(|_| acknowledges(query))?;
+    let earlier: Vec<balthasar_store::Turn> = rows
+        .iter()
+        .filter(|turn| turn.cursor < through)
+        .cloned()
+        .collect();
+    if moved(&earlier, Some(&held)) {
+        return None;
+    }
+    held.as_object_mut()?
+        .insert("through".to_owned(), json!(through));
+    Some(held)
 }
 
 #[cfg(test)]

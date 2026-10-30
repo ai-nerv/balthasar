@@ -22,5 +22,8 @@ candle-transformers = { version = "0.9", optional = true, default-features = fal
 tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
 serde_json = { workspace = true, optional = true }
 
+[dev-dependencies]
+zip = { version = "9.0.5", default-features = false }
+
 [lints]
 workspace = true

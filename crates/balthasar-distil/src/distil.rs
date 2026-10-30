@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn an_answer_is_bounded() {
-        let backend = spawned(&["sh", "-c", "yes x | head -c 100000"]);
+        let backend = spawned(&["sh", "-c", "cat > /dev/null; yes x | head -c 100000"]);
         let budget = Budget {
             max_bytes: 1024,
             ..Budget::default()

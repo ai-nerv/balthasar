@@ -149,6 +149,16 @@ pub const SURFACE: &[Verb] = &[
         about: "where a restarting harness left off: (session) -> { next, turns }",
     },
     Verb {
+        name: "writer_status",
+        writes: false,
+        about: "writer capability and this connection's ownership: (session, { revision })",
+    },
+    Verb {
+        name: "writer",
+        writes: true,
+        about: "reserve or release a transcript writer: (session, { revision, operation })",
+    },
+    Verb {
         name: "remember",
         writes: true,
         about: "propose something worth keeping: (text, opts) -> landing",

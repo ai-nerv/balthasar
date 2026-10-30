@@ -53,6 +53,12 @@ balthasar.load("sections.lua")
 --
 -- balthasar.retain_days = 90
 
+-- When `serve` climbs the ladder by itself: a session quiet this many seconds is distilled, and
+-- once a day the commits are read and what recurred is consolidated. `false` leaves both to
+-- `balthasar distil` and `balthasar consolidate --now`.
+--
+-- balthasar.ladder = { after_idle_s = 600, daily = true }
+
 -- ------------------------------------------------------------------ which memory
 
 -- Which store a directory belongs to. Nothing registered means the repository root, so five
@@ -80,7 +86,7 @@ balthasar.load("sections.lua")
 -- balthasar.window = {
 --   budget = { share = 0.50, margin = 0 },  -- of the window, and what is held back against a
 --                                           -- provider counting differently from this estimate
---   shares = { memory = 0.05, pinned = 0.03, summary = 0.08 },  -- the rest is the conversation
+--   shares = { memory = 0.05, pinned = 0.03, summary = 0.08, catalog = 0.03 }, -- the rest: conversation
 --   prune_at   = 0.70,   -- start stubbing old tool results
 --   compact_at = 0.85,   -- ask for a summary of the oldest turns
 --   compact_to = 0.50,   -- ...enough to bring the conversation back to half
@@ -96,11 +102,11 @@ balthasar.load("sections.lua")
 --   policy = nil,        -- function(budget, items) -> { slots = {...}, why = "..." }
 -- }
 --
--- With no helper models available (`helpers` empty in a `layout` call), nothing paid runs in the
--- background: no summaries, no notes, no working state. The layout is still deterministic and
--- still bounded -- old tool results are stubbed and the oldest whole groups are dropped -- so a
--- session works, with less carried forward. A model whose window nobody reported is refused
--- explicitly rather than assumed roomy.
+-- With no helper models available (`helpers` empty in a `layout` call), no notes, curation or
+-- working state are prepared. A summary is still asked for when a cut is due, falling back to the
+-- main model. The layout stays deterministic and bounded -- old tool results are stubbed and the
+-- oldest whole groups are dropped. A window nobody reported is taken as 200,000; a window that
+-- cannot hold the reply is refused.
 
 
 -- How notes are kept (Letta-style). Pinned notes are in every request; the rest are listed by

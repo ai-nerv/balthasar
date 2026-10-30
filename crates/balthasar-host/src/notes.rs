@@ -81,7 +81,8 @@ impl Keeping {
                 .and_then(Value::as_u64)
                 .and_then(|n| u32::try_from(n).ok())
                 .unwrap_or(base.extract_rows),
-            extract_bytes: count("extract_bytes", base.extract_bytes).clamp(4_096, 1_000_000),
+            extract_bytes: count("extract_bytes", base.extract_bytes)
+                .clamp(4_096, crate::sizing::INPUT_MOST),
             tidy_every: count("tidy_every", base.tidy_every),
             contradict_every: count("contradict_every", base.contradict_every),
             title_every: count("title_every", base.title_every),
@@ -314,7 +315,6 @@ pub(crate) fn settle(
     let Some(said) = json_in(text) else {
         return Ok(false);
     };
-    let mut accepted = true;
     match job.kind.as_str() {
         "extract" | "tidy" => {
             let ops = said
@@ -354,7 +354,8 @@ pub(crate) fn settle(
                 Ok(s.notes()?.iter().filter(|n| n.pinned).count())
             };
             let before = pinned(scrollback)?;
-            let (made, valid) = propose(
+            // Rejected ops are audited where they were refused; the range is still read.
+            let (made, _) = propose(
                 scrollback,
                 session,
                 job,
@@ -363,7 +364,6 @@ pub(crate) fn settle(
                 keeping,
                 at.now,
             )?;
-            accepted = valid;
             // A rule was laid down and nothing came back: asked once more, since a small model sometimes
             // answers an obvious rule with an empty list, and nothing later says it again.
             if job.kind == "extract"
@@ -375,7 +375,7 @@ pub(crate) fn settle(
                 set(&mut context, "again", json!(true));
                 scrollback.queue_job(session, "extract", &job.spec, &context, at.now)?;
             }
-            if job.kind == "extract" && accepted {
+            if job.kind == "extract" {
                 let since = scrollback.counter(&project(), "extracts")?.unwrap_or(0);
                 scrollback.set_counter(&project(), "extracts", since + 1)?;
                 // A new pinned rule may say what one already does in other words: tidied now, not ten
@@ -399,7 +399,7 @@ pub(crate) fn settle(
         }
         _ => {}
     }
-    Ok(accepted)
+    Ok(true)
 }
 
 fn ids(said: &Value) -> Vec<String> {
@@ -490,10 +490,41 @@ pub fn undo(at: &mut Answering<'_>, request: &Request) -> Reply {
     };
     let reverted = changes::undo(scrollback, &id, at.now);
     match reverted {
-        Ok(Ok(made)) => Reply::one(json!({ "undone": id, "change": made })),
+        Ok(Ok(made)) => match retract(at, &id) {
+            Ok(closed) => Reply::one(json!({ "undone": id, "change": made, "closed": closed })),
+            Err(why) => Reply::refused(why.to_string()),
+        },
         Ok(Err(why)) => Reply::refused(why),
         Err(why) => Reply::refused(why.to_string()),
     }
+}
+
+/// Close what the turns an undone note cited taught the project of the same rule: the person took
+/// it back. Answers how many memories closed.
+fn retract(at: &mut Answering<'_>, id: &str) -> Result<usize, balthasar_store::StoreError> {
+    let Some(scrollback) = at.scrollback.as_ref() else {
+        return Ok(0);
+    };
+    let Some(back) = scrollback
+        .change(id)?
+        .as_ref()
+        .and_then(balthasar_store::TakenBack::of)
+    else {
+        return Ok(0);
+    };
+    let mut closed = 0;
+    for (session, cursor) in &back.cited {
+        for memory in at.store.witnessed_at(session, *cursor)? {
+            let Some(held) = at.store.get(&memory)? else {
+                continue;
+            };
+            if back.covers(session, *cursor, &held.text()) {
+                at.store.close(&memory, at.now)?;
+                closed += 1;
+            }
+        }
+    }
+    Ok(closed)
 }
 
 /// `approve(session, {changes})` and `reject(session, {changes})`: settle staged changes.

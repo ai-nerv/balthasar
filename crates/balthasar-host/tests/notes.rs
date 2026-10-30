@@ -32,6 +32,10 @@ mod standing;
 #[path = "notes/quoting.rs"]
 mod quoting;
 
+/// Undoing a rule closes what the same words taught.
+#[path = "notes/retracting.rs"]
+mod retracting;
+
 /// Rows that may not state a rule.
 #[path = "notes/injection.rs"]
 mod injection;

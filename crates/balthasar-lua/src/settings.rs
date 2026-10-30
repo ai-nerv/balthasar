@@ -30,6 +30,19 @@ impl Default for Floors {
     }
 }
 
+impl Floors {
+    /// Each floor no lower than `owner`'s.
+    #[must_use]
+    pub fn at_least(&self, owner: &Self) -> Self {
+        Self {
+            inject: self.inject.max(owner.inject),
+            live: self.live.max(owner.live),
+            promote: self.promote.max(owner.promote),
+            hold: self.hold.max(owner.hold),
+        }
+    }
+}
+
 /// How fast each class fades.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Decay {
@@ -154,6 +167,12 @@ pub struct Settings {
     pub tool: Option<String>,
     /// Words that mark a user turn as an instruction to remember.
     pub imperatives: Vec<String>,
+    /// Phrases that state a choice, beside the shipped ones.
+    pub decisions: Vec<String>,
+    /// How commits are read, or `None` when the configuration turned it off.
+    pub commits: Option<Commits>,
+    /// When `serve` distils and consolidates on its own, or `None` when it does not.
+    pub ladder: Option<Ladder>,
     /// Days a session's turns are kept once it has gone quiet. `None` keeps them for good.
     pub retain_days: Option<u32>,
 }
@@ -268,6 +287,9 @@ impl Settings {
             tool: config.string("tool").map(str::to_owned),
             trusted: strings(config, "trusted"),
             imperatives: imperatives(config),
+            decisions: strings(config, "decisions"),
+            commits: commits(config),
+            ladder: ladder(config),
             retain_days: config
                 .number("retain_days")
                 .filter(|days| *days >= 1.0)
@@ -376,6 +398,103 @@ fn strings(config: &Config, name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The commands commits are read with: `{repo}`, `{count}` and `{word}` are each one argument.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Commits {
+    /// What prints diffs, newest first.
+    pub log: Vec<String>,
+    /// What lists the tracked files holding a word.
+    pub grep: Vec<String>,
+}
+
+impl Default for Commits {
+    fn default() -> Self {
+        let owned = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect();
+        Self {
+            log: owned(&[
+                "git",
+                "-C",
+                "{repo}",
+                "log",
+                "-U0",
+                "-p",
+                "-M",
+                "--no-merges",
+                "--no-color",
+                "--format=%x1e%H%x1f%ct%x1f%s",
+                "-n",
+                "{count}",
+            ]),
+            grep: owned(&[
+                "git", "-C", "{repo}", "grep", "-F", "-i", "-l", "--", "{word}",
+            ]),
+        }
+    }
+}
+
+/// `balthasar.commits`: the shipped commands, a table replacing either, or `false` for none.
+fn commits(config: &Config) -> Option<Commits> {
+    let said = config.get("commits");
+    if said.and_then(serde_json::Value::as_bool) == Some(false) {
+        return None;
+    }
+    let base = Commits::default();
+    let words = |name: &str, fallback: Vec<String>| {
+        said.and_then(|s| s.get(name))
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|argv| !argv.is_empty())
+            .unwrap_or(fallback)
+    };
+    Some(Commits {
+        log: words("log", base.log),
+        grep: words("grep", base.grep),
+    })
+}
+
+/// When `serve` climbs the ladder by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ladder {
+    /// Seconds a session is quiet before what it said is distilled.
+    pub after_idle_s: u64,
+    /// Whether a consolidation pass, commits included, runs once a day.
+    pub daily: bool,
+}
+
+impl Default for Ladder {
+    fn default() -> Self {
+        Self {
+            after_idle_s: 600,
+            daily: true,
+        }
+    }
+}
+
+/// `balthasar.ladder`: the shipped cadence, a table changing it, or `false` for none.
+fn ladder(config: &Config) -> Option<Ladder> {
+    let said = config.get("ladder");
+    if said.and_then(serde_json::Value::as_bool) == Some(false) {
+        return None;
+    }
+    let base = Ladder::default();
+    Some(Ladder {
+        after_idle_s: said
+            .and_then(|s| s.get("after_idle_s"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(base.after_idle_s),
+        daily: said
+            .and_then(|s| s.get("daily"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(base.daily),
+    })
+}
+
 /// The words that mark a turn as an instruction, defaulting to the shipped list.
 fn imperatives(config: &Config) -> Vec<String> {
     let said = strings(config, "imperatives");
@@ -399,6 +518,8 @@ fn witness_weights(config: &Config) -> Vec<(WitnessKind, f64)> {
         WitnessKind::Consolidation,
         WitnessKind::Inferred,
         WitnessKind::Manual,
+        WitnessKind::Choice,
+        WitnessKind::Commit,
     ];
     KINDS
         .iter()

@@ -113,6 +113,7 @@ fn keep(
         scope.clone(),
         at,
     )
+    .through(balthasar_model::Channel::ManualWrite, None)
     .noted("kept by hand");
 
     let confidence = store.promote(&id, into, witness, at)?;

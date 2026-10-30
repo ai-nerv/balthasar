@@ -109,12 +109,35 @@ pub fn purge_run(
             .query_map([session.as_str()], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?
     };
+    let maintenance = maintenance(scrollback)?;
+    if let Some(maintenance) = &maintenance {
+        for transcript in &transcripts {
+            if !maintenance.available(transcript)? {
+                return Err(StoreError::Foreign(
+                    "a transcript in this run has a writer".into(),
+                ));
+            }
+        }
+    }
     let mut gone = 0;
     for transcript in transcripts {
         gone += purge_transcript(scrollback, &balthasar_model::SessionId::new(transcript))?;
     }
     tx.commit()?;
+    optimize(scrollback.db(), "turn_fts")?;
     Ok(gone)
+}
+
+pub(crate) fn maintenance(
+    scrollback: &crate::Transcript,
+) -> Result<Option<crate::writer::Maintenance>, StoreError> {
+    if !scrollback.is_persistent() {
+        return Ok(None);
+    }
+    scrollback
+        .maintenance()?
+        .map(Some)
+        .ok_or_else(|| StoreError::Foreign("transcript reservation admission is busy".into()))
 }
 
 fn purge_transcript(
@@ -155,6 +178,48 @@ fn purge_transcript(
             params![session.as_str()],
         )?;
     }
+    forget_cited(scrollback.db(), session.as_str())?;
+    Ok(gone)
+}
+
+/// A note made only of `session`'s turns goes, with its changes; one citing other runs too
+/// keeps its text and loses this run's citations.
+fn forget_cited(db: &rusqlite::Connection, session: &str) -> Result<usize, StoreError> {
+    let held: Vec<(i64, String)> = {
+        let mut statement = db.prepare("SELECT n, evidence FROM note")?;
+        statement
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?
+    };
+    let mut gone = 0;
+    for (n, evidence) in held {
+        let Ok(mut evidence) = serde_json::from_str::<serde_json::Value>(&evidence) else {
+            continue;
+        };
+        let Some(sources) = evidence
+            .get_mut("sources")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        let before = sources.len();
+        sources.retain(|s| s.get("session").and_then(serde_json::Value::as_str) != Some(session));
+        if sources.len() == before {
+            continue;
+        }
+        if sources.is_empty() {
+            db.execute(
+                "DELETE FROM note_change WHERE note = ?1",
+                params![format!("N-{n}")],
+            )?;
+            gone += db.execute("DELETE FROM note WHERE n = ?1", params![n])?;
+        } else {
+            db.execute(
+                "UPDATE note SET evidence = ?2 WHERE n = ?1",
+                params![n, evidence.to_string()],
+            )?;
+        }
+    }
     Ok(gone)
 }
 
@@ -164,11 +229,27 @@ fn purge_transcript(
 /// keys point that way. The embedding is a column and goes with the row. Derivations go too, and
 /// descendants are removed first, so no edge is ever left pointing at nothing.
 pub fn purge(store: &mut Store, id: &MemoryId) -> Result<usize, StoreError> {
+    let gone = purge_tree(store, id)?;
+    optimize(store.db(), "memory_fts")?;
+    Ok(gone)
+}
+
+/// [`purge`], leaving the index's merge to the caller.
+fn purge_tree(store: &mut Store, id: &MemoryId) -> Result<usize, StoreError> {
     let mut gone = 0;
     for derived in descendants(store, id)? {
         gone += purge_one(store, &derived)?;
     }
     Ok(gone + purge_one(store, id)?)
+}
+
+/// Merge a full-text index's segments, so a deleted row's tokens leave its posting lists.
+fn optimize(db: &rusqlite::Connection, index: &str) -> Result<(), StoreError> {
+    db.execute(
+        &format!("INSERT INTO {index}({index}) VALUES ('optimize')"),
+        [],
+    )?;
+    Ok(())
 }
 
 /// Everything made out of this memory, deepest first. Breadth-first with a seen set, so a cycle
@@ -245,17 +326,29 @@ fn remove(tx: &rusqlite::Connection, id: &MemoryId) -> Result<usize, StoreError>
 
 /// Everything one run left behind. Returns how many memories went. Memories a run merely
 /// *witnessed* are not removed: its witness from this run goes, and the fact stays with the
-/// evidence that remains.
+/// evidence that remains, scored again at `now`.
 pub fn purge_session(
     store: &mut Store,
     session: &balthasar_model::SessionId,
+    now: balthasar_model::Timestamp,
 ) -> Result<usize, StoreError> {
     let owned = store.owned_by(session)?;
 
     let mut gone = 0;
     for id in &owned {
-        gone += purge(store, id)?;
+        gone += purge_tree(store, id)?;
     }
+    let witnessed: Vec<MemoryId> = {
+        let mut statement = store.db().prepare(
+            "SELECT DISTINCT w.memory FROM witness w JOIN memory m ON m.id = w.memory \
+                 WHERE w.session = ?1 ORDER BY w.memory",
+        )?;
+        statement
+            .query_map(params![session.as_str()], |r| {
+                Ok(MemoryId::new(r.get::<_, String>(0)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
 
     // The run's own evidence for things it did not own, and its bookkeeping.
     let tx = store.db_mut().transaction()?;
@@ -292,15 +385,20 @@ pub fn purge_session(
         params![session.as_str()],
     )?;
     tx.commit()?;
+    for id in &witnessed {
+        store.rescore(id, now)?;
+    }
+    optimize(store.db(), "memory_fts")?;
     Ok(gone)
 }
 
 /// Everything that came from one source: every memory whose evidence comes only from `domain`. A
 /// memory with evidence from elsewhere as well is kept, with the tainted witness removed, so one
-/// poisoned source cannot take honest memories with it.
+/// poisoned source cannot take honest memories with it; it is scored again at `now`.
 pub fn purge_domain(
     store: &mut Store,
     domain: &balthasar_model::Domain,
+    now: balthasar_model::Timestamp,
 ) -> Result<usize, StoreError> {
     let touched: Vec<MemoryId> = {
         let mut statement = store
@@ -327,16 +425,17 @@ pub fn purge_domain(
         )?;
 
         if tainted >= total {
-            gone += purge(store, id)?;
+            gone += purge_tree(store, id)?;
         } else {
             store.db().execute(
                 "DELETE FROM witness WHERE memory = ?1 AND domain = ?2",
                 params![id.as_str(), domain.as_str()],
             )?;
             // Confidence is derived, so it has to be recomputed now that the evidence changed.
-            store.rescore(id, balthasar_model::Timestamp::default())?;
+            store.rescore(id, now)?;
         }
     }
+    optimize(store.db(), "memory_fts")?;
     Ok(gone)
 }
 
@@ -493,7 +592,17 @@ pub fn prune_turns(
         scrollback.db(),
         rusqlite::TransactionBehavior::Immediate,
     )?;
-    let expired = expired_in(&tx, before, live)?;
+    let mut expired = expired_in(&tx, before, live)?;
+    let maintenance = maintenance(scrollback)?;
+    if let Some(maintenance) = &maintenance {
+        let mut available = Vec::new();
+        for entry in expired {
+            if maintenance.available(entry.session.as_str())? {
+                available.push(entry);
+            }
+        }
+        expired = available;
+    }
     if expired.is_empty() {
         return Ok(Pruned::default());
     }
@@ -564,6 +673,9 @@ pub fn prune_turns(
         }
     }
     tx.commit()?;
+    if pruned.turns > 0 {
+        optimize(scrollback.db(), "turn_fts")?;
+    }
     Ok(pruned)
 }
 

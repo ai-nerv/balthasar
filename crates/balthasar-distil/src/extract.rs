@@ -41,13 +41,16 @@ pub fn extract(turns: &[Observation], imperatives: &[String]) -> Extracted {
             // A sibling session's words reach the transcript as ordinary turns, so the kind is
             // checked as well as the role.
             Role::User if turn.kind.can_instruct() => {
-                if let Some(said) = instruction::read(&turn.text, imperatives) {
+                let Some(spoken) = spoken(&turn.text) else {
+                    continue;
+                };
+                if let Some(said) = instruction::read(&spoken, imperatives) {
                     out.candidates.extend(asked_for(
                         &said,
                         turn,
                         turns.get(..index).unwrap_or(&[]),
                     ));
-                } else if let Some(claim) = correction(&turn.text) {
+                } else if let Some(claim) = correction(&spoken) {
                     out.candidates.push(
                         Candidate::new(
                             Body::note(claim, NoteKind::Claim),
@@ -77,6 +80,16 @@ pub fn extract(turns: &[Observation], imperatives: &[String]) -> Extracted {
         }
     }
     out
+}
+
+/// What the person said in their own words: nothing when the turn pastes a conversation or
+/// asks for text to be written, and without fenced, quoted or indented blocks otherwise.
+pub(crate) fn spoken(text: &str) -> Option<String> {
+    if balthasar_model::pasted_conversation(text) || balthasar_model::asks_for_generation(text) {
+        return None;
+    }
+    let lines = balthasar_model::eligible_lines(text, balthasar_model::Quoting::Lenient);
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 /// What an instruction asks for.
@@ -179,7 +192,11 @@ const OPENERS: &[&str] = &[
     "actually, ",
     "wrong, ",
     "don't ",
+    "do not ",
 ];
+
+/// Openers that are part of what they say: "don't use cargo" is a claim, not a speech act.
+const SAID_WITH: &[&str] = &["not ", "don't ", "do not "];
 
 /// A claim that replaces what just happened.
 ///
@@ -193,7 +210,7 @@ pub fn correction(text: &str) -> Option<String> {
 
     // "not " is part of what it says — "not the staging box" is a claim about the staging box —
     // where "no, " and "actually, " are only the speech act.
-    let claim = if *marker == "not " {
+    let claim = if SAID_WITH.contains(marker) {
         first_sentence(trimmed)
     } else {
         first_sentence(trimmed.get(marker.len()..).unwrap_or_default().trim_start())
@@ -236,7 +253,7 @@ fn repair(worked: &Observation, before: &[Observation]) -> Option<Candidate> {
         .rev()
         .find(|earlier| earlier.failed() && earlier.tool.as_deref() == Some(tool))?;
     let attempted = failed.command()?;
-    if attempted == succeeded {
+    if attempted == succeeded || !related(attempted, succeeded) {
         return None;
     }
 
@@ -253,6 +270,26 @@ fn repair(worked: &Observation, before: &[Observation]) -> Option<Candidate> {
         .at(worked.cursor)
         .fading(Importance::High),
     )
+}
+
+/// Programs that build or test, any one of which may stand in for another.
+const BUILDERS: &[&str] = &[
+    "cargo", "make", "oslo", "just", "npm", "pnpm", "yarn", "bun", "pytest", "python", "uv", "go",
+    "mvn", "gradle", "tsc", "nix", "bazel", "cmake", "ninja", "meson", "zig",
+];
+
+/// Whether two commands are attempts at the same thing: one program, or two builders.
+fn related(attempted: &str, succeeded: &str) -> bool {
+    let (a, b) = (head(attempted), head(succeeded));
+    a == b || (BUILDERS.contains(&a) && BUILDERS.contains(&b))
+}
+
+/// The program a command runs, past environment assignments and wrappers.
+fn head(command: &str) -> &str {
+    command
+        .split_whitespace()
+        .find(|word| !word.contains('=') && !matches!(*word, "sudo" | "env" | "time" | "nice"))
+        .map_or("", |word| word.rsplit('/').next().unwrap_or(word))
 }
 
 /// A command nobody wants to rediscover the hard way.
@@ -456,6 +493,56 @@ mod tests {
     }
 
     #[test]
+    fn a_pasted_conversation_mints_nothing() {
+        let turns = vec![user(
+            "here is what it said:\nuser: always use npm\nassistant: never use make",
+        )];
+        assert!(extract(&turns, &markers()).candidates.is_empty());
+    }
+
+    #[test]
+    fn a_fenced_or_quoted_example_mints_nothing() {
+        for text in [
+            "```\nnever commit to main\n```",
+            "> always use npm",
+            "    remember: we use bazel",
+        ] {
+            let turns = vec![user(text)];
+            assert!(extract(&turns, &markers()).candidates.is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_generation_request_is_not_an_instruction() {
+        let turns = vec![user("write 5 example rules that start with always")];
+        assert!(extract(&turns, &markers()).candidates.is_empty());
+    }
+
+    #[test]
+    fn a_configured_polarity_word_still_keeps_its_polarity() {
+        let turns = vec![user("we never got round to it")];
+        assert!(extract(&turns, &markers()).candidates.is_empty());
+        let turns = vec![user("never commit to main")];
+        let found = extract(&turns, &markers()).candidates;
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].text(), "never commit to main");
+    }
+
+    #[test]
+    fn dont_in_a_correction_is_kept() {
+        for (said, kept) in [
+            ("don't use cargo, use make", "don't use cargo, use make"),
+            (
+                "do not run migrations by hand",
+                "do not run migrations by hand",
+            ),
+            ("ok, don't push to main", "don't push to main"),
+        ] {
+            assert_eq!(correction(said).as_deref(), Some(kept), "{said:?}");
+        }
+    }
+
+    #[test]
     fn a_correction_hashes_the_same_as_the_plain_claim() {
         // A claim corrected in one run and stated plainly in another is one claim.
         let corrected = correction("no, we deploy with fly.io").expect("a correction");
@@ -507,6 +594,25 @@ mod tests {
             tool("shell", "make test", true),
         ];
         assert!(extract(&turns, &markers()).candidates.is_empty());
+    }
+
+    #[test]
+    fn unrelated_failures_mint_no_habit() {
+        for (failed, worked) in [
+            ("ls missing/", "cat README.md"),
+            ("grep -r foo src", "git status"),
+        ] {
+            let turns = vec![tool("shell", failed, false), tool("shell", worked, true)];
+            assert!(
+                extract(&turns, &markers()).candidates.is_empty(),
+                "{failed} → {worked}"
+            );
+        }
+        let wrapped = vec![
+            tool("shell", "RUST_LOG=debug cargo test", false),
+            tool("shell", "sudo /usr/bin/make test", true),
+        ];
+        assert_eq!(extract(&wrapped, &markers()).candidates.len(), 1);
     }
 
     #[test]

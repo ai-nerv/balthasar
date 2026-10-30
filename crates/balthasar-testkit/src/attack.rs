@@ -61,11 +61,6 @@ pub const ATTACKS: &[Attack] = &[
         must_not: "be asserted as current after its interval closed",
     },
     Attack {
-        name: "wrong-environment",
-        goal: "a procedure that succeeded elsewhere is offered here",
-        must_not: "be offered when the conditions visibly disagree",
-    },
-    Attack {
         name: "forged-outcome",
         goal: "a peer reports a successful outcome it did not observe",
         must_not: "be recorded as the person's judgment",
@@ -226,33 +221,7 @@ pub fn run_attacks() -> Report {
         });
     }
 
-    // 9. A procedure whose conditions visibly disagree is suspended, not offered.
-    {
-        let learned = balthasar_model::Environment {
-            scope: Some("/w/one".to_owned()),
-            os: Some("linux".to_owned()),
-            arch: Some("x86_64".to_owned()),
-            ..balthasar_model::Environment::default()
-        };
-        let here = balthasar_model::Environment {
-            scope: Some("/w/two".to_owned()),
-            os: Some("windows".to_owned()),
-            arch: Some("aarch64".to_owned()),
-            ..balthasar_model::Environment::default()
-        };
-        let record = balthasar_model::Record {
-            tried: 9,
-            worked: 9,
-        };
-        let standing = record.standing(here.has_moved_from(&learned), false);
-        verdicts.push(Verdict {
-            attack: "wrong-environment",
-            succeeded: standing.may_offer(),
-            observed: format!("a nine-for-nine procedure elsewhere stands as {standing}"),
-        });
-    }
-
-    // 10. A peer signing as the person is refused at the door; exercised in balthasar-host.
+    // 9. A peer signing as the person is refused at the door; exercised in balthasar-host.
     {
         verdicts.push(Verdict {
             attack: "forged-outcome",

@@ -170,3 +170,93 @@ fn the_control_arm_is_reported_and_cannot_go_missing() {
         "the easy control still cannot beat memory"
     );
 }
+
+/// One arm of a run, with what it cost.
+fn measured(scenario: &Scenario, arm: balthasar_testkit::Arm) -> balthasar_testkit::Measured {
+    balthasar_testkit::measure_arm(scenario, arm)
+        .expect("a run")
+        .1
+}
+
+#[test]
+fn a_changed_decision_is_stated_old_only_where_it_changed() {
+    for scenario in [
+        Scenario::decision_changes(10, START),
+        Scenario::decision_changes_amid(10, 10, START),
+    ] {
+        let score = run_arm(&scenario, balthasar_testkit::Arm::Memory);
+        let cost = measured(&scenario, balthasar_testkit::Arm::Memory);
+        assert_eq!(cost.stale_served, 0, "nothing closed is served");
+        assert!(
+            cost.asserted_stale <= 1,
+            "the old value, once, the session it changed: {}",
+            cost.asserted_stale
+        );
+        assert!(
+            score.rediscoveries <= 2 + scenario.sessions.len() - 10,
+            "each decision learned once: {score:?}"
+        );
+    }
+}
+
+#[test]
+fn rendering_closed_memories_as_current_writes_the_old_value() {
+    // The render-matched control: the same store, what it closed stated as current.
+    let scenario = Scenario::decision_changes(10, START);
+    let shipped = measured(&scenario, balthasar_testkit::Arm::Memory);
+    let control = measured(&scenario, balthasar_testkit::Arm::History);
+    assert!(control.stale_served > 0, "{control:?}");
+    assert!(
+        control.asserted_stale > shipped.asserted_stale,
+        "the control writes the old value more: {} against {}",
+        control.asserted_stale,
+        shipped.asserted_stale
+    );
+}
+
+#[test]
+fn as_many_tokens_of_nothing_relevant_know_nothing() {
+    // The length-matched control: what balthasar spends, spent on memories that answer nothing.
+    let scenario = Scenario::decision_changes(10, START);
+    let shipped = measured(&scenario, balthasar_testkit::Arm::Memory);
+    let control = measured(&scenario, balthasar_testkit::Arm::Unrelated);
+    assert_eq!(control.injected_tokens, shipped.injected_tokens);
+    assert_eq!(
+        run_arm(&scenario, balthasar_testkit::Arm::Unrelated).recalls,
+        0
+    );
+}
+
+#[test]
+fn frecency_with_moving_access_counts_reranks_without_losing_a_lesson() {
+    // What is stated is touched as delivered, so access counts move as they do when serving.
+    let scenario = Scenario::many_lessons(60, START);
+    let with = balthasar_testkit::Arm::Delivered { frecency: true };
+    let without = balthasar_testkit::Arm::Delivered { frecency: false };
+    assert!(run_arm(&scenario, with).recalls >= run_arm(&scenario, without).recalls);
+    assert_ne!(
+        measured(&scenario, with).injected_tokens,
+        measured(&scenario, without).injected_tokens,
+        "the counts moved and the ranking answered them"
+    );
+}
+
+#[test]
+fn reading_the_catalog_never_costs_a_lesson() {
+    for scenario in [
+        Scenario::several_lessons(10, START),
+        Scenario::decision_changes(10, START),
+        Scenario::decision_changes_amid(10, 10, START),
+    ] {
+        let shipped = run_arm(&scenario, balthasar_testkit::Arm::Memory);
+        let reading = run_arm(&scenario, balthasar_testkit::Arm::Catalog);
+        assert!(
+            reading.recalls >= shipped.recalls,
+            "{reading:?} against {shipped:?}"
+        );
+        assert_eq!(
+            measured(&scenario, balthasar_testkit::Arm::Catalog).stale_served,
+            0
+        );
+    }
+}

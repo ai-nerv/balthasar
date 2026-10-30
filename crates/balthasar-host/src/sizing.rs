@@ -1,10 +1,11 @@
-//! What a helper request may be, measured on the whole of it: instruction, input and schema all
-//! reach the helper's window, and appending stops at the bound rather than past it.
+//! What a helper request may hold, measured on the whole of it: instruction, input and schema.
 
 use serde_json::Value;
 
 /// What one helper request may hold altogether, in characters.
 pub(crate) const WHOLE: usize = 200_000;
+
+pub(crate) const INPUT_MOST: u32 = 160_000;
 
 /// What is left for the input once the rest of the request is counted.
 pub(crate) fn room(instruction: &str, schema: &Value, whole: usize) -> usize {
@@ -47,3 +48,6 @@ pub(crate) fn add(input: &mut String, line: &str, room: usize) -> bool {
 #[cfg(test)]
 #[path = "sizing/tests.rs"]
 mod tests;
+
+/// How far the estimate factor may be corrected, from usage or from a refusal.
+pub(crate) const FACTOR: (f64, f64) = (0.5, 8.0);

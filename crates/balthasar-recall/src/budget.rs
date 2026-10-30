@@ -29,6 +29,9 @@ pub fn near_duplicate(a: &str, b: &str, threshold: f64) -> bool {
     if left.is_empty() || right.is_empty() {
         return false;
     }
+    if balthasar_model::negative(a) != balthasar_model::negative(b) {
+        return false;
+    }
 
     let shared = left.iter().filter(|w| right.contains(*w)).count();
     let smaller = left.len().min(right.len()) as f64;
@@ -86,6 +89,20 @@ pub fn fit(text: &str, chars: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn near_duplicate_respects_negation() {
+        assert!(!near_duplicate(
+            "- we deploy on fridays",
+            "- we don't deploy on fridays",
+            0.8
+        ));
+        assert!(near_duplicate(
+            "- we deploy on fridays",
+            "- we deploy on Fridays",
+            0.8
+        ));
+    }
 
     #[test]
     fn a_line_of_wide_characters_is_cut_on_a_character() {

@@ -73,6 +73,24 @@ impl balthasar_host::Hooks for Loaded {
         said
     }
 
+    fn withhold(&mut self, turn: &balthasar_store::Turn) -> Option<String> {
+        let row = serde_json::json!({
+            "text": turn.text, "role": turn.role, "kind": turn.kind, "cursor": turn.cursor,
+        });
+        let Some(said) = self.engine.ask("withhold", &[row]) else {
+            return Some(turn.text.clone());
+        };
+        if said.get("drop").and_then(serde_json::Value::as_bool) == Some(true) {
+            return None;
+        }
+        Some(
+            said.get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(&turn.text)
+                .to_owned(),
+        )
+    }
+
     fn window(&self) -> balthasar_host::Rules {
         self.window.clone()
     }
@@ -87,12 +105,16 @@ impl Loaded {
     ///
     /// A file that exists and does not load is fatal.
     pub fn read(cwd: &Path) -> Result<Self, LuaError> {
-        let roots = Roots::discovered(cwd);
-        let mut files = balthasar_lua::runtimepath(&roots);
+        Self::from_roots(&Roots::discovered(cwd))
+    }
+
+    /// The same, from roots already found.
+    fn from_roots(roots: &Roots) -> Result<Self, LuaError> {
+        let mut files = balthasar_lua::runtimepath(roots);
 
         // A package under `site/pack/` runs once acknowledged, and again only once it has been
         // re-acknowledged after a change. See `balthasar_lua::acknowledged`.
-        let held = withheld(&roots);
+        let held = withheld(roots);
         files.retain(|(path, _)| !held.contains(path));
 
         // Trust is decided after the owner's own files have run; they set `balthasar.trusted`.
@@ -102,18 +124,32 @@ impl Loaded {
         let owned: Vec<(std::path::PathBuf, bool)> =
             files.iter().filter(|(_, t)| *t).cloned().collect();
         engine.read(&owned)?;
-        let trusted = Settings::from(&engine.config()).trusted;
+        let owner = Settings::from(&engine.config());
+        let owner_window = balthasar_host::Rules::read(engine.config().get("window"));
         files.retain(|(_, t)| !*t);
         for (path, allowed) in &mut files {
             *allowed = path
                 .parent()
-                .is_some_and(|dir| balthasar_lua::vouched_for(&trusted, dir));
+                .is_some_and(|dir| balthasar_lua::vouched_for(&owner.trusted, dir));
         }
-        engine.read(&files)?;
+        // The project's own file first, so the owner's files and the coordinator's override it.
+        let unvouched = files.iter().any(|(_, allowed)| !*allowed);
+        if !files.is_empty() {
+            engine = Engine::new();
+            engine.own_config(roots.config.clone());
+            engine.read(&files)?;
+            engine.read(&owned)?;
+        }
 
-        let settings = Settings::from(&engine.config());
+        let mut settings = Settings::from(&engine.config());
         let embedder = embedder_from(&engine.config());
-        let window = balthasar_host::Rules::read(engine.config().get("window"));
+        let mut window = balthasar_host::Rules::read(engine.config().get("window"));
+        // A repository nobody vouched for may raise a floor, never lower one, and never words
+        // the warning put in front of a model.
+        if unvouched {
+            settings.floors = settings.floors.at_least(&owner.floors);
+            window.warning = owner_window.warning;
+        }
         let keeping = balthasar_host::Keeping::read(engine.config().get("memory"));
         Ok(Self {
             engine,
@@ -198,6 +234,20 @@ impl Loaded {
         ask: &balthasar_distil::Ingest,
     ) -> Result<balthasar_distil::Report, balthasar_distil::DistilError> {
         balthasar_distil::ingest(&mut self.engine, store, settings, ask)
+    }
+
+    /// One consolidation pass, with this configuration's `promote` gate.
+    pub fn consolidate(
+        &mut self,
+        store: &mut balthasar_store::Store,
+        scratch: Option<&mut balthasar_store::Scratchpad>,
+        scope: &ScopeId,
+        at: balthasar_model::Timestamp,
+        dry_run: bool,
+    ) -> Result<balthasar_distil::Consolidated, balthasar_distil::DistilError> {
+        let settings = self.settings.clone();
+        let gate = Some(&mut self.engine);
+        balthasar_distil::consolidate(store, scratch, gate, &settings, scope, at, dry_run)
     }
 
     /// Read one of this project's own runs and offer what it taught.
@@ -390,3 +440,6 @@ mod stubs {
         assert_eq!(loaded.log().len(), 2, "{:?}", loaded.log());
     }
 }
+
+#[cfg(test)]
+mod precedence;

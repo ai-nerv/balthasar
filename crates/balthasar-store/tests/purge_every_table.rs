@@ -158,7 +158,7 @@ fn purging_a_session_empties_every_session_keyed_table_in_the_memory_store() {
     fill(&raw, "gone", &mut n);
     fill(&raw, "kept", &mut n);
 
-    balthasar_store::purge_session(&mut store, &SessionId::new("gone")).expect("purge");
+    balthasar_store::purge_session(&mut store, &SessionId::new("gone"), 0).expect("purge");
 
     assert_eq!(
         left(&raw, "gone"),

@@ -51,6 +51,10 @@ jobs:
           # modularity claim rests on. See the note in `Cargo.toml`.
           nix develop --command cargo machete
 
+      # Damaged stores and hostile conditions, fifty times each rather than the local three.
+      - name: Faults
+        run: BALTHASAR_FAULT_REPS=50 nix develop --command cargo test -p balthasar-host --test faults
+
       # The dependency policy in `deny.toml` and the advisory database, both against the lockfile
       # and both from the dev shell, with the advisories fetched fresh for this run.
       - name: Supply chain

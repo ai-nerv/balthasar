@@ -65,13 +65,7 @@ pub enum Body {
         object: String,
     },
     /// A procedure. What habit holds.
-    Habit {
-        trigger: String,
-        steps: Vec<String>,
-        tried: u32,
-        /// And how many of those worked. The ratio is why a habit is worth asserting.
-        worked: u32,
-    },
+    Habit { trigger: String, steps: Vec<String> },
 }
 
 impl Body {
@@ -118,15 +112,10 @@ impl Body {
         Self::Habit {
             trigger: trigger.into(),
             steps,
-            tried: 1,
-            worked: 1,
         }
     }
 
-    /// The slot this occupies, when it occupies one.
-    ///
-    /// A fact answers exactly one `(subject, predicate)`, and that is the pair the store's
-    /// partial unique index keys on.
+    /// The slot this occupies, when it occupies one: the pair the store's unique index keys on.
     #[must_use]
     pub fn slot(&self) -> Option<(&str, &str)> {
         match self {
@@ -157,20 +146,9 @@ impl Body {
                 predicate,
                 object,
             } => format!("{subject} {predicate} {object}"),
-            Self::Habit { trigger, steps, .. } => {
+            Self::Habit { trigger, steps } => {
                 format!("{trigger}: {}", steps.join(" then "))
             }
-        }
-    }
-
-    /// How well a habit has actually worked, `None` before it has been tried.
-    #[must_use]
-    pub fn success_rate(&self) -> Option<f64> {
-        match self {
-            Self::Habit { tried, worked, .. } if *tried > 0 => {
-                Some(f64::from(*worked) / f64::from(*tried))
-            }
-            _ => None,
         }
     }
 }
@@ -230,10 +208,11 @@ mod tests {
     }
 
     #[test]
-    fn a_habit_reports_how_well_it_has_worked() {
-        let h = Body::habit("tests", vec!["make test".into()]);
-        assert_eq!(h.success_rate(), Some(1.0));
-        assert_eq!(Body::note("x", NoteKind::Scratch).success_rate(), None);
+    fn a_habit_stored_with_counters_still_reads() {
+        let held =
+            r#"{"kind":"habit","trigger":"tests","steps":["make test"],"tried":3,"worked":2}"#;
+        let body: Body = serde_json::from_str(held).expect("decode");
+        assert_eq!(body, Body::habit("tests", vec!["make test".into()]));
     }
 
     #[test]

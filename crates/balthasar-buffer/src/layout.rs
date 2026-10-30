@@ -75,6 +75,8 @@ pub struct Held {
     pub summary: Option<Covered>,
     pub pinned: u32,
     pub memory: u32,
+    /// What the catalog of what is on record costs.
+    pub catalog: u32,
     /// What the warning note costs, should it be needed.
     pub note: u32,
     pub compacting: Compacting,
@@ -84,6 +86,8 @@ pub struct Held {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Budget {
     pub window: u32,
+    /// What the whole input may reach, fixed costs included.
+    pub limit: u32,
     pub fixed: u32,
     pub reply: u32,
     pub room: u32,
@@ -91,6 +95,7 @@ pub struct Budget {
     pub memory: u32,
     pub pinned: u32,
     pub summary: u32,
+    pub catalog: u32,
     pub used: u32,
     pub estimated_input: u32,
     pub factor: f64,
@@ -100,6 +105,7 @@ pub struct Budget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
     Pinned,
+    Catalog,
     Summary,
     Item(u64),
     Stub(u64),
@@ -143,20 +149,23 @@ pub fn budget(rules: &Rules, ask: &Ask, factor: f64) -> Budget {
         .map_or(0, |room| room.limit);
     let room = limit.saturating_sub(fixed);
     let part = |share: f64| (f64::from(room) * share).round() as u32;
-    let (memory, pinned, summary) = (
+    let (memory, pinned, summary, catalog) = (
         part(rules.shares.memory),
         part(rules.shares.pinned),
         part(rules.shares.summary),
+        part(rules.shares.catalog),
     );
     Budget {
         window: ask.window,
+        limit,
         fixed,
         reply: ask.reply,
         room,
-        conversation: room.saturating_sub(memory + pinned + summary),
+        conversation: room.saturating_sub(memory + pinned + summary + catalog),
         memory,
         pinned,
         summary,
+        catalog,
         used: 0,
         estimated_input: fixed,
         factor,
@@ -183,6 +192,7 @@ pub fn lay(rules: &Rules, ask: &Ask, rows: &[Row], held: &Held, factor: f64) -> 
         .room
         .saturating_sub(fix(held.memory).min(budget.memory))
         .saturating_sub(fix(held.pinned).min(budget.pinned))
+        .saturating_sub(fix(held.catalog).min(budget.catalog))
         .saturating_sub(budget.summary.max(summary));
     budget.conversation = room;
     let of = |share: f64| (f64::from(room) * share.max(0.0)) as u32;
@@ -386,8 +396,8 @@ pub fn account(layout: &mut Layout, rows: &[Row], held: &Held, factor: f64) {
     let budget = &mut layout.budget;
     budget.used = used;
     budget.estimated_input = used.saturating_add(budget.fixed);
-    layout.fits =
-        u64::from(budget.estimated_input) + u64::from(budget.reply) <= u64::from(budget.window);
+    layout.fits = budget.estimated_input <= budget.limit
+        && u64::from(budget.estimated_input) + u64::from(budget.reply) <= u64::from(budget.window);
 }
 
 /// What `slots` cost after the factor, the fixed items aside.
@@ -398,6 +408,7 @@ fn spent(slots: &[Slot], rows: &[Row], held: &Held, factor: f64) -> u32 {
         .iter()
         .map(|slot| match slot {
             Slot::Pinned => fix(held.pinned),
+            Slot::Catalog => fix(held.catalog),
             Slot::Summary => held.summary.map_or(0, |s| fix(s.tokens)),
             Slot::Item(cursor) => by.get(cursor).map_or(0, |r| fix(r.tokens)),
             Slot::Stub(cursor) => by.get(cursor).map_or(0, |r| fix(r.stub_tokens)),
@@ -532,6 +543,9 @@ fn arrange(
     let mut slots = Vec::new();
     if held.pinned > 0 && budget.pinned > 0 {
         slots.push(Slot::Pinned);
+    }
+    if held.catalog > 0 && budget.catalog > 0 {
+        slots.push(Slot::Catalog);
     }
     let mut summarised = held.summary.is_none();
     let mut placed = false;

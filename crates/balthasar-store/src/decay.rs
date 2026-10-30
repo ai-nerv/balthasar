@@ -94,7 +94,7 @@ impl Store {
                 report.swept.push(entry);
                 if !preview {
                     self.db().execute(
-                        "UPDATE memory SET strength = ?2, last_accessed = ?3, \
+                        "UPDATE memory SET strength = ?2, strength_at = ?3, \
                          archived_at = ?3, tier = 'archive' WHERE id = ?1",
                         params![memory.id.as_str(), now_value, now],
                     )?;
@@ -103,7 +103,7 @@ impl Store {
                 report.weakened.push(entry);
                 if !preview {
                     self.db().execute(
-                        "UPDATE memory SET strength = ?2, last_accessed = ?3 WHERE id = ?1",
+                        "UPDATE memory SET strength = ?2, strength_at = ?3 WHERE id = ?1",
                         params![memory.id.as_str(), now_value, now],
                     )?;
                 }

@@ -85,12 +85,14 @@ related
   replaced     project test_command cargo test
 ```
 
-**Evidence has weights, and the weights are the design.** Eight kinds, and what one of each is
-worth. The top three cross alone; the rest have to find company.
+**Evidence has weights, and the weights are the design.** Nine kinds, and what one of each is
+worth. The top four cross alone; the rest have to find company, and recurrence alone (CALLUS) is
+held below assertion until evidence of another kind joins it.
 
 ```
   SAID      ████████████████████  1.00  the person said to remember it — and it pins
   FIX       ████████████████      0.80  the person corrected something
+  CHOICE    ████████████          0.60  the person chose or changed something — never pins
   SCAR      ██████████            0.50  it was expensive to learn
   ─────────────────────────────── 0.50  promote · crosses alone above this line
   MANUAL    ████████              0.40  a peer proposed it over the socket
@@ -102,7 +104,8 @@ worth. The top three cross alone; the rest have to find company.
 ```
 
 TIDE 0.30 plus CALLUS 0.25 is 0.55. Something that scrolled out of a window once and then
-recurred in an unrelated run becomes a fact without anyone having said so.
+recurred in an unrelated run becomes a fact without anyone having said so. Recurrence with
+nothing else is kept, findable, and not asserted.
 
 **Two floors, and they are different floors.** A memory stops being *asserted* long before it
 stops being *findable*. That gap is the answer to staleness: an agent that can say "you told me
@@ -110,7 +113,12 @@ this in March, it may be stale" instead of stating it flatly.
 
 **No memory is ever deleted.** Superseded, contradicted, decayed past the floor, forgotten on
 purpose — every one of those is a column. `balthasar forget --purge` is the single exception, and it
-exists so that "delete the key I pasted" can be answered with yes. What is not a memory is
+exists so that "delete the key I pasted" can be answered with yes. Its preview names every turn
+that still quotes the text, and `--redact-turns` takes it out of them too; a purge merges the
+search indexes afterwards, so no page of them keeps a deleted word. Purging a run takes the notes
+made only of it and the citations of it from the rest, and what it witnessed is scored again
+without it. A `secret` memory is never injected and is found only by the owner's
+`recall --all`. What is not a memory is
 bounded: derived indexes are rebuilt, the recall ledger keeps what its retention says, and an
 applied layout goes after thirty days, keeping each run's newest. Turns are kept for good unless
 `balthasar.retain_days` is set; then a session quiet that long loses every copy of its turns but
@@ -120,18 +128,40 @@ those a note cites.
 same thing surfacing in unrelated runs is a property of the world. Confidence counts sessions,
 not mentions.
 
-**A contradiction is a correction.** A turn that disagrees with what the project already holds
-is read as a correction whatever words it used — so "we moved off Heroku last month" lands,
-though it carries no marker any word list would catch.
+**A contradiction is a correction, when it says so.** A turn that disagrees with what the project
+already holds and announces the change ("we moved off Heroku", "instead of", "no longer") replaces
+it. One that only disagrees is kept beside it as a disagreement, each counting against the other,
+until `balthasar settle` decides.
+
+**The code is a witness.** `balthasar consolidate --now` reads the commits since its last pass.
+A one-line change that drops a value a memory names closes that memory and records what the
+line became, witnessed by the commit; a value no tracked file holds any more closes with nothing
+in its place. Deleted and renamed files say nothing, and a word in more than three tracked files
+is vocabulary, not a value, unless it is spelled like a name. The commands are configurable
+(`balthasar.commits`, or `false` for none). Anyone who can land a commit can close a memory this
+way: closing is not deleting, the witness names the commit, and `balthasar settle <old> <new>
+--keep <old>` reopens it.
+
+**The ladder climbs on its own.** `serve` distils a session once it has been quiet ten minutes,
+and once a day reads the commits and consolidates, on a thread of its own and never started by a
+`layout` call. A pass reads for thirty seconds at most and leaves the rest to the next; a run that
+goes on is read from where it stopped. `balthasar.ladder = false` turns it off, and `status`
+turns cold when turns have waited more than two days for a consolidation.
 
 **What was said is searchable.** A claim stated once, never repeated and never extracted lives
-in the transcript and nowhere else. `recall` answers from it too, as evidence — never as truth.
+in the transcript and nowhere else. `scroll` finds it in its session's turns; `recall` never
+answers from them, so nothing reaches a model only because it was once said.
+
+**Built, not wired.** The advisor and the logistic ranker are exercised only by their own tests
+until an evaluation shows either earns a place in what a model is told. Nothing derives a causal
+edge: the rule pairing a failure with its fix needed a memory per command, and nothing writes
+one. Vectors rank only the owner's `recall`; `layout` and `context` never embed the turn.
 
 ## Status
 
 Built. M0–M9, F0–F9, and the three things a survey of the field turned up afterwards —
-searching the spans, the control arm that can lose, and an erasure that reaches what was
-derived from what. 1579 tests, fourteen gates.
+searching what was said, the control arm that can lose, and an erasure that reaches what was
+derived from what. 1756 tests, fifteen gates.
 
 ```sh
 balthasar serve                     # listen for a harness; its key is in <socket>.key
@@ -172,6 +202,12 @@ $ balthasar eval --full --sessions 30        # one lesson, repeated
 That is the whole defensible claim, and printing it is not optional — a benchmark shaped so that
 losing is impossible measures nothing. Synthetic and reproducible on purpose: no clock, no model,
 no network, no embedder, and every point is the rule-based path with no distiller in the loop.
+
+`stale served` counts closed or archived memories put in front of a model, and any rise rejects
+an experiment outright. `balthasar eval --manifest m.json --artifact out/` registers a run before
+it measures anything: the hypothesis, primary metric, guardrails and stop rule go into a receipt
+that is never replaced, so a red result stays. `oslo make perf` holds `layout` and `recall` to a
+p95 at 20,000 live memories.
 
 ### A project has many sessions
 
@@ -218,6 +254,7 @@ The gates are not advisory:
 | `gate-hermetic` | the suite leaves nothing behind in `$TMPDIR` |
 | `gate-wire` | one way of saying a thing crosses a boundary |
 | `gate-sandbox` | one Lua VM, built in one place, and it is sandboxed |
+| `gate-served` | nothing closed or forgotten is read for a prompt outside the live view |
 | `gate-family` | the binary answers the family contract |
 | `gate-role` | the binary fills the memory role |
 | `gate-no-llm` | the suite passes with no key, no network, no embeddings |
@@ -272,6 +309,10 @@ the latest prompt. Nothing is recorded by answering: `applied {id, usage}` marks
 and corrects the model's token estimate from the provider's count, and `overflowed {id, said}`
 answers a tighter layout. The rules are `balthasar.window` in `init.lua`.
 
+Memory is chosen once per prompt. A prompt that only lets the run go on — three words at most,
+all of them like "ok", "go on" or "thanks" — keeps the previous prompt's memory byte for byte,
+unless a tool failed or someone else spoke in between.
+
 balthasar never calls a model. When a summary is due, or memory could be curated, or notes
 extracted from a finished turn, the layout (or `jobs` between turns) hands the harness a job —
 an instruction, an input, a schema — and `job_done` brings the answer back. Notes are pinned or
@@ -310,8 +351,15 @@ Every layout rebuilds this projection from current sources and the current quota
 notes produce identical bytes; legacy cached mixed bodies are never reused as authority.
 The retained prompt snapshot has version 2 and is for inspection, not authorization.
 
-Magi renders `rules` on the user-instruction channel and `observations` as assistant/helper
-context. Summaries, recalled memory and old mixed `pinned` slots are also lower-trust assistant
+A `catalog` slot follows them: what the project has on record, newest first, one line per
+asserted fact or habit — its handle, its tier, its first line quoted, the handles of what it
+replaced and of anything it is still disputed with. The last line says whether that is
+everything or a page of it, so a model can tell "nothing is held about this" from "the search
+missed it". `why <handle>` answers for any line. It has its own share of the room
+(`window.shares.catalog`, 3% by default) and changes only when what is asserted changes.
+
+Magi renders `rules` on the user-instruction channel, and `observations` and `catalog` as
+assistant/helper context. Summaries, recalled memory and old mixed `pinned` slots are also lower-trust assistant
 context; legacy journal compaction uses the same boundary even without a memory service. Older consumers
 that do not know the new slot kinds may skip them; the exact current family is the tested
 combination. This separation prevents note metadata from becoming a user instruction; it is
@@ -353,12 +401,13 @@ without one, their first new resolution cannot reconstruct previously erased tar
 
 Extraction queues whole original transcript rows, never truncated row prefixes or helper stubs.
 `memory.extract_bytes` bounds the input string in UTF-8 bytes (default 100,000, clamped to
-4,096–1,000,000). Instructions and the output allowance are separate. Each job records only
-its represented cursor range. Queueing does not acknowledge progress: accepted completion
-commits note effects, audit, job result and acknowledgment together. Acknowledgments advance
-only through contiguous ranges; malformed answers, rejected operations and changed source
-snapshots leave coverage pending. Supported operations in a partly rejected batch remain
-audited and idempotent on retry. A valid empty result acknowledges its represented range.
+4,096–160,000, what one helper input may hold). Instructions and the output allowance are
+separate. Each job records only its represented cursor range. Queueing does not acknowledge
+progress: accepted completion commits note effects, audit, job result and acknowledgment
+together. Acknowledgments advance only through contiguous ranges; malformed answers and changed
+source snapshots leave coverage pending. A rejected operation is audited where it was refused
+and its range still counts as read, so one bad operation does not hold back the spans after it.
+A valid empty result acknowledges its represented range.
 
 Automatic failure recovery retries a job once, then leaves it visibly failed. A row too large
 for the input budget stays blocked rather than skipped. `jobs(session, {inspect=true})` returns
@@ -435,3 +484,13 @@ consuming machine: an input's `nixConfig` is not inherited.
 
 Here, `make nix-build` builds it into `result/`, `make nix-check` checks the flake, and
 `make nix-download-check` fetches it from the cache without building anything.
+
+## Acknowledgements
+
+Thanks to [Muninn](https://github.com/ilien-dev/muninn) by ilien (2026), a local memory engine
+for coding agents. Its design notes and its pre-registered, published measurements shaped the
+next round of work here: keeping a replaced decision out of the model's view by construction,
+an index of what is on record that the model can ask into by id, commits read as evidence that
+a value changed, and a compaction summary checked against what actually ran. Nothing is copied
+from it. Muninn is AGPL-3.0-only and balthasar is MIT, so what balthasar takes from it is the
+ideas, written fresh.

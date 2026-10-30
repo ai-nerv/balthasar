@@ -12,9 +12,11 @@ mod eval;
 mod forget;
 mod ingest;
 mod init;
+mod ladder;
 mod loaded;
 mod promote;
 mod recall;
+mod receipt;
 mod reindex;
 mod relate;
 mod remember;
@@ -138,6 +140,14 @@ enum What {
 /// Run, and answer with what the shell should exit on.
 #[must_use]
 pub fn main() -> ExitCode {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args == ["event-capabilities"] {
+        let bytes = b"{\"ok\":true,\"family\":1,\"n\":1,\"result\":[{\"schema\":1,\"kind\":\"native_event_capabilities\",\"program\":\"balthasar\",\"bootstrap\":2}]}\n";
+        return match std::io::Write::write_all(&mut std::io::stdout().lock(), bytes) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::FAILURE,
+        };
+    }
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         // A verb balthasar does not have is a refusal like any other: the reply shape, on stdout,
@@ -435,3 +445,6 @@ mod tests {
         assert!(matches!(cli.what, Some(What::Init(_))));
     }
 }
+
+#[cfg(test)]
+mod fixes;

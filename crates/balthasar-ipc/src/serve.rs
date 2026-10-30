@@ -5,6 +5,9 @@ use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
+mod scoped;
+pub use scoped::ConnectionState;
+
 /// The role this program fills, and so the name its sockets live under — see `ROLES.md`.
 const ROLE: &str = "memory";
 
@@ -153,8 +156,11 @@ impl Drop for Seat {
 
 /// One call on its way to the one thread that answers, and the way back.
 struct Asked {
+    connection: u64,
+    retained: std::sync::Arc<std::sync::atomic::AtomicBool>,
     peer: Peer,
     request: Request,
+    context: Option<Box<serde_json::Value>>,
     answered: std::sync::mpsc::Sender<Reply>,
 }
 
@@ -164,6 +170,7 @@ struct Asked {
 /// SQLite transaction is ever half-written on the way out.
 enum Heard {
     Call(Asked),
+    Closed(u64),
     Stop(&'static str),
 }
 
@@ -289,53 +296,7 @@ impl Listener {
         guard: crate::Guard,
         mut answer: impl FnMut(&Peer, Request) -> Reply,
     ) -> std::io::Result<()> {
-        let guard = std::sync::Arc::new(guard);
-        // Duplicates rather than borrows, so a panic out of `answer` unwinds instead of joining.
-        let mut listening = Vec::with_capacity(self.bound.len());
-        for claimed in &self.bound {
-            listening.push(claimed.listener.try_clone()?);
-        }
-        let (asked, asking) = std::sync::mpsc::channel::<Heard>();
-        if stop::holding() {
-            // Its own sender: a balthasar nobody connects to still has to hear it is time to go.
-            let stopping = asked.clone();
-            std::thread::spawn(move || {
-                if let Some(named) = stop::awaited() {
-                    let _ = stopping.send(Heard::Stop(named));
-                }
-            });
-        }
-        // One accept thread per name, all feeding the queue the one answering thread reads: two
-        // doors into one store, never two stores.
-        for one in listening {
-            let (asked, guard) = (asked.clone(), std::sync::Arc::clone(&guard));
-            std::thread::spawn(move || accept(&one, &asked, &guard));
-        }
-        drop(asked);
-
-        while let Ok(heard) = asking.recv() {
-            match heard {
-                Heard::Call(Asked {
-                    peer,
-                    request,
-                    answered,
-                }) => {
-                    let call = request.call.clone();
-                    let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        answer(&peer, request)
-                    }))
-                    .unwrap_or_else(|_| {
-                        Reply::failed(format!("balthasar failed while answering `{call}`"))
-                    });
-                    let _ = answered.send(reply);
-                }
-                Heard::Stop(named) => {
-                    eprintln!("balthasar: stopped on {named}");
-                    break;
-                }
-            }
-        }
-        Ok(())
+        self.serve_scoped::<()>(guard, |peer, (), request| answer(peer, request))
     }
 }
 
@@ -346,6 +307,7 @@ fn accept(
     listening: &UnixListener,
     asked: &std::sync::mpsc::Sender<Heard>,
     guard: &std::sync::Arc<crate::Guard>,
+    identities: &std::sync::atomic::AtomicU64,
 ) {
     let crowd: Crowd = Crowd::default();
 
@@ -373,10 +335,14 @@ fn accept(
             let _ = refuse(&mut stream, "this store belongs to somebody else");
             continue;
         }
+        let Some(connection) = scoped::Connection::new(asked.clone(), identities) else {
+            let _ = refuse(&mut stream, "balthasar connection identities exhausted");
+            continue;
+        };
         // Refused out loud: this socket has a client that answers silence by deleting it.
         let Some(seat) = Seat::take(&crowd) else {
             let busy = Reply::failed("busy: balthasar is holding all the callers it can");
-            let _ = say(&mut stream, crate::Wire::Json, &busy);
+            let _ = say_plain(&mut stream, crate::Wire::Json, &busy);
             continue;
         };
 
@@ -388,15 +354,12 @@ fn accept(
             );
             continue;
         }
-        let (asked, guard) = (asked.clone(), std::sync::Arc::clone(guard));
+        let guard = std::sync::Arc::clone(guard);
         std::thread::spawn(move || {
             let _seat = seat;
-            converse(
-                &mut stream,
-                &peer,
-                &guard,
-                &|peer: &Peer, request: Request| answering(&asked, peer, request),
-            );
+            let connection = connection;
+            connection.converse(&mut stream, &peer, &guard, PATIENCE);
+            drop(connection);
         });
     }
 }
@@ -405,11 +368,21 @@ fn accept(
 ///
 /// A refusal rather than a dropped connection when there is nobody left to ask: "no answer" and
 /// "the far end has gone" look identical to a client, and one of them is worth retrying.
-fn answering(asked: &std::sync::mpsc::Sender<Heard>, peer: &Peer, request: Request) -> Reply {
+fn answering(
+    asked: &std::sync::mpsc::Sender<Heard>,
+    connection: u64,
+    retained: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    peer: &Peer,
+    request: Request,
+    context: Option<serde_json::Value>,
+) -> Reply {
     let (answered, hearing) = std::sync::mpsc::channel();
     let sent = asked.send(Heard::Call(Asked {
+        connection,
+        retained: std::sync::Arc::clone(retained),
         peer: peer.clone(),
         request,
+        context: context.map(Box::new),
         answered,
     }));
     match sent.ok().and_then(|()| hearing.recv().ok()) {
@@ -420,9 +393,8 @@ fn answering(asked: &std::sync::mpsc::Sender<Heard>, peer: &Peer, request: Reque
 
 /// Answer one connection's calls until it closes, goes quiet for too long, or stalls mid-frame.
 ///
-/// `answer` is a way to ask the one thread that answers, taken per call rather than per
-/// connection, so that holding a connection holds nothing. A call `guard` turns away never
-/// reaches it.
+/// Calls rejected by `guard` never reach the answering thread.
+#[cfg(test)]
 fn converse(
     stream: &mut UnixStream,
     peer: &Peer,
@@ -432,6 +404,7 @@ fn converse(
     converse_within(stream, peer, guard, answer, PATIENCE);
 }
 
+#[cfg(test)]
 fn converse_within(
     stream: &mut UnixStream,
     peer: &Peer,
@@ -439,29 +412,60 @@ fn converse_within(
     answer: &impl Fn(&Peer, Request) -> Reply,
     patience: Patience,
 ) {
+    converse_retained(
+        stream,
+        peer,
+        guard,
+        &|peer, request, _| answer(peer, request),
+        patience,
+        &std::sync::atomic::AtomicBool::new(false),
+    );
+}
+
+fn converse_retained(
+    stream: &mut UnixStream,
+    peer: &Peer,
+    guard: &crate::Guard,
+    answer: &impl Fn(&Peer, Request, Option<serde_json::Value>) -> Reply,
+    patience: Patience,
+    retained: &std::sync::atomic::AtomicBool,
+) {
     let mut heard = std::time::Instant::now();
     loop {
         let body = match frame::recv_within(stream, Some(patience.frame)) {
             Ok(body) => body,
             // Only a wait that began at a frame boundary is resumable: one that expired mid-frame
             // has lost bytes the next read would misread as a header.
-            Err(frame::WireError::Idle) if heard.elapsed() < patience.idle => continue,
+            Err(frame::WireError::Idle)
+                if heard.elapsed() < patience.idle
+                    || retained.load(std::sync::atomic::Ordering::Acquire) =>
+            {
+                continue;
+            }
             // One refusal, then close: a body that is not read cannot be skipped in step.
             Err(why @ frame::WireError::TooLarge(_)) => {
-                let _ = say(stream, crate::Wire::Json, &Reply::failed(why.to_string()));
+                let _ = say_plain(stream, crate::Wire::Json, &Reply::failed(why.to_string()));
                 break;
             }
             Err(_) => break,
         };
         // Answered in the encoding it was asked in, read from the body's first byte.
         let wire = crate::Wire::of(&body);
+        let mut revision = None;
         let reply = if body.is_empty() {
             Reply::refused("that is not a request: a frame of zero length is malformed")
         } else {
-            crate::key::admitted(guard, wire, &body)
-                .map_or_else(|refusal| refusal, |request| answer(peer, request))
+            crate::key::admitted(guard, wire, &body).map_or_else(
+                |refusal| refusal,
+                |(request, context)| {
+                    if request.call == "verbs" {
+                        revision = guard.request_context;
+                    }
+                    answer(peer, request, context)
+                },
+            )
         };
-        if say(stream, wire, &reply).is_err() {
+        if say(stream, wire, &reply, revision).is_err() {
             break;
         }
         heard = std::time::Instant::now();
@@ -470,8 +474,33 @@ fn converse_within(
 
 /// Write one reply. One that would be over the cap is answered with a refusal naming it instead,
 /// so the caller can tell "too large" from a closed connection and stays in step.
-fn say(stream: &mut UnixStream, wire: crate::Wire, reply: &Reply) -> Result<(), frame::WireError> {
-    let mut encoded = wire.write(reply).map_err(frame::WireError::Malformed)?;
+fn say_plain(
+    stream: &mut UnixStream,
+    wire: crate::Wire,
+    reply: &Reply,
+) -> Result<(), frame::WireError> {
+    say(stream, wire, reply, None)
+}
+
+fn say(
+    stream: &mut UnixStream,
+    wire: crate::Wire,
+    reply: &Reply,
+    revision: Option<u8>,
+) -> Result<(), frame::WireError> {
+    #[derive(serde::Serialize)]
+    struct Envelope<'a> {
+        #[serde(flatten)]
+        reply: &'a Reply,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_context: Option<u8>,
+    }
+    let mut encoded = wire
+        .write(&Envelope {
+            reply,
+            request_context: revision.filter(|_| reply.ok),
+        })
+        .map_err(frame::WireError::Malformed)?;
     if encoded.len() > frame::MAX_FRAME {
         let instead = Reply::failed(format!(
             "the reply would be {} bytes, over the {}-byte frame cap",

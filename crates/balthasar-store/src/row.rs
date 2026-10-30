@@ -21,7 +21,17 @@ pub const COLUMNS: &str = "memory.id, memory.tier, memory.scope, memory.session,
      memory.observed_at, memory.happened_at, memory.valid_from, memory.valid_to, \
      memory.importance, memory.strength, memory.last_accessed, memory.access_count, \
      memory.pinned, memory.confidence, memory.privacy, memory.through, memory.who, \
-     memory.archived_at, memory.embedding, memory.embed_model, memory.single_valued";
+     memory.archived_at, memory.embedding, memory.embed_model, memory.single_valued, \
+     memory.confirmed_at, memory.strength_at";
+
+/// [`COLUMNS`], from `live_memory AS memory`: the view has no closing columns, so both read open.
+pub const LIVE_COLUMNS: &str = "memory.id, memory.tier, memory.scope, memory.session, \
+     memory.body, memory.text, memory.content_hash, \
+     memory.observed_at, memory.happened_at, memory.valid_from, NULL AS valid_to, \
+     memory.importance, memory.strength, memory.last_accessed, memory.access_count, \
+     memory.pinned, memory.confidence, memory.privacy, memory.through, memory.who, \
+     NULL AS archived_at, memory.embedding, memory.embed_model, memory.single_valued, \
+     memory.confirmed_at, memory.strength_at";
 
 /// A memory from a row, without its witnesses or links.
 ///
@@ -42,6 +52,7 @@ pub fn memory(row: &Row<'_>) -> Result<Memory, StoreError> {
             happened_at: row.get("happened_at")?,
             valid_from: row.get("valid_from")?,
             valid_to: row.get("valid_to")?,
+            confirmed_at: row.get("confirmed_at")?,
         },
         strength: Strength {
             value: row.get("strength")?,
@@ -49,6 +60,7 @@ pub fn memory(row: &Row<'_>) -> Result<Memory, StoreError> {
             last_accessed: row.get("last_accessed")?,
             access_count: row.get("access_count")?,
             pinned: row.get::<_, i64>("pinned")? != 0,
+            as_of: row.get("strength_at")?,
         },
         confidence: row.get("confidence")?,
         privacy: parse(&row.get::<_, String>("privacy")?)?,

@@ -90,7 +90,15 @@ pub fn of(
 
     let currency = if superseded { SUPERSEDED } else { 1.0 };
 
-    (saturated * diversity * (1.0 - pressure) * currency).clamp(0.0, 1.0)
+    let score = (saturated * diversity * (1.0 - pressure) * currency).clamp(0.0, 1.0);
+    // Recurrence alone is held, never asserted, until evidence of another kind joins it.
+    if witnesses
+        .iter()
+        .all(|w| w.kind == crate::WitnessKind::Repetition)
+    {
+        return score.min(crate::floor::HOLD);
+    }
+    score
 }
 
 /// Witness values, grouped by where they came from.
@@ -125,6 +133,17 @@ mod tests {
 
     fn plain(witnesses: &[Witness]) -> f64 {
         of(witnesses, &[], false, false, NOW)
+    }
+
+    #[test]
+    fn recurrence_alone_is_held_until_another_kind_joins() {
+        let runs: Vec<Witness> = (0..6)
+            .map(|n| w(WitnessKind::Repetition, &format!("s{n}")))
+            .collect();
+        assert!(plain(&runs) <= crate::floor::HOLD, "{}", plain(&runs));
+        let mut joined = runs;
+        joined.push(w(WitnessKind::Distillation, "s9"));
+        assert!(plain(&joined) >= crate::floor::INJECT, "{}", plain(&joined));
     }
 
     #[test]

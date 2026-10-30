@@ -185,7 +185,7 @@ impl Memory {
             && self.strength.at_tier(self.tier, now) >= crate::floor::SPENT
             // Stale is not the same as faded: a fact barely decays, and a pinned memory is exempt.
             && (self.strength.pinned
-                || !crate::is_stale(self.temporal.observed_at, self.temporal.valid_to, now))
+                || !crate::is_stale(self.temporal.confirmed(), self.temporal.valid_to, now))
     }
 
     /// Note that this was recalled: reinforce it, and say so.

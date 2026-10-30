@@ -113,6 +113,33 @@ fn kinds(laid: &Value) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn canonical_prompt_occupancy_calibrates_identically_with_or_without_cached_tokens() {
+    let mut factors = Vec::new();
+    for cached in [false, true] {
+        let mut harness = Harness::new();
+        harness.turn(0, 1000);
+        let laid = harness.one("layout", small());
+        let estimated = laid["budget"]["estimated_input"]
+            .as_u64()
+            .expect("estimate");
+        assert!(estimated > 0);
+        let physical = estimated * 11 / 10;
+        let read = if cached { physical * 8 / 10 } else { 0 };
+        let write = if cached { physical / 10 } else { 0 };
+        harness.one(
+            "applied",
+            json!({"id":laid["id"],"usage":{
+            "input":physical-read-write,"cache_read":read,"cache_write":write,
+            "cost_micros":u64::MAX,"estimated_micros":u64::MAX}}),
+        );
+        let again = harness.one("layout", small_with(json!({"round":1})));
+        factors.push(again["budget"]["factor"].as_f64().expect("calibration"));
+    }
+    assert_eq!(factors[0], factors[1]);
+    assert!((factors[0] - 1.1).abs() < 0.01);
+}
+
 fn named(laid: &Value) -> Vec<u64> {
     laid["slots"]
         .as_array()
@@ -153,8 +180,12 @@ fn a_layout_answers_in_the_contracts_shape() {
     assert_eq!(budget["summary"], 7_120);
     assert_eq!(budget["factor"], 1.0);
     assert_eq!(named(&laid), [0, 1, 2, 3], "ascending, from live");
-    assert_eq!(kinds(&laid), ["item", "item", "item", "memory", "item"]);
-    let memory = &laid["slots"][3];
+    assert_eq!(budget["catalog"], 2_670);
+    assert_eq!(
+        kinds(&laid),
+        ["catalog", "item", "item", "item", "memory", "item"]
+    );
+    let memory = &laid["slots"][4];
     assert!(memory["text"].as_str().expect("text").contains("fly.io"));
     assert_eq!(memory["ids"].as_array().expect("ids").len(), 1);
     assert_eq!(laid["jobs"], json!([]));

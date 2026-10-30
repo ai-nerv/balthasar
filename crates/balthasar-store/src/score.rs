@@ -35,6 +35,22 @@ impl Scored {
             .max(self.lexical)
             .max(self.entity)
     }
+
+    /// A memory listed rather than searched for: no query-relative signal.
+    #[must_use]
+    pub fn of(memory: Memory) -> Self {
+        Self {
+            score: memory.confidence,
+            semantic: None,
+            lexical: 0.0,
+            entity: 0.0,
+            frecency: 0.0,
+            confidence: memory.confidence,
+            strength: memory.strength.value,
+            near: true,
+            memory,
+        }
+    }
 }
 
 /// How much each signal counts when nothing has been configured.
@@ -82,7 +98,13 @@ impl Weights {
 
     #[must_use]
     pub fn total(self) -> f64 {
-        self.semantic + self.lexical + self.entity + self.frecency + self.confidence + self.strength
+        self.semantic
+            + self.lexical
+            + self.entity
+            + self.frecency
+            + self.confidence
+            + self.strength
+            + self.scope
     }
 }
 
@@ -312,6 +334,11 @@ mod scoring {
         let with = Weights::default();
         let without = with.without_vectors();
         assert!((with.total() - without.total()).abs() < 1e-9);
+        assert!(
+            (with.total() - 1.0).abs() < 1e-9,
+            "scope counted too: {}",
+            with.total()
+        );
         assert_eq!(without.semantic, 0.0);
     }
 }

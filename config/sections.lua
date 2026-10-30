@@ -9,7 +9,6 @@ balthasar.section("identity", {
   weight = 1, order = 10,
   tiers = { "fact" },
   where = { predicate = { "name", "pronouns", "timezone", "editor", "shell" } },
-  render = "- %s: %s",
 })
 
 -- How this project is worked on. The largest share, because it is what a coding agent
@@ -18,7 +17,6 @@ balthasar.section("how-this-project-works", {
   weight = 4, order = 20,
   tiers = { "habit", "fact" },
   where = { scope = "project", importance = { "high", "critical" } },
-  render = "- %s",
   -- A build command that is wrong is worse than no build command at all.
   min_confidence = 0.6,
 })

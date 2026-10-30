@@ -143,3 +143,117 @@ fn forgetting_a_run_nobody_has_heard_of_says_so() {
         String::from_utf8_lossy(&ran.stderr)
     );
 }
+
+/// A fact holding [`SECRET`], and one turn of `session` quoting it, under `at`.
+fn quoted(at: &Path, session: &SessionId) -> (PathBuf, PathBuf, String) {
+    let memory = at.join("store.db");
+    let transcript = at.join("store-transcript.db");
+    let scope = ScopeId::new("/w/thing");
+    let mut store = balthasar_store::Store::open(&memory).expect("store");
+    let fact = Memory::new(
+        mint(NOW),
+        Tier::Fact,
+        scope.clone(),
+        Body::note(SECRET, NoteKind::Claim),
+        NOW,
+    );
+    let witness = balthasar_model::Witness::new(
+        balthasar_model::WitnessId::new("w-1"),
+        balthasar_model::WitnessKind::Imperative,
+        session.clone(),
+        scope,
+        NOW,
+    );
+    let id = store
+        .remember(fact, witness, NOW)
+        .expect("remembered")
+        .id()
+        .to_string();
+    let mut held = balthasar_store::Transcript::open(&transcript).expect("transcript");
+    held.open_run(session, "/w/thing", "/w/thing", "test", NOW)
+        .expect("run");
+    let text = format!("remember: {SECRET}");
+    let turn = balthasar_store::Turn {
+        cursor: 1,
+        at: NOW,
+        role: "user".into(),
+        kind: "prose".into(),
+        text: text.clone(),
+        raw: Some(serde_json::json!({ "text": text }).to_string()),
+        ..balthasar_store::Turn::default()
+    };
+    held.write(session, &turn).expect("turn");
+    (memory, transcript, id)
+}
+
+fn forget(memory: &Path, id: &str, extra: &[&str]) -> std::process::Output {
+    let store = memory.to_string_lossy();
+    let mut args = vec![
+        "--store", &store, "forget", id, "--purge", "--yes", "--json",
+    ];
+    args.extend(extra);
+    Command::new(env!("CARGO_BIN_EXE_balthasar"))
+        .args(&args)
+        .output()
+        .expect("balthasar forget")
+}
+
+#[test]
+fn purging_a_memory_names_the_turns_still_quoting_it() {
+    let at = Scratch::new("balthasar-cli-quoted", "kept");
+    let (memory, transcript, id) = quoted(&at, &SessionId::new("01SAID"));
+    let ran = forget(&memory, &id, &[]);
+    assert!(
+        ran.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let said: serde_json::Value = serde_json::from_slice(&ran.stdout).expect("json");
+    let row = &said["result"][0];
+    assert_eq!(
+        row["quoted_by"],
+        serde_json::json!([{"session": "01SAID", "cursor": 1}])
+    );
+    assert_eq!(row["redacted"], 0);
+    assert!(anywhere(&transcript), "a purge alone leaves what was said");
+    assert!(!anywhere(&memory), "and takes the memory");
+}
+
+#[test]
+fn redacting_takes_the_text_out_of_every_turn_quoting_it() {
+    let at = Scratch::new("balthasar-cli-quoted", "redacted");
+    let session = SessionId::new("01SAID");
+    let (memory, transcript, id) = quoted(&at, &session);
+    let ran = forget(&memory, &id, &["--redact-turns"]);
+    assert!(
+        ran.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let said: serde_json::Value = serde_json::from_slice(&ran.stdout).expect("json");
+    assert_eq!(said["result"][0]["redacted"], 1);
+    assert!(!anywhere(&at), "nowhere on disk");
+    let held = balthasar_store::Transcript::open(&transcript).expect("transcript");
+    let turns = held.replay(&session).expect("replay");
+    assert_eq!(
+        turns[0].text,
+        format!("remember: {}", balthasar_store::REDACTED)
+    );
+}
+
+#[test]
+fn redacting_without_purging_is_refused() {
+    let at = Scratch::new("balthasar-cli-quoted", "alone");
+    let (memory, _, id) = quoted(&at, &SessionId::new("01SAID"));
+    let ran = Command::new(env!("CARGO_BIN_EXE_balthasar"))
+        .args([
+            "--store",
+            &memory.to_string_lossy(),
+            "forget",
+            &id,
+            "--redact-turns",
+        ])
+        .output()
+        .expect("balthasar forget");
+    assert!(!ran.status.success());
+}

@@ -486,3 +486,163 @@ fn a_turn_with_no_role_cannot_mint_an_imperative() {
         "01BLANK",
     );
 }
+
+/// Distil two runs: the first says `held`, the second `later`.
+fn two_runs(store: &mut Store, held: &str, later: &str) {
+    let mut engine = Engine::new();
+    let settings = Settings::default();
+    let mut scrollback = Transcript::ephemeral().expect("scrollback");
+    for (run, text) in [("01MARCH", held), ("01AUGUST", later)] {
+        let session = SessionId::new(run);
+        streamed(&mut scrollback, &session, vec![said(1, text)]);
+        distil_run(
+            store,
+            &mut engine,
+            &settings,
+            &scrollback,
+            &session,
+            &ask(false),
+        )
+        .expect("distilled");
+    }
+}
+
+#[test]
+fn a_shared_lead_without_a_change_marker_is_a_disagreement() {
+    let mut store = Store::ephemeral().expect("store");
+    two_runs(
+        &mut store,
+        "remember: we deploy with heroku",
+        "we deploy with fly.io",
+    );
+    let mut every = Recall::of("deploy", NOW);
+    every.history = true;
+    let open: Vec<String> = store
+        .recall(&every)
+        .expect("recall")
+        .into_iter()
+        .filter(|hit| hit.memory.temporal.valid_to.is_none())
+        .map(|hit| hit.memory.text())
+        .collect();
+    assert!(open.iter().any(|t| t.contains("heroku")), "{open:?}");
+    assert!(open.iter().any(|t| t.contains("fly.io")), "{open:?}");
+    let open = store
+        .disagreements(&scope().to_string())
+        .expect("disagreements");
+    assert_eq!(open.len(), 1, "one pair waits on a person: {open:?}");
+}
+
+#[test]
+fn a_change_marker_supersedes() {
+    let mut store = Store::ephemeral().expect("store");
+    two_runs(
+        &mut store,
+        "remember: we deploy with heroku",
+        "we deploy with fly.io instead of heroku",
+    );
+    let found = store.recall(&Recall::of("deploy", NOW)).expect("recall");
+    let texts: Vec<String> = found.iter().map(|hit| hit.memory.text()).collect();
+    assert!(texts.iter().any(|t| t.contains("fly.io")), "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t == "we deploy with heroku"),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn a_run_that_goes_on_is_read_from_where_it_stopped() {
+    let mut store = Store::ephemeral().expect("store");
+    let mut engine = Engine::new();
+    let settings = Settings::default();
+    let mut held = Transcript::ephemeral().expect("scrollback");
+    let session = SessionId::new("01GOESON");
+    streamed(
+        &mut held,
+        &session,
+        vec![said(1, "remember: we deploy with fly.io")],
+    );
+    let mut read = |store: &mut Store, held: &Transcript| {
+        distil_run(store, &mut engine, &settings, held, &session, &ask(false)).expect("distil")
+    };
+    assert_eq!(read(&mut store, &held).promoted, 1);
+    assert!(undistilled(&store, &held, 10).expect("waiting").is_empty());
+
+    held.write(&session, &said(2, "remember: the docs live in docs/site"))
+        .expect("turn");
+    assert_eq!(
+        undistilled(&store, &held, 10).expect("waiting"),
+        vec![session.clone()],
+        "a run that went on is waiting again"
+    );
+    let again = read(&mut store, &held);
+    assert_eq!((again.observations, again.promoted), (1, 1), "{again:?}");
+
+    let found = store.recall(&Recall::of("deploy", NOW)).expect("recall");
+    let deploy = found
+        .iter()
+        .find(|scored| scored.memory.text().contains("fly.io"))
+        .expect("still known");
+    assert_eq!(
+        store.witnesses_of(&deploy.memory.id).expect("why").len(),
+        1,
+        "the first turn was not read twice"
+    );
+    assert_eq!(read(&mut store, &held).already_read, 1);
+}
+
+#[test]
+fn a_rule_whose_note_was_undone_is_not_learned_again_from_where_it_was_said() {
+    let mut store = Store::ephemeral().expect("store");
+    let mut engine = Engine::new();
+    let settings = Settings::default();
+    let mut held = Transcript::ephemeral().expect("scrollback");
+    let session = SessionId::new("01UNDONE");
+    streamed(
+        &mut held,
+        &session,
+        vec![
+            said(
+                1,
+                "remember: always use tabs for indentation in this project",
+            ),
+            said(2, "remember: we deploy with fly.io"),
+        ],
+    );
+    let after = serde_json::json!({"title": "Indentation",
+        "text": "Always use tabs for indentation in this project.",
+        "evidence": {"sources": [{"session": "01UNDONE", "cursor": 1}]}});
+    held.record_change(
+        &balthasar_store::Change {
+            op: "add".into(),
+            after: Some(after.clone()),
+            state: "undone".into(),
+            by: "extract".into(),
+            at: NOW,
+            evidence: after["evidence"].clone(),
+            ..balthasar_store::Change::default()
+        },
+        Some(&session),
+    )
+    .expect("an undone note");
+
+    distil_run(
+        &mut store,
+        &mut engine,
+        &settings,
+        &held,
+        &session,
+        &ask(false),
+    )
+    .expect("distil");
+    let texts: Vec<String> = store
+        .recall(&Recall::of("", NOW))
+        .expect("recall")
+        .iter()
+        .map(|hit| hit.memory.text())
+        .collect();
+    assert!(!texts.iter().any(|t| t.contains("tabs")), "{texts:?}");
+    assert!(
+        texts.iter().any(|t| t.contains("fly.io")),
+        "the other rule stands: {texts:?}"
+    );
+}

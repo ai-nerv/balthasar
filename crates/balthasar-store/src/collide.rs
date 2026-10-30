@@ -5,9 +5,13 @@
 //! throw away the evidence it agreed with; a revision that reinforced would leave a project
 //! asserting a value nobody still holds.
 
-use crate::{Store, StoreError, row};
-use balthasar_model::{Memory, MemoryId};
+use crate::{Landing, Store, StoreError, row};
+use balthasar_model::{LinkRelation, Memory, MemoryId, Timestamp, Witness};
 use rusqlite::{OptionalExtension, params};
+
+/// The most memories one dispute group is settled across, and the most passes it gets.
+const DISPUTED: usize = 64;
+const PASSES: usize = 16;
 
 impl Store {
     /// The live memory this one would collide with, if any. A fact collides on its slot;
@@ -46,6 +50,9 @@ impl Store {
                     .optional()?;
                 if let Some(same) = same {
                     Some(same)
+                } else if memory.tier == balthasar_model::Tier::Habit {
+                    // The habit whose step just failed is the one this revises.
+                    self.undone_by(memory)?
                 } else if let Some(restated) = self.restated_by(memory)? {
                     // The same claim in other words is the same claim.
                     Some(restated)
@@ -118,6 +125,86 @@ impl Store {
             .map(|(id, _)| id))
     }
 
+    /// Score every memory in `id`'s dispute group again until no number moves, and answer `id`'s
+    /// own score, when it has a group.
+    pub(crate) fn settle_disputes(
+        &mut self,
+        id: &MemoryId,
+        now: Timestamp,
+    ) -> Result<Option<f64>, StoreError> {
+        let mut group = vec![id.clone()];
+        let mut next = 0;
+        while let Some(here) = group.get(next).cloned() {
+            next += 1;
+            let mut statement = self.db().prepare(
+                "SELECT dst FROM link WHERE src = ?1 AND rel = 'contradicts' \
+                 UNION SELECT src FROM link WHERE dst = ?1 AND rel = 'contradicts' ORDER BY 1",
+            )?;
+            let near = statement
+                .query_map(params![here.as_str()], |r| {
+                    Ok(MemoryId::new(r.get::<_, String>(0)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            for other in near {
+                if group.len() < DISPUTED && !group.contains(&other) {
+                    group.push(other);
+                }
+            }
+        }
+        if group.len() == 1 {
+            return Ok(None);
+        }
+        let mut score = None;
+        for _ in 0..PASSES {
+            let mut moved = false;
+            for member in &group {
+                let before: f64 = self.db().query_row(
+                    "SELECT confidence FROM memory WHERE id = ?1",
+                    params![member.as_str()],
+                    |r| r.get(0),
+                )?;
+                let after = self.rescore_one(member, now)?;
+                moved |= (before - after).abs() > 1e-12;
+                if member == id {
+                    score = Some(after);
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+        Ok(score)
+    }
+
+    /// The open habit whose step names the command this habit's trigger says failed.
+    fn undone_by(&self, memory: &Memory) -> Result<Option<String>, StoreError> {
+        let balthasar_model::Body::Habit { trigger, .. } = &memory.body else {
+            return Ok(None);
+        };
+        let Some(failed) = trigger.split('`').nth(1).filter(|c| !c.is_empty()) else {
+            return Ok(None);
+        };
+        let mut statement = self.db().prepare(
+            "SELECT id, body FROM memory WHERE scope = ?1 AND tier = 'habit' \
+               AND valid_to IS NULL AND archived_at IS NULL \
+             ORDER BY observed_at DESC, id LIMIT 64",
+        )?;
+        let held = statement
+            .query_map(params![memory.scope.as_str()], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(held
+            .into_iter()
+            .find(|(_, body)| {
+                serde_json::from_str::<balthasar_model::Body>(body).is_ok_and(|body| {
+                    matches!(&body, balthasar_model::Body::Habit { steps, .. }
+                        if steps.iter().any(|step| step == failed))
+                })
+            })
+            .map(|(id, _)| id))
+    }
+
     /// The live claim this one revises, if it revises anything. Bucketed on the opening two
     /// words, and settled by the word-prefix rule rather than by the bucket.
     fn revised_by(&self, memory: &Memory) -> Result<Option<String>, StoreError> {
@@ -160,7 +247,46 @@ impl Store {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         // Word for word, or the same claim in other words. The second is what makes a restatement
-        // reinforce what is already held instead of superseding it.
-        Ok(hash == arriving.content_hash || balthasar_model::same_claim(&text, &arriving.text()))
+        // reinforce what is already held instead of superseding it; a habit is its trigger, so
+        // only its own words restate it.
+        Ok(hash == arriving.content_hash
+            || arriving.tier != balthasar_model::Tier::Habit
+                && balthasar_model::same_claim(&text, &arriving.text()))
+    }
+
+    /// Write a claim that disputes `held` instead of replacing it: both stay open, each counts
+    /// against the other until a person settles them. A restatement of something held
+    /// reinforces it as [`Store::remember`] would.
+    pub fn dispute(
+        &mut self,
+        held: &MemoryId,
+        memory: Memory,
+        witness: Witness,
+        now: Timestamp,
+    ) -> Result<Landing, StoreError> {
+        if let Some(existing) = self.standing(&memory)?
+            && existing != *held
+            && self.says_the_same(&existing, &memory)?
+        {
+            self.attach(&existing, witness, now)?;
+            return Ok(Landing::Reinforced(existing));
+        }
+        let id = self.insert(memory, &witness, now)?;
+        self.link(&id, held, LinkRelation::Contradicts, now)?;
+        self.link(held, &id, LinkRelation::Contradicts, now)?;
+        self.rescore(&id, now)?;
+        self.rescore(held, now)?;
+        Ok(Landing::Added(id))
+    }
+
+    /// Write a claim that replaces `held` by name: its interval closes and this one stands in.
+    pub fn replace(
+        &mut self,
+        held: &MemoryId,
+        memory: Memory,
+        witness: Witness,
+        now: Timestamp,
+    ) -> Result<Landing, StoreError> {
+        self.supersede(held, memory, witness, now)
     }
 }

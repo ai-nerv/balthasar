@@ -286,7 +286,8 @@ impl Store {
             "SELECT a.attribution_kind, o.kind, o.observed_at \
              FROM action_memory m \
              JOIN action_use a ON a.id = m.action_id \
-             LEFT JOIN outcome o ON o.action_id = a.id \
+             LEFT JOIN outcome o ON o.id = (SELECT id FROM outcome WHERE action_id = a.id \
+                                            ORDER BY observed_at DESC, id DESC LIMIT 1) \
              WHERE m.memory_id = ?1",
         )?;
         let rows = statement
@@ -445,6 +446,29 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
+
+    /// The same, with how each was presented.
+    pub fn presented_in(
+        &self,
+        injection: &str,
+    ) -> Result<Vec<(MemoryId, Presentation)>, StoreError> {
+        let mut statement = self.db().prepare(
+            "SELECT memory_id, presentation_mode FROM injection_memory \
+             WHERE injection_id = ?1 ORDER BY position",
+        )?;
+        let rows = statement
+            .query_map(params![injection], |r| {
+                Ok((
+                    MemoryId::new(r.get::<_, String>(0)?),
+                    r.get::<_, String>(1)?
+                        .parse()
+                        .unwrap_or(Presentation::Evidence),
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// One action, as the ledger recorded it.
     pub fn use_of(&self, action: &str) -> Result<Option<Use>, StoreError> {
         let held = self

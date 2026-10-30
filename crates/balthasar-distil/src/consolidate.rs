@@ -33,6 +33,8 @@ pub struct Consolidated {
     pub promoted: Vec<String>,
     /// Claims that reinforced something the project already held.
     pub reinforced: usize,
+    /// Claims the configuration's `promote` gate turned away, and why.
+    pub refused: Vec<(String, String)>,
     /// Whether anything was written.
     pub dry_run: bool,
 }
@@ -51,6 +53,7 @@ impl Consolidated {
 pub fn consolidate(
     store: &mut Store,
     scratch: Option<&mut balthasar_store::Scratchpad>,
+    gate: Option<&mut balthasar_lua::Engine>,
     settings: &Settings,
     scope: &ScopeId,
     now: Timestamp,
@@ -84,9 +87,23 @@ pub fn consolidate(
     let groups = crate::merge(found)
         .into_iter()
         .map(one_witness_per_session)
-        .filter(|akin| akin.cluster.sessions.len() >= DISTINCT_SESSIONS);
+        .filter(|akin| akin.cluster.sessions.len() >= DISTINCT_SESSIONS)
+        .filter(|akin| substantial(&akin.cluster.text));
 
+    let mut gate = gate;
     for akin in groups {
+        let candidate = crate::Candidate::new(
+            Body::note(&akin.cluster.text, NoteKind::Claim),
+            Tier::Fact,
+            WitnessKind::Repetition,
+            "callus",
+        );
+        if let Some(engine) = gate.as_deref_mut()
+            && let Some(reason) = crate::ingest::refused(engine, &candidate)
+        {
+            report.refused.push((akin.cluster.text, reason));
+            continue;
+        }
         report.clusters += 1;
         if dry_run {
             report.promoted.push(akin.cluster.text);
@@ -109,6 +126,25 @@ pub fn consolidate(
         }
     }
     Ok(report)
+}
+
+/// Words that acknowledge rather than claim: "ok, go ahead" said in every run is not a fact.
+const ACKNOWLEDGING: &[&str] = &[
+    "ok", "okay", "yes", "yep", "yeah", "sure", "thank", "thanks", "continue", "go", "ahead",
+    "sound", "good", "great", "perfect", "nice", "cool", "lgtm", "done", "next", "proceed", "fine",
+    "alright", "right", "awesome", "please", "now", "again", "same",
+];
+
+/// How many content words a recurring claim needs beyond acknowledgement.
+const SUBSTANCE: usize = 2;
+
+/// Whether a recurring text says enough to be a claim.
+fn substantial(text: &str) -> bool {
+    balthasar_model::content_words(text)
+        .iter()
+        .filter(|word| !ACKNOWLEDGING.contains(&word.as_str()))
+        .count()
+        >= SUBSTANCE
 }
 
 /// One session, one witness, however many agents of it said the thing.
@@ -196,6 +232,7 @@ fn witness_for(
         scope.clone(),
         group.first_seen.min(now),
     )
+    .through(balthasar_model::Channel::Consolidation, None)
     // Said in the note: "recurred" and "recurred, reworded" are different strengths of evidence.
     .noted(if akin.near {
         "recurred across sessions, reworded (rules, not a model)"

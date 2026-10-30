@@ -58,61 +58,10 @@ pub(super) fn same_rule(a: &str, b: &str) -> bool {
 }
 
 pub(super) fn unquoted(input: &str) -> Vec<&str> {
-    let mut fence = None;
-    let mut quoted = false;
-    let mut out = Vec::new();
-    for raw in input.lines() {
-        let line = raw.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let start = raw.trim_start_matches(' ');
-        let marker = start
-            .chars()
-            .next()
-            .filter(|c| raw.len() - start.len() <= 3 && (*c == '`' || *c == '~'));
-        if let Some(marker) = marker {
-            let size = start.chars().take_while(|c| *c == marker).count();
-            if size >= 3 {
-                match fence {
-                    None => fence = Some((marker, size)),
-                    Some((opened, count))
-                        if opened == marker
-                            && size >= count
-                            && start[size..].trim_matches([' ', '\t']).is_empty() =>
-                    {
-                        fence = None;
-                    }
-                    _ => {}
-                }
-                continue;
-            }
-        }
-        if fence.is_some() {
-            continue;
-        }
-        let markup = line.split('<').skip(1).any(|part| {
-            part.chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '/' | '!' | '?'))
-        });
-        if line.starts_with('>')
-            || line.ends_with(':')
-            || line.starts_with('\'')
-            || line.contains([
-                '"', '“', '”', '‘', '’', '`', '«', '»', '‹', '›', '„', '‟', '‚', '‛',
-            ])
-            || line.contains(" '")
-            || markup
-        {
-            quoted = true;
-        }
-        if quoted || raw.starts_with("    ") || raw.starts_with('\t') {
-            continue;
-        }
-        out.push(line.strip_prefix("- ").unwrap_or(line));
-    }
-    out
+    balthasar_model::eligible_lines(
+        input,
+        balthasar_model::Quoting::Strict { inline_code: true },
+    )
 }
 
 pub(super) fn rule_text(line: &str) -> Option<&str> {

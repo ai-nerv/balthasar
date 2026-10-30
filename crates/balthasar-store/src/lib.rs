@@ -9,13 +9,14 @@ mod atomic;
 mod binding;
 mod chunking;
 mod collide;
+mod current;
 mod decay;
 mod effects;
 mod entity;
-mod episode;
 mod export;
 mod extraction;
 mod generation;
+mod health;
 mod jobs;
 mod laid;
 mod laying;
@@ -26,8 +27,11 @@ mod paths;
 mod placed;
 mod private;
 mod purge;
+mod quoting;
 mod read;
+mod read_through;
 mod relate;
+mod retiring;
 mod row;
 mod schema;
 mod score;
@@ -35,19 +39,25 @@ mod scratchpad;
 mod scroll;
 mod session;
 mod spans;
+mod taken_back;
 mod transcript;
 mod turns;
 mod usage;
 mod write;
+mod writer;
 
 pub use chunking::{Chunk, covered, cut, revision};
+pub use current::{Current, presented};
+
+/// Who wrote a scratch row the model said, as opposed to one the person said.
+pub const SAID_BY_MODEL: &str = "said:model";
 pub use decay::{Faded, Weakened};
 pub use effects::{LayoutEffect, LayoutTarget};
 pub use entity::{Entity, Kind as EntityKind, extract as entities_in, rarity};
-pub use episode::Episode;
 pub use export::Row as TrainingRow;
 pub use extraction::ExtractionProgress;
 pub use generation::{Generation, Piece, Ready, Stale};
+pub use health::{Check, FIXES, LADDER, State as HealthState, health, summary as health_summary};
 pub use jobs::{Job, JobState};
 pub use laid::{Prompt, Proposal, Summary};
 pub use mint::mint;
@@ -61,7 +71,9 @@ pub use purge::{
     Closure, DAY, Expired, LAYOUT_KEPT, Pruned, closure_of, expired, prune_layouts, prune_turns,
     purge, purge_domain, purge_run, purge_scratch, purge_session,
 };
+pub use quoting::REDACTED;
 pub use read::{Cluster, Recall};
+pub use read_through::RunRead;
 pub use relate::Reach;
 pub use schema::VERSION as SCHEMA_VERSION;
 pub use score::{Scored, Weights, cosine, coverage, frecency, fts_query};
@@ -69,10 +81,12 @@ pub use scratchpad::Scratchpad;
 pub use scroll::{Budget, Read, Want, tokens_of};
 pub use session::{Session, name_for};
 pub use spans::Span;
+pub use taken_back::TakenBack;
 pub use transcript::{Run, State, Transcript, Turn, transcript_path};
 pub use turns::{Inserted, Noticed, RawPart, same as same_turn};
 pub use usage::{Candidate, Injection, RecallRun, Signals, Trace, TracedAction, Use, Verdict};
 pub use write::Landing;
+pub use writer::{Mutation, Writer};
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -111,8 +125,9 @@ impl Store {
     /// cannot outlive the memory it is evidence for. `secure_delete` on, because SQLite does not
     /// zero a freed page by default and the words stay in the file where `strings` finds them.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        private::before_open(path)?;
+        let opening = private::before_open(path)?;
         let connection = Connection::open(path)?;
+        drop(opening);
         // A busy store is a store being consolidated. Waiting is right; failing is not.
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;

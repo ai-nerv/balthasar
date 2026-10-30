@@ -45,14 +45,17 @@ pub fn run(
 
     let mut pad = balthasar_store::Scratchpad::at(runs_under(store_path, scope, tool));
     let settings = loaded.settings().clone();
-    let report = balthasar_distil::consolidate(
-        &mut store,
-        Some(&mut pad),
-        &settings,
-        scope,
-        at,
-        !args.commit,
-    )?;
+    // What the repository changed, before what recurred: a value the code dropped is closed first.
+    let commits = if args.commit {
+        balthasar_distil::read_commits(&mut store, scope, &settings, at)?
+    } else {
+        balthasar_distil::CommitsRead::default()
+    };
+    let report = loaded.consolidate(&mut store, Some(&mut pad), scope, at, !args.commit)?;
+    if args.commit {
+        let ladder = balthasar_model::SessionId::new(balthasar_store::LADDER);
+        held.set_counter(&ladder, "consolidated", u64::try_from(at).unwrap_or(0))?;
+    }
 
     for text in &report.promoted {
         loaded.tell("consolidate", &[serde_json::json!(text)]);
@@ -69,6 +72,8 @@ pub fn run(
             "clusters": report.clusters,
             "promoted": report.promoted.len(),
             "reinforced": report.reinforced,
+            "commits": { "read": commits.commits, "closed": commits.closed,
+                         "recorded": commits.recorded, "backlog": commits.backlog },
             "retired": {
                 "sessions": retired.sessions,
                 "turns": retired.turns,
@@ -78,6 +83,15 @@ pub fn run(
         return Ok(());
     }
     say_read(&read);
+    if commits.commits > 0 {
+        crate::say!(
+            "{}",
+            render::dim(&format!(
+                "read {} commits: {} memories closed, {} recorded",
+                commits.commits, commits.closed, commits.recorded
+            ))
+        );
+    }
     say(&report, args.explain);
     say_retired(&retired, settings.retain_days, report.dry_run);
     Ok(())

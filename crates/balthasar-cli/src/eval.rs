@@ -67,6 +67,13 @@ pub struct Args {
     /// dirtying the repository is one nobody runs.
     #[arg(long, value_name = "DIR")]
     artifact: Option<PathBuf>,
+
+    /// Register the run first: this manifest's hypothesis, primary metric, guardrails and stop
+    /// rule go into a receipt under `--artifact` before anything is measured.
+    ///
+    /// A manifest registers once, and its receipt keeps whatever the run found.
+    #[arg(long, value_name = "FILE", requires = "artifact")]
+    manifest: Option<PathBuf>,
 }
 
 /// The moment the scenario starts. Fixed, so a run is reproducible.
@@ -86,8 +93,20 @@ pub fn run(args: &Args) -> anyhow::Result<()> {
         (false, false) => Scenario::one_lesson(args.sessions, START),
     };
 
+    let receipt = match (&args.manifest, &args.artifact) {
+        (Some(manifest), Some(into)) => {
+            std::fs::create_dir_all(into)?;
+            Some(crate::receipt::register(manifest, into, crate::now())?)
+        }
+        _ => None,
+    };
     let settings = balthasar_lua::Settings::default();
     let baseline = Baseline::of(&scenario, name, START, &settings)?;
+    if let Some(receipt) = &receipt {
+        let attacks = balthasar_testkit::run_attacks().attack_success_rate();
+        let path = receipt.record(&baseline, attacks)?;
+        eprintln!("{}", render::dim(&path.display().to_string()));
+    }
     let with = balthasar_testkit::run(&scenario, true)?;
     let without = balthasar_testkit::run(&scenario, false)?;
     let ceiling = Score::ceiling(&scenario);
@@ -203,6 +222,11 @@ fn say_full(held: &balthasar_testkit::Full) {
         "  {:>7}  {}",
         format!("{:.2}", b.assertion_accuracy),
         render::dim("assertion accuracy — nothing superseded was stated as current")
+    );
+    crate::say!(
+        "  {:>7}  {}",
+        b.stale_served,
+        render::dim("stale served — closed or archived memories put in front of a model")
     );
 
     crate::say!();

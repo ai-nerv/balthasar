@@ -1,6 +1,7 @@
 //! Jobs: helper-model work balthasar asks the harness to run, and what it does with the answers.
 //! balthasar never calls a model; a job is text in and text out, run by whoever holds one.
 
+use crate::events::{self, Correlation, Fact, JobOutcome};
 use crate::queue::{json_in, stale};
 use crate::supply;
 use crate::{Answering, Hooks};
@@ -137,6 +138,9 @@ fn without_failures(summary: &str) -> String {
             listing = true;
             continue;
         }
+        if plain.starts_with(crate::verifying::PREFIX) {
+            continue;
+        }
         if listing && (plain.starts_with("- [") || plain.starts_with('(') || plain.is_empty()) {
             continue;
         }
@@ -175,6 +179,13 @@ fn with_failures(
         .iter()
         .filter(|turn| turn.is_tool() && (turn.error || turn.ok == Some(false)))
         .collect();
+    let doubted = crate::verifying::unverified(own, &rows.turns);
+    let own = if doubted.is_empty() {
+        own.to_owned()
+    } else {
+        format!("{own}\n\n{}", doubted.join("\n"))
+    };
+    let own = own.as_str();
     if failed.is_empty() {
         return Ok(own.to_owned());
     }
@@ -218,8 +229,8 @@ pub(crate) fn curate(
     let found = supply::candidates(at, query, CURATE_FROM);
     let mut listed = String::new();
     for hit in &found {
-        if let Some(text) = hooks.redact(&hit.memory.text(), &hit.memory) {
-            listed.push_str(&format!("- {}: {}\n", hit.memory.id, text.trim()));
+        if let Some(text) = hooks.redact(&hit.memory().text(), hit.memory()) {
+            listed.push_str(&format!("- {}: {}\n", hit.memory().id, text.trim()));
         }
     }
     let Some(scrollback) = at.scrollback.as_ref() else {
@@ -316,9 +327,13 @@ pub(crate) fn hand_out(
 
 /// A failed job goes back in the queue once; after that it stays failed. A blocking one is never
 /// retried: it was there to shape one request, and that request has gone without it.
-fn retry_or_fail(at: &Answering<'_>, job: &Job, result: Option<&Value>) -> Result<(), StoreError> {
+fn retry_or_fail(
+    at: &Answering<'_>,
+    job: &Job,
+    result: Option<&Value>,
+) -> Result<JobState, StoreError> {
     let Some(scrollback) = at.scrollback.as_ref() else {
-        return Ok(());
+        return Ok(job.state);
     };
     let blocking = job.spec.get("blocking").and_then(Value::as_bool) == Some(true);
     let next = if job.attempts <= RETRIES && !blocking {
@@ -326,7 +341,24 @@ fn retry_or_fail(at: &Answering<'_>, job: &Job, result: Option<&Value>) -> Resul
     } else {
         JobState::Failed
     };
-    scrollback.settle_job(&job.id, next, result, at.now)
+    scrollback.settle_job(&job.id, next, result, at.now)?;
+    Ok(next)
+}
+
+fn retry_outcome(state: JobState) -> JobOutcome {
+    match state {
+        JobState::Queued => JobOutcome::RetryQueued,
+        JobState::Failed => JobOutcome::Failed,
+        _ => JobOutcome::Rejected,
+    }
+}
+
+fn ignored_outcome(state: JobState) -> JobOutcome {
+    if state == JobState::Done {
+        JobOutcome::IgnoredRepeated
+    } else {
+        JobOutcome::IgnoredObsolete
+    }
 }
 
 /// `jobs(session, {helpers})`: the background jobs waiting to be run, with what a finished turn
@@ -384,6 +416,27 @@ pub fn jobs(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) ->
 
 /// `job_done(session, {id, text, usage, model} | {id, failed})`: what a job came back with.
 pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
+    let correlation = events::requests::capture(Correlation::default());
+    let mut outcome = JobOutcome::Rejected;
+    let reply = complete(at, request, hooks, &mut outcome);
+    events::emit(|| {
+        (
+            correlation,
+            Fact::JobResult {
+                outcome,
+                revision: None,
+            },
+        )
+    });
+    reply
+}
+
+fn complete(
+    at: &mut Answering<'_>,
+    request: &Request,
+    hooks: &mut dyn Hooks,
+    outcome: &mut JobOutcome,
+) -> Reply {
     let Some(session) = request.args.first().and_then(Value::as_str) else {
         return Reply::refused("job_done needs a session");
     };
@@ -402,6 +455,7 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
     };
     // A late or repeated answer changes nothing.
     if job.state != JobState::Issued {
+        *outcome = ignored_outcome(job.state);
         return Reply::none();
     }
     // Nor does one from a hand-out that has since been superseded: the work was reissued, and
@@ -414,6 +468,7 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
             "job {id}: attempt {attempt} answered a lease now on {}",
             job.attempts
         );
+        *outcome = JobOutcome::IgnoredObsolete;
         return Reply::none();
     }
     let text = said
@@ -455,7 +510,7 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
             return Err(StoreError::Unknown(format!("no job called '{id}'")));
         };
         if current.state != JobState::Issued {
-            return Ok(());
+            return Ok(ignored_outcome(current.state));
         }
         if current != job {
             return Err(StoreError::Unknown(format!(
@@ -463,25 +518,28 @@ pub fn job_done(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks
             )));
         }
         match text {
-            None => retry_or_fail(at, &current, Some(&json!({"failed":said.get("failed").and_then(Value::as_str).unwrap_or("helper returned no text"),"usage":said.get("usage"),"model":said.get("model")}))),
+            None => retry_or_fail(at, &current, Some(&json!({"failed":said.get("failed").and_then(Value::as_str).unwrap_or("helper returned no text"),"usage":said.get("usage"),"model":said.get("model")}))).map(retry_outcome),
             Some(text) => {
                 if matches!(current.kind.as_str(), "extract" | "tidy")
                     && let Err(reason) = crate::notes::extraction::validate(text) {
-                    return retry_or_fail(at, &current, Some(&json!({"failed":reason,"text":text,"usage":said.get("usage"),"model":said.get("model")})));
+                    return retry_or_fail(at, &current, Some(&json!({"failed":reason,"text":text,"usage":said.get("usage"),"model":said.get("model")}))).map(retry_outcome);
                 }
                 if !settle(at, &session, &current, text, &keeping, &already)? {
-                    return retry_or_fail(at, &current, Some(&json!({"failed":"source evidence changed or note operations were rejected","text":text,"usage":said.get("usage"),"model":said.get("model")})));
+                    return retry_or_fail(at, &current, Some(&json!({"failed":"source evidence changed or note operations were rejected","text":text,"usage":said.get("usage"),"model":said.get("model")}))).map(retry_outcome);
                 }
                 if current.kind == "extract" {
                     crate::notes::extraction::acknowledge(scrollback, &session, &current, id)?;
                 }
                 let kept = json!({ "text": text, "usage": said.get("usage"), "model": said.get("model") });
-                scrollback.settle_job(id, JobState::Done, Some(&kept), at.now)
+                scrollback.settle_job(id, JobState::Done, Some(&kept), at.now).map(|()| JobOutcome::Accepted)
             }
         }
     });
     match settled {
-        Ok(()) => Reply::none(),
+        Ok(settled) => {
+            *outcome = settled;
+            Reply::none()
+        }
         Err(why) => Reply::refused(why.to_string()),
     }
 }
@@ -576,14 +634,17 @@ fn curation(at: &mut Answering<'_>, job: &Job, text: &str, hooks: &mut dyn Hooks
     let per = hooks.window().estimate_chars_per_token;
     let found: Vec<_> = supply::candidates(at, query, CURATE_FROM)
         .into_iter()
-        .filter(|hit| chosen.contains(&hit.memory.id.to_string()))
+        .filter(|hit| chosen.contains(&hit.memory().id.to_string()))
         .collect();
-    let ids: Vec<String> = found.iter().map(|hit| hit.memory.id.to_string()).collect();
+    let ids: Vec<String> = found
+        .iter()
+        .map(|hit| hit.memory().id.to_string())
+        .collect();
     // A rewrite stands in only for what is current truth: rewritten, a memory kept with doubt
     // would be offered without it, so those are packed as they are, under their own heading.
     let doubted = found
         .iter()
-        .any(|hit| !hit.memory.is_assertable(at.inject_floor, at.now, true));
+        .any(|hit| !hit.memory().is_assertable(at.inject_floor, at.now, true));
     let supplied = if notes.is_empty() || doubted {
         supply::pack(at, &found, room, per, hooks).unwrap_or_default()
     } else {

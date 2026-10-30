@@ -22,9 +22,13 @@ pub struct Args {
     #[arg(long)]
     tier: Option<String>,
 
-    /// Look in the archive as well.
+    /// Look in the archive as well. Implies `--all`.
     #[arg(long)]
     archived: bool,
+
+    /// Include closed memories, labelled: what something was before it was replaced.
+    #[arg(long)]
+    all: bool,
 
     /// Score against a remote model's boundary, so local-only memories are withheld.
     #[arg(long)]
@@ -80,6 +84,7 @@ pub fn run(
     ask.limit = args.limit;
     ask.tiers = tiers;
     ask.include_archived = args.archived;
+    ask.history = args.all || args.archived;
     ask.remote = args.remote;
 
     let started = std::time::Instant::now();
@@ -437,12 +442,7 @@ fn reached(
         let Some(memory) = store.get(&id)? else {
             continue;
         };
-        // The same gates as any other candidate. A traversal must not be a way past the live
-        // floor, the archive filter, or the privacy boundary.
-        if memory.archived_at.is_some() && !(ask.include_archived || policy.archive) {
-            continue;
-        }
-        if memory.strength.at(at) < ask.floor {
+        if !passes(&memory, policy, ask, at) {
             continue;
         }
         out.push((
@@ -462,6 +462,25 @@ fn reached(
     }
     Ok(out)
 }
+/// The gates any recalled candidate passes, applied to one reached by an edge.
+fn passes(
+    memory: &balthasar_model::Memory,
+    policy: &balthasar_recall::Policy,
+    ask: &Recall,
+    at: balthasar_model::Timestamp,
+) -> bool {
+    let archived = memory.archived_at.is_some() || memory.tier == balthasar_model::Tier::Archive;
+    if archived && !(ask.include_archived || policy.archive) {
+        return false;
+    }
+    if memory.temporal.valid_to.is_some() && !ask.history {
+        return false;
+    }
+    memory.confidence >= ask.floor
+        && memory.strength.at(at) >= balthasar_model::floor::SPENT
+        && memory.privacy.may_show(ask.remote, ask.history)
+}
+
 /// Which stores answer a search: the scope asked for, and `global` underneath it unless it
 /// already is `global`.
 ///
@@ -649,6 +668,47 @@ fn shadow(
 mod tests {
     use super::*;
     use balthasar_model::{Body, Memory, Tier as T};
+
+    #[test]
+    fn an_edge_does_not_reach_past_what_a_search_would_refuse() {
+        let mut memory = Memory::new(
+            balthasar_model::MemoryId::new("x"),
+            T::Fact,
+            ScopeId::global(),
+            Body::fact("a", "b", "c"),
+            0,
+        );
+        memory.confidence = 0.9;
+        let policy = balthasar_recall::Policy::lexical_only();
+        let ask = Recall::of("a", 0);
+        assert!(
+            passes(&memory, &policy, &ask, 0),
+            "an open, believed memory passes"
+        );
+
+        let mut closed = memory.clone();
+        closed.temporal.valid_to = Some(1);
+        assert!(!passes(&closed, &policy, &ask, 2), "closed, without --all");
+        let mut all = ask.clone();
+        all.history = true;
+        assert!(passes(&closed, &policy, &all, 2), "closed, with --all");
+
+        let mut doubted = memory.clone();
+        doubted.confidence = 0.01;
+        assert!(
+            !passes(&doubted, &policy, &ask, 0),
+            "under the confidence floor"
+        );
+
+        let mut private = memory;
+        private.privacy = balthasar_model::Privacy::Local;
+        let mut remote = ask;
+        remote.remote = true;
+        assert!(
+            !passes(&private, &policy, &remote, 0),
+            "local-only, bound remote"
+        );
+    }
 
     #[test]
     fn a_breakdown_names_every_signal_that_moved_the_score() {

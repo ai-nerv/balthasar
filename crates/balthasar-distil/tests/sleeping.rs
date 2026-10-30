@@ -31,7 +31,16 @@ fn said(store: &mut Store, session: &str, text: &str, at: Timestamp) {
 }
 
 fn run(store: &mut Store, now: Timestamp) -> balthasar_distil::Consolidated {
-    consolidate(store, None, &Settings::default(), &scope(), now, false).expect("consolidate")
+    consolidate(
+        store,
+        None,
+        None,
+        &Settings::default(),
+        &scope(),
+        now,
+        false,
+    )
+    .expect("consolidate")
 }
 
 #[test]
@@ -186,6 +195,7 @@ fn a_dry_run_writes_nothing() {
     let report = consolidate(
         &mut store,
         None,
+        None,
         &Settings::default(),
         &scope(),
         AUGUST,
@@ -223,7 +233,7 @@ fn two_projects_do_not_corroborate_each_other() {
 }
 
 #[test]
-fn what_crossed_is_asserted_and_what_did_not_is_merely_findable() {
+fn what_crossed_is_held_until_evidence_of_another_kind_joins_it() {
     let mut store = Store::ephemeral().expect("store");
     said(&mut store, "s1", "the database is postgres", AUGUST);
     said(&mut store, "s2", "the database is postgres", AUGUST + 60);
@@ -236,9 +246,25 @@ fn what_crossed_is_asserted_and_what_did_not_is_merely_findable() {
         .find(|m| m.tier == Tier::Fact)
         .expect("something crossed");
     assert!(
-        promoted.is_assertable(floor::INJECT, AUGUST + 120, false),
-        "confidence {}",
+        !promoted.is_assertable(floor::INJECT, AUGUST + 120, false),
+        "recurrence alone, confidence {}",
         promoted.confidence
+    );
+    let tide = balthasar_model::Witness::new(
+        balthasar_model::WitnessId::new("tide-1"),
+        WitnessKind::Distillation,
+        SessionId::new("s3"),
+        scope(),
+        AUGUST + 180,
+    );
+    store
+        .attach(&promoted.id, tide, AUGUST + 200)
+        .expect("joined");
+    let joined = store.get(&promoted.id).expect("read").expect("there");
+    assert!(
+        joined.is_assertable(floor::INJECT, AUGUST + 200, false),
+        "joined, confidence {}",
+        joined.confidence
     );
     assert!(
         held.iter().any(|m| m.tier == Tier::Scratch),
@@ -403,4 +429,38 @@ fn a_cycle_in_the_derivation_graph_terminates() {
         .expect("the other way");
 
     assert!(balthasar_store::purge(&mut store, a).is_ok(), "it returns");
+}
+
+#[test]
+fn boilerplate_repeated_across_runs_stays_scratch() {
+    let mut store = Store::ephemeral().expect("store");
+    for (run, at) in [
+        ("s1", MARCH),
+        ("s2", MARCH + 86_400),
+        ("s3", MARCH + 172_800),
+    ] {
+        said(&mut store, run, "ok, go ahead", at);
+        said(&mut store, run, "continue please", at + 60);
+    }
+    let report = run(&mut store, AUGUST);
+    assert!(report.promoted.is_empty(), "{:?}", report.promoted);
+}
+
+#[test]
+fn what_the_model_said_in_two_runs_is_not_corroboration() {
+    let mut store = Store::ephemeral().expect("store");
+    for (run, at) in [("s1", MARCH), ("s2", MARCH + 86_400)] {
+        let mut memory = Memory::new(
+            mint(at),
+            Tier::Scratch,
+            scope(),
+            Body::note("the database is postgres", NoteKind::Observation),
+            at,
+        );
+        memory.session = Some(SessionId::new(run));
+        memory.provenance.who = Some(balthasar_store::SAID_BY_MODEL.to_owned());
+        store.keep_scratch(memory).expect("scratch");
+    }
+    let report = run(&mut store, AUGUST);
+    assert!(report.promoted.is_empty(), "{:?}", report.promoted);
 }

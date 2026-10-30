@@ -24,17 +24,35 @@ pub struct Instruction {
     pub referential: bool,
 }
 
-/// Words that ask for something to be kept.
+/// Words that ask for something to be kept. The claim is what follows them.
 const KEEP: &[&str] = &[
     "remember",
     "dont forget",
+    // Apostrophes become spaces on the way in.
+    "don t forget",
     "do not forget",
     "keep in mind",
     "make a note",
     "note that",
-    "always",
-    "never",
     "from now on",
+];
+
+/// Words that make a sentence a standing rule. They stay in the claim: without them it says
+/// the opposite or nothing.
+const POLARITY: &[&str] = &["always", "never"];
+
+/// What may stand before a polarity word in a sentence that is a rule.
+const LEADING: &[&str] = &[
+    "we", "you", "i", "please", "pls", "plz", "ok", "okay", "so", "and", "also", "but", "just",
+    "then", "should", "must", "shall", "will", "ll", "d", "hey", "yeah", "yes", "guys", "now",
+];
+
+/// Past forms that make a polarity word narrate rather than instruct: "we never got round to it".
+const NARRATED: &[&str] = &[
+    "was", "were", "been", "got", "did", "had", "went", "came", "made", "said", "saw", "thought",
+    "knew", "found", "took", "gave", "ran", "wrote", "broke", "forgot", "became", "left", "kept",
+    "told", "felt", "began", "brought", "bought", "sent", "built", "spent", "lost", "meant",
+    "heard", "held", "stood", "mind",
 ];
 
 /// Words that mean the person has asked before, and are instructions in their own right.
@@ -108,11 +126,24 @@ pub fn read(text: &str, extra: &[String]) -> Option<Instruction> {
     let insistent = is_insistent(text, &normalised);
 
     let mut markers: Vec<String> = KEEP.iter().map(|m| (*m).to_owned()).collect();
-    markers.extend(extra.iter().map(|m| squash(&m.to_lowercase())));
+    markers.extend(
+        extra
+            .iter()
+            .map(|m| squash(&m.to_lowercase()))
+            .filter(|m| !POLARITY.contains(&m.as_str())),
+    );
     markers.extend(INSIST.iter().map(|m| (*m).to_owned()));
+    let asks = markers.clone();
+    markers.extend(POLARITY.iter().map(|m| (*m).to_owned()));
 
-    // Anywhere in the turn, not only at the start.
-    let (at, found) = find(&normalised, &markers)?;
+    // Anywhere in the turn, not only at the start. A polarity word that only narrates is passed
+    // over for whatever else the turn asks.
+    let (mut at, mut found) = find(&normalised, &markers)?;
+    let mut polar = POLARITY.contains(&found.as_str());
+    if polar && !governs(text, &normalised, &offsets, at, found.len()) {
+        (at, found) = find(&normalised, &asks)?;
+        polar = false;
+    }
     if is_reported(&normalised, at, found.len()) {
         return None;
     }
@@ -124,7 +155,8 @@ pub fn read(text: &str, extra: &[String]) -> Option<Instruction> {
     }
 
     // Back into the text as it was written: a claim should read the way somebody said it.
-    let after = offsets.get(at + found.len()).copied().unwrap_or(text.len());
+    let from = if polar { at } else { at + found.len() };
+    let after = offsets.get(from).copied().unwrap_or(text.len());
     let claim = sentence(text[after..].trim_start_matches([',', ':', '.', '!', ' ', '-', '\t']));
 
     // What "remember this" means is the conversation, and only the caller can go and get it.
@@ -235,7 +267,7 @@ fn is_insistent(raw: &str, normalised: &str) -> bool {
     if INSIST.iter().any(|m| normalised.contains(m)) {
         return true;
     }
-    if raw.contains('!') {
+    if raw.contains("!!") {
         return true;
     }
     if normalised.contains("times") && normalised.chars().any(|c| c.is_ascii_digit()) {
@@ -244,11 +276,15 @@ fn is_insistent(raw: &str, normalised: &str) -> bool {
     if SWEARING.iter().any(|word| normalised.contains(word)) {
         return true;
     }
-    // Shouting: a run of capitals long enough not to be an acronym.
-    if raw
+    // Shouting: two words in capitals that are not acronyms.
+    let shouted = raw
         .split_whitespace()
-        .any(|word| word.chars().filter(|c| c.is_uppercase()).count() >= 4)
-    {
+        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|word| word.chars().filter(|c| c.is_uppercase()).count() >= 4)
+        .filter(|word| !word.chars().any(char::is_lowercase))
+        .filter(|word| !ACRONYMS.contains(word))
+        .count();
+    if shouted >= 2 {
         return true;
     }
     // A stretched word: `duuuude`, `pleeease`.
@@ -257,6 +293,52 @@ fn is_insistent(raw: &str, normalised: &str) -> bool {
         .windows(3)
         .any(|three| matches!(three, [a, b, c] if a == b && b == c && a.is_ascii_alphabetic()))
 }
+
+/// Capitalised words that are names, not shouting.
+const ACRONYMS: &[&str] = &[
+    "README",
+    "JSON",
+    "YAML",
+    "TOML",
+    "HTML",
+    "HTTP",
+    "HTTPS",
+    "UUID",
+    "ULID",
+    "CUDA",
+    "LLVM",
+    "MUSL",
+    "GLIBC",
+    "POSIX",
+    "ASCII",
+    "UTF8",
+    "OAUTH",
+    "CORS",
+    "CSRF",
+    "TODO",
+    "FIXME",
+    "NOTE",
+    "WARN",
+    "INFO",
+    "DEBUG",
+    "ERROR",
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LICENSE",
+    "CHANGELOG",
+    "SQLITE",
+    "NVIDIA",
+    "AMD64",
+    "ARM64",
+    "X86_64",
+    "GRPC",
+    "REST",
+    "AWS",
+    "GCP",
+    "TLS",
+    "SSH",
+];
 
 /// Enough to notice somebody is cross. Not a filter, and never used to refuse anything.
 const SWEARING: &[&str] = &["fuck", "fuk", "shit", "damn", "bloody", "christ", "goddamn"];
@@ -341,13 +423,52 @@ fn within_one_edit(a: &str, b: &str) -> bool {
 
 /// Whether the marker is being reported rather than issued.
 ///
-/// The window covers the marker itself: in "I can never remember" the marker is "never" and the
-/// phrase that settles it is "can never".
+/// The window runs into the marker itself ("can never" settles "never"), but a phrase must start
+/// before it: "do not forget" is not reported by its own "do not".
 fn is_reported(text: &str, at: usize, len: usize) -> bool {
     let from = text.floor_char_boundary(at.saturating_sub(24));
     let to = text.ceil_char_boundary((at + len).min(text.len()));
     let window = &text[from..to];
-    REPORTED.iter().any(|phrase| window.contains(phrase))
+    REPORTED
+        .iter()
+        .any(|phrase| window.match_indices(phrase).any(|(i, _)| from + i < at))
+}
+
+/// Whether a polarity word at `at` opens a rule: only leading words before it in its sentence,
+/// and no past form after it.
+fn governs(text: &str, normalised: &str, offsets: &[usize], at: usize, len: usize) -> bool {
+    let start = offsets.get(at).copied().unwrap_or(0);
+    let before = text.get(..start).unwrap_or_default();
+    let opened = before
+        .char_indices()
+        .rev()
+        .find(|(i, c)| {
+            matches!(c, '\n' | '!' | '?' | ';' | ':')
+                || (*c == '.'
+                    && before
+                        .get(i + 1..)
+                        .is_some_and(|rest| rest.starts_with(' ')))
+        })
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    let leading = before
+        .get(opened..)
+        .unwrap_or_default()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .all(|word| LEADING.contains(&word.to_lowercase().as_str()));
+    let next = normalised
+        .get(at + len..)
+        .unwrap_or_default()
+        .split_whitespace()
+        .next()
+        .unwrap_or_default();
+    leading && !narrates(next)
+}
+
+/// Whether a word is a past form, which tells what happened rather than what to do.
+fn narrates(word: &str) -> bool {
+    NARRATED.contains(&word)
+        || (word.len() > 4 && word.ends_with("ed") && !word.ends_with("eed") && word != "embed")
 }
 
 /// The first sentence of what follows a marker.
@@ -478,9 +599,17 @@ mod tests {
     }
 
     #[test]
-    fn an_exclamation_counts() {
+    fn one_exclamation_is_not_insisting_and_two_are() {
         let said = read_it("remember we use make!").expect("an instruction");
+        assert!(!said.insistent);
+        let said = read_it("remember we use make!!").expect("an instruction");
         assert!(said.insistent);
+    }
+
+    #[test]
+    fn an_acronym_does_not_pin() {
+        let said = read_it("remember the README lists the JSON schema").expect("an instruction");
+        assert!(!said.insistent);
     }
 
     #[test]
@@ -526,10 +655,61 @@ mod tests {
     #[test]
     fn an_unrelated_word_is_not_forgiven_into_a_marker() {
         assert!(read_it("the number is 5").is_none());
-        assert!(
-            read_it("we never got round to it").is_some(),
-            "'never' is a real marker"
-        );
+    }
+
+    #[test]
+    fn never_keeps_its_negation() {
+        for (said, kept) in [
+            ("never commit to main", "never commit to main"),
+            ("we never push on fridays", "never push on fridays"),
+            (
+                "you should never run migrations by hand",
+                "never run migrations by hand",
+            ),
+            (
+                "from now on never touch the vendor dir",
+                "never touch the vendor dir",
+            ),
+            (
+                "always run make test before pushing",
+                "always run make test before pushing",
+            ),
+        ] {
+            let read = read_it(said).expect("an instruction");
+            assert_eq!(read.claim.as_deref(), Some(kept), "{said}");
+        }
+    }
+
+    #[test]
+    fn always_or_never_in_narrative_is_not_an_instruction() {
+        for told in [
+            "we never got round to it",
+            "the tests always fail on CI",
+            "it always failed on the old box",
+            "never mind, it works now",
+        ] {
+            assert!(read_it(told).is_none(), "{told}");
+        }
+    }
+
+    #[test]
+    fn a_narrated_polarity_word_does_not_hide_the_request_after_it() {
+        let read =
+            read_it("the tests always fail on CI. remember we use make").expect("an instruction");
+        assert_eq!(read.claim.as_deref(), Some("we use make"));
+    }
+
+    #[test]
+    fn dont_forget_is_a_keep_marker_however_it_is_typed() {
+        for said in [
+            "don't forget we use make",
+            "dont forget we use make",
+            "do not forget we use make",
+            "don\u{2019}t forget we use make",
+        ] {
+            let read = read_it(said).expect("an instruction");
+            assert_eq!(read.claim.as_deref(), Some("we use make"), "{said}");
+        }
     }
 
     #[test]

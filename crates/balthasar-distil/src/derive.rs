@@ -1,15 +1,11 @@
 //! Working out which memories are related, from what the store already holds.
 //!
 //! Every derivation here is a rule over clocks, spans, slots and entities. No model, no
-//! embedder — which is what makes the temporal, causal and entity families survive
+//! embedder — which is what makes the temporal and entity families survive
 //! `MAGI_BALTHASAR_NO_EMBED=1` intact, and leaves semantic with an exact-overlap floor rather than
 //! nothing.
 //!
-//! The causal rules are the ones worth being careful about. Temporal adjacency is not
-//! causation, and a derivation that treated it as such would fill the store with confident
-//! nonsense. What is used instead is transcript *structure*: a thing failed, a different thing
-//! then worked, and both are inside one episode. That is still an inference, and it is labelled
-//! with its source so a reader can discount it.
+//! Temporal adjacency is not causation, so no rule here draws a causal edge from it.
 
 use balthasar_model::{Derivation, Memory, MemoryId, Relation, Timestamp, View};
 
@@ -80,69 +76,6 @@ pub fn temporal(memories: &[Memory], rules: &Thresholds, now: Timestamp) -> Vec<
         });
     }
     out
-}
-
-/// Repair chains, from the shape of the transcript.
-///
-/// A failure followed by a different approach that worked, inside one episode. Both directions
-/// are written because they answer different questions — *what fixed this* and *why did this
-/// exist* — and neither is the inverse of the other.
-///
-/// `within` bounds the pairing to one span. Without it a failure in the morning would be
-/// "resolved by" a success in the evening that had nothing to do with it, which is exactly the
-/// temporal-adjacency mistake this module exists to avoid.
-#[must_use]
-pub fn repairs(steps: &[Step], now: Timestamp) -> Vec<Relation> {
-    let mut out = Vec::new();
-    for (at, step) in steps.iter().enumerate() {
-        if !step.failed {
-            continue;
-        }
-        // The next success in the same episode, and only the next: a failure is repaired once.
-        let fix = steps
-            .iter()
-            .skip(at + 1)
-            .take_while(|later| later.episode == step.episode)
-            .find(|later| !later.failed && later.command != step.command);
-        let Some(fix) = fix else { continue };
-
-        out.push(Relation {
-            from: fix.memory.clone(),
-            to: step.memory.clone(),
-            view: View::Resolved,
-            weight: 0.8,
-            source: Derivation::Structure,
-            derivation_version: DERIVATION,
-            evidence_cursor: fix.cursor,
-            created_at: now,
-        });
-        out.push(Relation {
-            from: step.memory.clone(),
-            to: fix.memory.clone(),
-            view: View::Caused,
-            weight: 0.6,
-            source: Derivation::Structure,
-            derivation_version: DERIVATION,
-            evidence_cursor: step.cursor,
-            created_at: now,
-        });
-    }
-    out
-}
-
-/// One tool call inside an episode, as a repair chain needs to see it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Step {
-    /// The memory that holds it.
-    pub memory: MemoryId,
-    /// Which episode it belongs to.
-    pub episode: String,
-    /// What was run.
-    pub command: String,
-    /// Whether it failed.
-    pub failed: bool,
-    /// Where in the transcript.
-    pub cursor: Option<u64>,
 }
 
 /// Same-entity edges, from what two memories are both about.
@@ -266,16 +199,6 @@ mod tests {
         held
     }
 
-    fn step(id: &str, episode: &str, command: &str, failed: bool, cursor: u64) -> Step {
-        Step {
-            memory: MemoryId::new(id),
-            episode: episode.to_owned(),
-            command: command.to_owned(),
-            failed,
-            cursor: Some(cursor),
-        }
-    }
-
     #[test]
     fn things_far_apart_are_ordered() {
         let held = vec![memory("a", "first", NOW), memory("b", "second", NOW + 3600)];
@@ -306,64 +229,6 @@ mod tests {
             out[0].from,
             MemoryId::new("old"),
             "the older event came first"
-        );
-    }
-
-    #[test]
-    fn a_failure_and_the_thing_that_fixed_it_are_linked_both_ways() {
-        let steps = vec![
-            step("m1", "e1", "cargo test", true, 1),
-            step("m2", "e1", "make test", false, 2),
-        ];
-        let out = repairs(&steps, NOW);
-
-        assert_eq!(out.len(), 2);
-        let resolved = out
-            .iter()
-            .find(|r| r.view == View::Resolved)
-            .expect("a fix");
-        assert_eq!(resolved.from, MemoryId::new("m2"));
-        assert_eq!(resolved.to, MemoryId::new("m1"));
-        assert_eq!(resolved.source, Derivation::Structure);
-    }
-
-    #[test]
-    fn a_repair_is_never_paired_across_episodes() {
-        // Otherwise this morning's failure is "resolved by" this evening's success, which is
-        // the temporal-adjacency mistake wearing a causal label.
-        let steps = vec![
-            step("m1", "e1", "cargo test", true, 1),
-            step("m2", "e2", "make test", false, 9),
-        ];
-        assert!(repairs(&steps, NOW).is_empty());
-    }
-
-    #[test]
-    fn rerunning_the_same_command_is_not_a_repair() {
-        // A flaky test that passes on the second run taught nobody anything.
-        let steps = vec![
-            step("m1", "e1", "cargo test", true, 1),
-            step("m2", "e1", "cargo test", false, 2),
-        ];
-        assert!(repairs(&steps, NOW).is_empty());
-    }
-
-    #[test]
-    fn a_failure_is_repaired_once() {
-        let steps = vec![
-            step("m1", "e1", "cargo test", true, 1),
-            step("m2", "e1", "make test", false, 2),
-            step("m3", "e1", "make lint", false, 3),
-        ];
-        let fixes: Vec<_> = repairs(&steps, NOW)
-            .into_iter()
-            .filter(|r| r.view == View::Resolved)
-            .collect();
-        assert_eq!(fixes.len(), 1);
-        assert_eq!(
-            fixes[0].from,
-            MemoryId::new("m2"),
-            "the first success, not every one"
         );
     }
 
@@ -429,16 +294,11 @@ mod tests {
 
     #[test]
     fn every_derived_edge_names_what_produced_it() {
-        let steps = vec![
-            step("m1", "e1", "cargo test", true, 1),
-            step("m2", "e1", "make test", false, 2),
-        ];
-        let mut all = repairs(&steps, NOW);
-        all.extend(temporal(
+        let mut all = temporal(
             &[memory("a", "one", NOW), memory("b", "two", NOW + 3600)],
             &Thresholds::default(),
             NOW,
-        ));
+        );
         all.extend(entities(
             &[
                 (MemoryId::new("a"), vec!["flyctl".to_owned()]),

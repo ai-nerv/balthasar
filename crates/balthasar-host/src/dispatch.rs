@@ -1,13 +1,13 @@
 //! Turning a request into an answer.
 
-use crate::saying::{describe, session_names};
+use crate::saying::session_names;
 use crate::{Door, verbs};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::{
     AgentId, Body, Memory, MemoryId, NoteKind, ScopeId, SessionId, Tier, Timestamp, Witness,
     WitnessId, WitnessKind,
 };
-use balthasar_store::{Recall, Store, mint};
+use balthasar_store::{Store, mint};
 
 /// What the dispatcher needs to answer anything.
 pub struct Answering<'a> {
@@ -92,8 +92,38 @@ pub fn answer_hooked(
     request: &Request,
     hooks: &mut dyn crate::Hooks,
 ) -> Reply {
+    answer_connection(at, door, request, hooks, None)
+}
+
+/// Answer a call using the writer state of this socket connection.
+pub fn answer_scoped_hooked(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
+    ownership: &mut crate::Ownership,
+) -> Reply {
+    answer_connection(at, door, request, hooks, Some(ownership))
+}
+
+fn answer_connection(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
+    mut ownership: Option<&mut crate::Ownership>,
+) -> Reply {
     let began = std::time::Instant::now();
-    let reply = answering(at, door, request, hooks);
+    let reply = if let Some(reply) =
+        crate::ownership::special(at, door, request, ownership.as_deref_mut())
+    {
+        reply
+    } else {
+        match crate::ownership::fence(at, request, ownership.as_deref()) {
+            Ok(_writer) => answering(at, door, request, hooks),
+            Err(why) => Reply::failed(why.to_string()),
+        }
+    };
     if balthasar_model::noted::enabled() {
         balthasar_model::noted!("verb: {}", described(request, &reply, began.elapsed()));
     }
@@ -172,7 +202,7 @@ fn answering(
         // Shipped in the binary and identical for every session, so it answers like `verbs`.
         "client" => Reply::one(serde_json::json!(balthasar_lua::CLIENT)),
         "status" => status(at),
-        "recall" => recall(at, door, request),
+        "recall" => crate::recalling::recall(at, door, request, hooks),
         "why" => why(at, request),
         "sessions" => sessions(at, request),
         "rename" => rename(at, request),
@@ -215,8 +245,18 @@ fn status(at: &mut Answering<'_>) -> Reply {
         Err(why) => return Reply::refused(why.to_string()),
     };
     let scope = at.scope.to_string();
+    let checks = balthasar_store::health(at.store, at.scrollback.as_deref()).unwrap_or_default();
+    let health: Vec<serde_json::Value> = checks
+        .iter()
+        .map(|c| {
+            serde_json::json!({ "check": c.name, "state": c.state.as_str(),
+                                     "detail": c.detail, "fix": c.fix })
+        })
+        .collect();
     Reply::one(serde_json::json!({
         "scope": scope,
+        "health": health,
+        "summary": balthasar_store::health_summary(&checks),
         "path": at.store.path().to_string_lossy(),
         "tiers": census.into_iter()
             .map(|(tier, count)| (tier, serde_json::json!(count)))
@@ -227,173 +267,13 @@ fn status(at: &mut Answering<'_>) -> Reply {
     }))
 }
 
-/// Search.
-fn recall(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
-    let query = request.args.first().and_then(|v| v.as_str()).unwrap_or("");
-    let opts = request.args.get(1);
-    let limit = opts
-        .and_then(|o| o.get("limit"))
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(10)
-        .min(100) as usize;
-
-    let mut ask = Recall::of(query, at.now);
-    ask.limit = limit;
-    ask.floor = at.live_floor;
-    ask.near = true;
-    // A peer asking for memory is about to send it somewhere, so the remote boundary is assumed.
-    ask.remote = opts
-        .and_then(|o| o.get("remote"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true);
-
-    let mut found = match at.store.recall(&ask) {
-        Ok(found) => found,
-        Err(why) => return Reply::refused(why.to_string()),
-    };
-    // A run searches its own scratch too, which now lives in its own file.
-    if let Some(run) = opts
-        .and_then(|o| o.get("session"))
-        .and_then(serde_json::Value::as_str)
-        .map(SessionId::new)
-    {
-        // This agent's own scratch and no sibling's.
-        let agent = at.agent.clone();
-        let own = match at.scratch.as_mut() {
-            Some(pad) => pad.peek(&run, &agent).and_then(|held| match held {
-                Some(store) => store.recall(&ask),
-                None => Ok(Vec::new()),
-            }),
-            None => Ok(Vec::new()),
-        };
-        match own {
-            Ok(mine) => found.extend(mine),
-            Err(why) => return Reply::refused(why.to_string()),
-        }
-        found.sort_by(|a, b| b.score.total_cmp(&a.score));
-        found.truncate(limit);
-    }
-    // The owner sees everything on record; a session is not shown a rule nobody stood behind.
-    if !matches!(door, Door::Owner) {
-        let standing = crate::supply::Standing::of(at);
-        found.retain(|hit| !standing.withholds(at, &hit.memory));
-    }
-    // Names are resolved once for the whole result set.
-    let names = session_names(at);
-    let described: Vec<serde_json::Value> = found
-        .iter()
-        .map(|hit| describe(&hit.memory, at.inject_floor, at.now, &names))
-        .collect();
-
-    // Handing memories to a caller about to put them in a context is an injection.
-    let injection = if at.capture {
-        match note_served(at, query, &found, opts) {
-            Ok(id) => Some(id),
-            Err(why) => return Reply::refused(why.to_string()),
-        }
-    } else {
-        None
-    };
-
-    // One row per memory. With a ledger on, the answer is instead one record: the search and
-    // what it served, which is a single thing rather than a listing wrapped in a row.
-    match injection {
-        None => Reply::rows(described),
-        Some(id) => Reply::one(serde_json::json!({
-            "injection": id,
-            "memories": described,
-        })),
-    }
-}
-
-/// Record that a search happened and that its results were handed over.
-///
-/// After the answer is decided, never before it: the ledger is instrumentation.
-fn note_served(
-    at: &mut Answering<'_>,
-    query: &str,
-    found: &[balthasar_store::Scored],
-    opts: Option<&serde_json::Value>,
-) -> Result<String, balthasar_store::StoreError> {
-    let session = opts
-        .and_then(|o| o.get("session"))
-        .and_then(serde_json::Value::as_str)
-        .map(SessionId::new);
-    let query_hash = balthasar_model::content_hash(query)[..16].to_owned();
-    // Two searches in one second, even for the same words, are two records.
-    let unique =
-        balthasar_model::content_hash(&format!("{query_hash}:{}", balthasar_store::mint(at.now)));
-    let stamp = format!("{}-{}", at.now, &unique[..8]);
-
-    at.store.note_recall(
-        &balthasar_store::RecallRun {
-            id: format!("recall-{stamp}"),
-            scope: at.scope.clone(),
-            session: session.clone(),
-            query_hash,
-            requested_at: at.now,
-            config_fingerprint: String::new(),
-            vector_available: false,
-            result_limit: found.len(),
-            latency_us: 0,
-        },
-        &found
-            .iter()
-            .enumerate()
-            .map(|(rank, hit)| balthasar_store::Candidate {
-                memory: hit.memory.id.clone(),
-                rank,
-                selected: true,
-                score: hit.score,
-                signals: balthasar_store::Signals {
-                    semantic: hit.semantic.unwrap_or(0.0),
-                    lexical: hit.lexical,
-                    entity: hit.entity,
-                    frecency: hit.frecency,
-                    confidence: hit.confidence,
-                    strength: hit.strength,
-                    scope: f64::from(u8::from(hit.near)),
-                },
-            })
-            .collect::<Vec<_>>(),
-    )?;
-
-    let injection = format!("inject-{stamp}");
-    let tokens: usize = found
-        .iter()
-        .map(|h| h.memory.text().len().div_ceil(4))
-        .sum();
-    at.store.note_injection(
-        &balthasar_store::Injection {
-            id: injection.clone(),
-            recall: Some(format!("recall-{stamp}")),
-            session,
-            created_at: at.now,
-            token_count: tokens,
-            remote: true,
-            policy: "balanced".to_owned(),
-        },
-        &found
-            .iter()
-            .map(|hit| {
-                let mode = if hit.memory.is_assertable(at.inject_floor, at.now, true) {
-                    balthasar_model::Presentation::Asserted
-                } else {
-                    balthasar_model::Presentation::Evidence
-                };
-                (hit.memory.id.clone(), mode)
-            })
-            .collect::<Vec<_>>(),
-    )?;
-    Ok(injection)
-}
-
 /// The evidence for one memory.
 fn why(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(id) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("why needs an id");
     };
-    let held = at.store.get(&MemoryId::new(id));
+    let named = at.store.resolve(id).ok().flatten();
+    let held = at.store.get(&named.unwrap_or_else(|| MemoryId::new(id)));
     match held {
         Ok(Some(memory)) => {
             let names = session_names(at);
@@ -582,8 +462,15 @@ fn remember(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         at.now,
     );
     let witness = match door.who() {
-        Some(who) => witness.noted(who),
-        None => witness.noted("typed at the command line"),
+        Some(who) => witness
+            .through(
+                balthasar_model::Channel::PeerAssertion,
+                Some(balthasar_model::Domain::new(format!("peer:{who}"))),
+            )
+            .noted(who),
+        None => witness
+            .through(balthasar_model::Channel::ManualWrite, None)
+            .noted("typed at the command line"),
     };
 
     let now = at.now;
@@ -625,7 +512,12 @@ fn forget(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
     if asked("session") {
         return forget_run(at, door, id, asked("purge"));
     }
-    let id = MemoryId::new(id);
+    let id = at
+        .store
+        .resolve(id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| MemoryId::new(id));
 
     let held = match at.store.get(&id) {
         Ok(Some(memory)) => memory,
@@ -687,16 +579,16 @@ fn forget_run(at: &mut Answering<'_>, door: &Door, handle: &str, purge: bool) ->
         return Reply::refused("removing a run is the owner's — a peer may archive it");
     }
 
-    let memories = match balthasar_store::purge_session(at.store, &session) {
-        Ok(n) => n,
-        Err(why) => return Reply::refused(why.to_string()),
-    };
     let gone = match at.scrollback.as_ref() {
         Some(held) => match balthasar_store::purge_run(held, &session) {
             Ok(n) => n,
             Err(why) => return Reply::refused(why.to_string()),
         },
         None => 0,
+    };
+    let memories = match balthasar_store::purge_session(at.store, &session, at.now) {
+        Ok(n) => n,
+        Err(why) => return Reply::refused(why.to_string()),
     };
     let scratch = match at.scratch.as_mut() {
         Some(pad) => balthasar_store::purge_scratch(pad, &session).unwrap_or(false),

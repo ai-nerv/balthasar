@@ -51,7 +51,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "balthasar"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "balthasar-cli",
  "balthasar-ipc",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-buffer"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "balthasar-store",
  "serde",
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-cli"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "balthasar-distil",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-distil"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "balthasar-embed",
  "balthasar-lua",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-embed"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -114,11 +114,12 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokenizers",
+ "zip",
 ]
 
 [[package]]
 name = "balthasar-host"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "balthasar-buffer",
  "balthasar-ipc",
@@ -126,6 +127,7 @@ dependencies = [
  "balthasar-model",
  "balthasar-store",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
@@ -133,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-ipc"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "balthasar-model",
  "ciborium",
@@ -146,7 +148,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-lua"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "balthasar-model",
  "luna",
@@ -159,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-model"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "rustix",
  "serde",
@@ -169,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-recall"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "balthasar-lua",
  "balthasar-model",
@@ -180,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-store"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "balthasar-model",
  "rusqlite",
@@ -193,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "balthasar-testkit"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "balthasar-distil",
  "balthasar-lua",
@@ -269,8 +271,6 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 [[package]]
 name = "candle-core"
 version = "0.9.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c15b675b80d994b2eadb20a4bbe434eabeb454eac3ee5e2b4cf6f147ee9be091"
 dependencies = [
  "byteorder",
  "float8",
@@ -348,6 +348,12 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "cfg_aliases"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "ciborium"
@@ -1052,6 +1058,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -1858,13 +1876,14 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "7.2.0"
+version = "9.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c42e33efc22a0650c311c2ef19115ce232583abbe80850bc8b66509ebef02de0"
+checksum = "6e04976da629d3b04204ba8105b396a193af8ad2583b2c79bfb3ab8af580a11e"
 dependencies = [
  "crc32fast",
  "indexmap",
  "memchr",
+ "nix",
  "typed-path",
 ]
 

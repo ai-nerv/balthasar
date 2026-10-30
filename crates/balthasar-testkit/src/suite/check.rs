@@ -176,7 +176,7 @@ fn perform(
             )?;
         }
         Act::Consolidate { at } => {
-            consolidate(store, None, settings, scope, *at, false)?;
+            consolidate(store, None, None, settings, scope, *at, false)?;
         }
         Act::Decay { at } => {
             store.decay(*at)?;

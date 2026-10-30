@@ -14,12 +14,16 @@ members = [
   "crates/balthasar",
 ]
 resolver = "3"
+exclude = ["vendor/candle-core"]
+
+[patch.crates-io]
+candle-core = { path = "vendor/candle-core" }
 
 [workspace.package]
 edition = "2024"
 license = "MIT"
 publish = false
-version = "0.7.3"
+version = "0.8.0"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -215,18 +215,27 @@ impl Store {
     ///
     /// Bounded on the number of entities and on how many memories any one may pull in. Answers
     /// an empty map rather than an error when it runs out of budget.
+    ///
+    /// With `live`, only memories still in `live_memory` are counted or returned.
     pub fn by_entity(
         &self,
         scope: &str,
         query: &str,
         limit: usize,
+        live: bool,
     ) -> Result<Vec<(MemoryId, f64)>, StoreError> {
         let asked = extract(query);
         if asked.is_empty() {
             return Ok(Vec::new());
         }
+        let linked_to = if live {
+            "SELECT entity.memory FROM entity JOIN live_memory ON live_memory.id = entity.memory \
+             WHERE entity.scope = ?1 AND entity.name = ?2 ORDER BY entity.memory LIMIT ?3"
+        } else {
+            "SELECT memory FROM entity WHERE scope = ?1 AND name = ?2 ORDER BY memory LIMIT ?3"
+        };
 
-        let mut scored: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        let mut scored: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
         for entity in asked.iter().take(PER_QUERY) {
             let linked: u32 = self
                 .db()
@@ -241,9 +250,7 @@ impl Store {
             }
             let worth = rarity(linked) * entity.kind.confidence();
 
-            let mut statement = self
-                .db()
-                .prepare("SELECT memory FROM entity WHERE scope = ?1 AND name = ?2 LIMIT ?3")?;
+            let mut statement = self.db().prepare(linked_to)?;
             let hits = statement
                 .query_map(params![scope, entity.name, limit as i64], |r| {
                     r.get::<_, String>(0)
@@ -260,7 +267,7 @@ impl Store {
             // arithmetic alone. Every other signal lives in 0..1 and this one has to as well.
             .map(|(id, sum)| (MemoryId::new(id), sum / (sum + 1.0)))
             .collect();
-        out.sort_by(|a, b| b.1.total_cmp(&a.1));
+        out.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         out.truncate(limit);
         Ok(out)
     }

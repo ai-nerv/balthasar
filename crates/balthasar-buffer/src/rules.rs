@@ -9,6 +9,8 @@ pub struct Shares {
     pub memory: f64,
     pub pinned: f64,
     pub summary: f64,
+    /// The index of what is on record.
+    pub catalog: f64,
 }
 
 /// The rules one layout is made by.
@@ -52,6 +54,7 @@ impl Default for Rules {
                 memory: 0.05,
                 pinned: 0.03,
                 summary: 0.08,
+                catalog: 0.03,
             },
             prune_at: 0.70,
             compact_at: 0.85,
@@ -111,6 +114,7 @@ impl Rules {
                 memory: share(held.and_then(|s| s.get("memory")), base.shares.memory),
                 pinned: share(held.and_then(|s| s.get("pinned")), base.shares.pinned),
                 summary: share(held.and_then(|s| s.get("summary")), base.shares.summary),
+                catalog: share(held.and_then(|s| s.get("catalog")), base.shares.catalog),
             },
             prune_at: share(said.get("prune_at"), base.prune_at),
             compact_at: share(said.get("compact_at"), base.compact_at),
@@ -140,7 +144,9 @@ impl Rules {
                 .map_or(base.warning, str::to_owned),
         };
         // Shares that leave the conversation almost nothing are refused together.
-        if rules.shares.memory + rules.shares.pinned + rules.shares.summary > 0.9 {
+        let shared =
+            rules.shares.memory + rules.shares.pinned + rules.shares.summary + rules.shares.catalog;
+        if shared > 0.9 {
             rules.shares = base.shares;
         }
         if rules.compact_to >= rules.compact_at {

@@ -351,7 +351,7 @@ mod tests {
         __stream __stream.connect
         __balthasar_specs
         __balthasar_on __balthasar_on.scope __balthasar_on.admit __balthasar_on.promote
-        __balthasar_on.importance __balthasar_on.redact __balthasar_on.outcome
+        __balthasar_on.importance __balthasar_on.redact __balthasar_on.withhold __balthasar_on.outcome
         __balthasar_did __balthasar_did.observe __balthasar_did.promote __balthasar_did.contradict
         __balthasar_did.recall __balthasar_did.forget __balthasar_did.consolidate
         __balthasar_did.compact __balthasar_did.used
@@ -360,7 +360,7 @@ mod tests {
         balthasar.budget balthasar.mask balthasar.window balthasar.memory
         balthasar.stream balthasar.stream.connect
         balthasar.on balthasar.on.scope balthasar.on.admit balthasar.on.promote
-        balthasar.on.importance balthasar.on.redact balthasar.on.outcome
+        balthasar.on.importance balthasar.on.redact balthasar.on.withhold balthasar.on.outcome
         balthasar.did balthasar.did.observe balthasar.did.promote balthasar.did.contradict
         balthasar.did.recall balthasar.did.forget balthasar.did.consolidate balthasar.did.compact
         balthasar.did.used
@@ -376,7 +376,7 @@ mod tests {
         balthasar balthasar.source balthasar.extractor balthasar.section balthasar.tool
         balthasar.load balthasar.decay balthasar.witness balthasar.weights balthasar.window
         balthasar.on balthasar.on.scope balthasar.on.admit balthasar.on.promote
-        balthasar.on.importance balthasar.on.redact balthasar.on.outcome
+        balthasar.on.importance balthasar.on.redact balthasar.on.withhold balthasar.on.outcome
         balthasar.did balthasar.did.observe balthasar.did.promote balthasar.did.contradict
         balthasar.did.recall balthasar.did.forget balthasar.did.consolidate balthasar.did.compact
         balthasar.did.used

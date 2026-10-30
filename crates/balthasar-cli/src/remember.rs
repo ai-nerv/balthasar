@@ -113,6 +113,7 @@ pub fn run(
         scope.clone(),
         at,
     )
+    .through(balthasar_model::Channel::ManualWrite, None)
     .noted("typed at the command line");
 
     let landing = store.remember(memory, witness, at)?;

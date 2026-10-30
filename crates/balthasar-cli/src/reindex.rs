@@ -25,6 +25,10 @@ pub struct Args {
     #[arg(long)]
     dry_run: bool,
 
+    /// Rebuild the full-text indexes over memories and turns instead of embedding.
+    #[arg(long)]
+    text: bool,
+
     #[command(flatten)]
     how: crate::render::How,
 }
@@ -38,6 +42,17 @@ pub fn run(
     loaded: &crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
     let _ = now();
+    if args.text {
+        let memories = open(store_path, scope, tool)?.reindex_text()?;
+        let turns = crate::scrollback(store_path, scope, tool)?.reindex()?;
+        if args.how.framed() {
+            args.how
+                .one(serde_json::json!({ "memories": memories, "turns": turns }));
+        } else {
+            crate::say!("reindexed {memories} memories and {turns} turns");
+        }
+        return Ok(());
+    }
     let Some(embedder) = loaded.embedder() else {
         if args.how.framed() {
             args.how

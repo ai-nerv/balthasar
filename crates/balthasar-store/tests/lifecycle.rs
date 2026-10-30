@@ -1,13 +1,13 @@
 //! Tier-aware lifecycle, held to §9.8 of the future plan.
 //!
 //! The acceptance criteria are mostly negative: truth must not move because something helped,
-//! habit statistics must not move without attribution, and no lifecycle path may delete.
+//! the ledger counts what happened once, and no lifecycle path may delete.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
 use balthasar_model::{
-    Attribution, Body, Environment, Memory, NoteKind, OutcomeKind, Presentation, Record, ScopeId,
-    SessionId, Standing, Tier, Witness, WitnessId, WitnessKind,
+    Attribution, Body, Memory, NoteKind, OutcomeKind, Presentation, ScopeId, SessionId, Tier,
+    Witness, WitnessId, WitnessKind,
 };
 use balthasar_store::{Injection, Store, Use, Verdict, mint};
 
@@ -162,53 +162,6 @@ fn using_a_fact_badly_does_not_make_it_less_true() {
 }
 
 #[test]
-fn habit_statistics_move_only_on_attributable_outcomes() {
-    // §9.8's second criterion, as arithmetic. Proximal evidence is not attribution, and a
-    // procedure that gained authority from proximity would gain it from being popular.
-    let mut record = Record::default();
-    record.succeeded();
-    assert_eq!(record.standing(false, false), Standing::Advisory);
-
-    record.succeeded();
-    assert_eq!(record.standing(false, false), Standing::Established);
-
-    // A failure does not erase the history; it lowers the ratio and holds the standing back.
-    record.failed();
-    assert_eq!(record.tried, 3);
-    assert_eq!(record.worked, 2);
-    assert_eq!(record.standing(false, true), Standing::Advisory);
-}
-
-#[test]
-fn a_changed_environment_suspends_rather_than_archives() {
-    // §9.6: what was learned did not stop being true of the machine it was learned on.
-    let learned = Environment {
-        scope: Some("/w/thing".to_owned()),
-        os: Some("linux".to_owned()),
-        arch: Some("x86_64".to_owned()),
-        ..Environment::default()
-    };
-    let elsewhere = Environment {
-        scope: Some("/w/other".to_owned()),
-        os: Some("windows".to_owned()),
-        arch: Some("aarch64".to_owned()),
-        ..Environment::default()
-    };
-    let record = Record {
-        tried: 9,
-        worked: 9,
-    };
-
-    assert!(elsewhere.has_moved_from(&learned));
-    assert_eq!(record.standing(true, false), Standing::Suspended);
-    assert!(!Standing::Suspended.may_offer(), "not offered");
-    assert!(
-        record.success().expect("some") > 0.9,
-        "and its record is untouched"
-    );
-}
-
-#[test]
 fn no_lifecycle_path_removes_a_memory() {
     // §9.8's fourth criterion. Everything fades into the archive and stays readable.
     let mut store = Store::ephemeral().expect("store");
@@ -247,4 +200,87 @@ fn staleness_is_about_validity_not_about_being_ignored() {
         Some(NOW - DAY),
         NOW
     ));
+}
+
+#[test]
+fn the_ledger_counts_each_candidate_and_each_action_once() {
+    let mut store = Store::ephemeral().expect("store");
+    let id = kept(&mut store, Tier::Fact, "the deploy target is fly.io");
+    let run = balthasar_store::RecallRun {
+        id: "r1".to_owned(),
+        scope: scope(),
+        session: Some(SessionId::new("01RUN")),
+        query_hash: "q".to_owned(),
+        requested_at: NOW,
+        config_fingerprint: "c".to_owned(),
+        vector_available: false,
+        result_limit: 5,
+        latency_us: 1,
+    };
+    let candidate = balthasar_store::Candidate {
+        memory: id.clone(),
+        rank: 0,
+        selected: true,
+        score: 0.5,
+        signals: balthasar_store::Signals::default(),
+    };
+    store.note_recall(&run, &[candidate]).expect("recall");
+    for (injection, recall) in [("i1", Some("r1")), ("i2", Some("r1")), ("i3", None)] {
+        store
+            .note_injection(
+                &Injection {
+                    id: injection.to_owned(),
+                    recall: recall.map(str::to_owned),
+                    session: Some(SessionId::new("01RUN")),
+                    created_at: NOW,
+                    token_count: 10,
+                    remote: false,
+                    policy: "balanced".to_owned(),
+                },
+                &[(id.clone(), Presentation::Asserted)],
+            )
+            .expect("inject");
+    }
+    for (action, injection) in [("a1", "i1"), ("a3", "i3")] {
+        store
+            .note_use(&Use {
+                id: action.to_owned(),
+                injection: Some(injection.to_owned()),
+                session: Some(SessionId::new("01RUN")),
+                reported_at: NOW,
+                tool: Some("shell".to_owned()),
+                action_hash: "h".to_owned(),
+                attribution: Attribution::Explicit,
+                memories: vec![id.clone()],
+            })
+            .expect("use");
+    }
+    for (n, kind) in [(0, OutcomeKind::Failed), (1, OutcomeKind::Succeeded)] {
+        store
+            .note_outcome(&Verdict {
+                id: format!("a1-o{n}"),
+                action: "a1".to_owned(),
+                observed_at: NOW + n,
+                kind,
+                score: None,
+                evidence_cursor: None,
+                evaluator: "caller".to_owned(),
+                note: None,
+            })
+            .expect("outcome");
+    }
+
+    let rows = store.training_rows(100).expect("rows");
+    assert_eq!(rows.len(), 1, "one candidate, one row: {rows:#?}");
+    assert_eq!(
+        rows[0].outcome.as_deref(),
+        Some("succeeded"),
+        "its latest outcome"
+    );
+    let utility = store.utility_of(&id).expect("utility");
+    assert_eq!(
+        (utility.verified_helpful, utility.verified_harmful),
+        (1, 0),
+        "a1 once, by how it ended; a3 has no outcome"
+    );
 }

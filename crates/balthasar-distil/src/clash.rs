@@ -36,20 +36,26 @@ pub fn clashes(store: &Store, scope: &ScopeId, turns: &[Observation]) -> Vec<Can
         .iter()
         .filter(|t| t.role == Role::User && t.kind.can_instruct())
     {
-        for said in assertions(&turn.text) {
-            let Ok(Some((_, held))) = store.what_this_revises(scope, &said) else {
+        let Some(spoken) = crate::extract::spoken(&turn.text) else {
+            continue;
+        };
+        for said in assertions(&spoken) {
+            let Ok(Some((id, held))) = store.what_this_revises(scope, &said) else {
                 continue;
             };
-            // What it contradicts goes into the witness note, so `balthasar why` can print it.
-            out.push(
-                Candidate::new(
-                    Body::note(&said, NoteKind::Claim),
-                    Tier::Fact,
-                    WitnessKind::Correction,
-                    format!("clash with \"{}\"", balthasar_model::normalised(&held)),
-                )
-                .at(turn.cursor),
-            );
+            let candidate = Candidate::new(
+                Body::note(&said, NoteKind::Claim),
+                Tier::Fact,
+                WitnessKind::Correction,
+                format!("clash with \"{}\"", balthasar_model::normalised(&held)),
+            )
+            .at(turn.cursor);
+            // A sentence that says it changed replaces; one that only disagrees is asked about.
+            out.push(if balthasar_model::announces_change(&said) {
+                candidate
+            } else {
+                candidate.disputing(id)
+            });
             // One per turn: a person restating a decision several ways has corrected one thing.
             break;
         }

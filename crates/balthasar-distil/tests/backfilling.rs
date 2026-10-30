@@ -175,6 +175,7 @@ fn a_session_is_read_and_what_it_taught_is_kept() {
             tiers: vec![Tier::Habit],
             floor: 0.0,
             include_archived: false,
+            history: false,
             remote: false,
             relevance: 0.0,
             now: AUGUST,

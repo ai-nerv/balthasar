@@ -267,10 +267,69 @@ make.recipe{
 make.alias("r", "run")
 
 make.recipe{ name = "test", desc = "the suite",
+             deps = { "test-dense" },
              run = function() sh.cargo("test", "--workspace", "--all-targets") end }
+
+make.recipe{ name = "test-events", desc = "content-free memory events and bounded local queue contracts",
+             run = function()
+               sh.cargo("test", "--locked", "--offline", "--release", "-p", "balthasar-ipc", "--lib")
+               sh.cargo("test", "--locked", "--offline", "--release", "-p", "balthasar-host", "--lib", "events::")
+               sh.cargo("test", "--locked", "--offline", "--release", "-p", "balthasar-host", "--test", "event_jobs")
+               sh.cargo("test", "--locked", "--offline", "--release", "-p", "balthasar-host", "--test", "event_layout")
+             end }
+
+make.recipe{ name = "update-zip", desc = "resolve the vendored Candle ZIP dependency",
+             run = function() sh.cargo("update", "-p", "zip", "--precise", "9.0.5") end }
+
+make.recipe{ name = "test-dense", desc = "offline dense model and archive compatibility",
+             run = function()
+               sh.cargo("test", "--locked", "-p", "balthasar-embed", "--features", "dense",
+                        "--test", "dense_fixture", "--test", "archive")
+             end }
+
+make.recipe{ name = "test-vendor-source", desc = "Nix source retains the patched dependency",
+             run = function()
+               assert(oslo.run{ "sh", "scripts/test-vendor-source.sh" }.ok, "vendor source check failed")
+             end }
+
+make.recipe{ name = "test-git", desc = "what commits in a repository built here close and record",
+             run = function() sh.cargo("test", "-p", "balthasar-distil", "--test", "committing") end }
+
+make.recipe{ name = "test-faults",
+             desc = "damaged stores and hostile conditions, BALTHASAR_FAULT_REPS times each",
+             run = function() sh.cargo("test", "-p", "balthasar-host", "--test", "faults") end }
+
+make.recipe{ name = "test-held-out",
+             desc = "F2 and F6 as a person wrote them after the freeze; see held-out/README.md",
+             run = function()
+               sh.cargo("test", "-p", "balthasar-distil", "--test", "held_out", "--", "--ignored",
+                        "--nocapture")
+             end }
+
+make.recipe{ name = "perf",
+             desc = "layout and recall p95 at 20,000 live memories; BALTHASAR_PERF_SCALE scales the budgets",
+             run = function()
+               sh.cargo("test", "--release", "-p", "balthasar-host", "--test", "perf", "--",
+                        "--ignored", "--nocapture")
+             end }
 
 make.recipe{ name = "test-run-binding", desc = "transcript and scratch run identities",
              run = function() sh.cargo("test", "-p", "balthasar-host", "--test", "run_binding") end }
+
+make.recipe{ name = "test-writer-reservation", desc = "store-scoped transcript writer reservations",
+             run = function()
+               sh.cargo("test", "--locked", "--offline", "-p", "balthasar-store", "--lib")
+               sh.cargo("test", "--locked", "--offline", "-p", "balthasar-ipc", "--lib")
+               sh.cargo("test", "--locked", "--offline", "-p", "balthasar-host")
+               sh.cargo("test", "--locked", "--offline", "-p", "balthasar", "--test", "writer_protocol")
+             end }
+
+make.recipe{ name = "test-writer-maintenance", desc = "bounded maintenance admission and atomic retention/purge",
+             run = function()
+               sh.cargo("test", "--locked", "--offline", "-p", "balthasar-store", "--lib", "writer::")
+               sh.cargo("test", "--locked", "--offline", "-p", "balthasar-store", "--test", "retention", "--test", "purging",
+                 "--test", "purge_every_table", "--test", "layout_effects", "--test", "extraction")
+             end }
 
 make.recipe{ name = "test-note-provenance", desc = "typed sources for automatic notes",
              run = function()
@@ -301,6 +360,9 @@ make.recipe{ name = "test-budget", desc = "the budget contract and what is plann
                sh.cargo("test", "-p", "balthasar-buffer", "--test", "rules", "mem_dispatch")
                sh.cargo("test", "-p", "balthasar-buffer", "--lib", "policy::")
              end }
+
+make.recipe{ name = "test-usage-feedback", desc = "canonical prompt occupancy and calibration",
+             run = function() sh.cargo("test", "-p", "balthasar-host", "--test", "laying", "canonical_prompt_occupancy") end }
 
 make.recipe{ name = "test-working", desc = "prepared working state, activation and projection",
              run = function()
@@ -379,6 +441,7 @@ local GATES = {
   { "gate-no-exec",      "balthasar describes procedures and never runs them" },
   { "gate-wire",         "one way of saying a thing crosses a boundary" },
   { "gate-sandbox",      "one Lua VM, and it is sandboxed" },
+  { "gate-served",       "nothing closed or forgotten is offered as memory" },
 }
 
 for _, gate in ipairs(GATES) do
@@ -406,6 +469,7 @@ make.recipe{
     "gate-no-exec",
     "gate-wire",
     "gate-sandbox",
+    "gate-served",
   },
 }
 
@@ -478,7 +542,7 @@ make.recipe{ name = "audit", desc = "known advisories against the lockfile, offl
              run = cargo_tool("audit", { "--no-fetch" }, "cargo audit failed") }
 
 make.recipe{ name = "deny", desc = "the dependency policy in deny.toml",
-             run = cargo_tool("deny", { "check" }, "cargo deny failed") }
+             run = cargo_tool("deny", { "--offline", "check", "--disable-fetch" }, "cargo deny failed") }
 
 make.recipe{
   name = "verify",

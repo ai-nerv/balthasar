@@ -3,6 +3,8 @@
 
 use std::io::{ErrorKind, Read};
 
+mod context;
+
 /// How long the key is: 32 random bytes, as lowercase hex.
 const LENGTH: usize = 64;
 
@@ -85,13 +87,24 @@ impl Key {
 pub struct Guard {
     key: Key,
     guarded: fn(&str) -> bool,
+    pub(crate) request_context: Option<u8>,
 }
 
 impl Guard {
     /// `key`, asked of every call whose verb `guarded` names.
     #[must_use]
     pub fn new(key: Key, guarded: fn(&str) -> bool) -> Self {
-        Self { key, guarded }
+        Self {
+            key,
+            guarded,
+            request_context: None,
+        }
+    }
+
+    /// Advertise the optional request-context revision on socket verbs replies.
+    pub fn with_request_context(mut self, revision: Option<u8>) -> Self {
+        self.request_context = revision;
+        self
     }
 }
 
@@ -102,7 +115,7 @@ pub(crate) fn admitted(
     guard: &Guard,
     wire: crate::Wire,
     body: &[u8],
-) -> Result<crate::Request, crate::Reply> {
+) -> Result<(crate::Request, Option<serde_json::Value>), crate::Reply> {
     let not_a_request = |why: &dyn std::fmt::Display| {
         crate::Reply::refused(format!("that is not a request: {why}"))
     };
@@ -119,16 +132,21 @@ pub(crate) fn admitted(
         )));
     }
     let presented = fields.remove("key");
+    let context = fields.remove("event_context");
     let request: crate::Request =
         serde_json::from_value(call).map_err(|why| not_a_request(&why))?;
-    if (guard.guarded)(&request.call)
-        && !guard
-            .key
-            .admits(presented.as_ref().and_then(serde_json::Value::as_str))
-    {
+    let authenticated = guard
+        .key
+        .admits(presented.as_ref().and_then(serde_json::Value::as_str));
+    if (guard.guarded)(&request.call) && !authenticated {
         return Err(crate::Reply::refused(REFUSED));
     }
-    Ok(request)
+    Ok((
+        request,
+        context.filter(|value| {
+            authenticated && guard.request_context == Some(1) && context::bounded(value)
+        }),
+    ))
 }
 
 /// A key and its hex, for tests that serve and call.

@@ -1,0 +1,3 @@
+98b5fd0
+The rules F2 and F6 measure were frozen at this commit. The wording in polarity.tsv and
+decision.tsv is written by a person after it, and no rule is changed to pass it.

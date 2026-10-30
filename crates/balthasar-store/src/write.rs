@@ -59,6 +59,13 @@ impl Store {
                 self.attach(&existing, witness, now)?;
                 return Ok(Landing::Reinforced(existing));
             }
+            // Evidence too weak to cross on its own disputes a claim rather than closing it. A
+            // single-valued slot holds one answer, so there the newer one still stands in.
+            let (_, predicate, _) = row::slot(&memory.body);
+            let slot = predicate.is_some_and(|p| balthasar_model::is_single_valued(&p));
+            if !slot && witness.weight < balthasar_model::floor::PROMOTE {
+                return self.dispute(&existing, memory, witness, now);
+            }
             let landed = self.supersede(&existing, memory, witness, now)?;
             return Ok(landed);
         }
@@ -76,7 +83,7 @@ impl Store {
     }
 
     /// Write a memory and its first witness.
-    fn insert(
+    pub(crate) fn insert(
         &mut self,
         mut memory: Memory,
         witness: &Witness,
@@ -114,9 +121,10 @@ impl Store {
              (id, tier, scope, session, subject, predicate, object, body, text, content_hash, \
               observed_at, happened_at, valid_from, valid_to, \
               importance, strength, last_accessed, access_count, pinned, \
-              confidence, privacy, through, who, archived_at, single_valued, lead) \
+              confidence, privacy, through, who, archived_at, single_valued, lead, \
+              confirmed_at, strength_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
-                     ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+                     ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
             params![
                 memory.id.as_str(),
                 row::tier_str(memory.tier),
@@ -144,6 +152,8 @@ impl Store {
                 memory.archived_at,
                 i64::from(single),
                 lead,
+                memory.temporal.confirmed_at,
+                memory.strength.as_of,
             ],
         )?;
         tx.execute(
@@ -172,9 +182,23 @@ impl Store {
         witness: Witness,
         now: Timestamp,
     ) -> Result<f64, StoreError> {
+        let another_run: bool = self.db().query_row(
+            "SELECT NOT EXISTS (SELECT 1 FROM witness WHERE memory = ?1 AND session = ?2)",
+            params![id.as_str(), witness.session.as_str()],
+            |r| r.get(0),
+        )?;
         {
             let tx = self.db_mut().savepoint()?;
             write_witness(&tx, id, &witness)?;
+            // Said again by another run: confirmed now, and back to full strength.
+            if another_run {
+                tx.execute(
+                    "UPDATE memory SET confirmed_at = max(coalesce(confirmed_at, observed_at), ?2), \
+                     strength = 1.0, strength_at = NULL, \
+                     last_accessed = max(last_accessed, ?2) WHERE id = ?1",
+                    params![id.as_str(), witness.at],
+                )?;
+            }
             tx.commit()?;
         }
         self.rescore(id, now)
@@ -183,8 +207,15 @@ impl Store {
     /// Recompute a memory's confidence from what the store currently holds about it.
     ///
     /// Called after every change to the evidence, because a record whose number and whose
-    /// argument disagree is the one state `balthasar why` must never be able to show.
+    /// argument disagree is the one state `balthasar why` must never be able to show. What
+    /// disputes it is scored again too, since each counts against the other.
     pub fn rescore(&mut self, id: &MemoryId, now: Timestamp) -> Result<f64, StoreError> {
+        let score = self.rescore_one(id, now)?;
+        self.settle_disputes(id, now)?.map_or(Ok(score), Ok)
+    }
+
+    /// [`Store::rescore`] for one memory alone.
+    pub(crate) fn rescore_one(&mut self, id: &MemoryId, now: Timestamp) -> Result<f64, StoreError> {
         let witnesses = self.witnesses_of(id)?;
         let against = self.contradictions_of(id)?;
         let (superseded, pinned): (bool, bool) = self.db().query_row(
@@ -200,14 +231,11 @@ impl Store {
         Ok(score)
     }
 
-    /// Close one answer's interval and stand another in its place.
-    ///
-    /// The new memory inherits the old one's confidence as a floor. Being a correction of
-    /// something established is itself evidence about the correction, and starting a
-    /// replacement from zero is why systems oscillate between a stale fact and its fix.
+    /// Close one answer's interval and stand another in its place. The replacement's confidence
+    /// is what its own witnesses argue.
     ///
     /// All of it is one transaction: a failure part-way leaves the old answer standing.
-    fn supersede(
+    pub(crate) fn supersede(
         &mut self,
         old: &MemoryId,
         new: Memory,
@@ -240,11 +268,6 @@ impl Store {
         witness: Witness,
         now: Timestamp,
     ) -> Result<Landing, StoreError> {
-        let was: f64 = self.db().query_row(
-            "SELECT confidence FROM memory WHERE id = ?1",
-            params![old.as_str()],
-            |r| r.get(0),
-        )?;
         // The interval closes first: the partial unique index will refuse the replacement
         // while the old answer is still live, which is exactly the protection it exists for.
         self.db().execute(
@@ -260,13 +283,7 @@ impl Store {
             tx.commit()?;
         }
 
-        let earned = self.rescore(&new_id, now)?;
-        if was > earned {
-            self.db().execute(
-                "UPDATE memory SET confidence = ?2 WHERE id = ?1",
-                params![new_id.as_str(), was],
-            )?;
-        }
+        self.rescore(&new_id, now)?;
         self.rescore(old, now)?;
 
         Ok(Landing::Superseded {
@@ -288,7 +305,7 @@ impl Store {
     /// Note that a memory was recalled: reinforce it, so what is needed stops fading.
     pub fn touch(&mut self, id: &MemoryId, now: Timestamp) -> Result<(), StoreError> {
         self.db().execute(
-            "UPDATE memory SET strength = 1.0, last_accessed = ?2, \
+            "UPDATE memory SET strength = 1.0, strength_at = NULL, last_accessed = ?2, \
              access_count = access_count + 1 WHERE id = ?1",
             params![id.as_str(), now],
         )?;
@@ -390,6 +407,11 @@ impl Store {
         self.db().execute(
             "UPDATE memory SET valid_to = ?2 WHERE id = ?1 AND valid_to IS NULL",
             params![drop.as_str(), now],
+        )?;
+        // What a person keeps stands again, if something closed it.
+        self.db().execute(
+            "UPDATE memory SET valid_to = NULL WHERE id = ?1",
+            params![keep.as_str()],
         )?;
         self.link(keep, drop, balthasar_model::LinkRelation::Supersedes, now)?;
         self.rescore(drop, now)?;

@@ -1,6 +1,7 @@
 //! `layout`, `applied` and `overflowed`: what one request holds, what the harness confirmed it
 //! sent, and a tighter answer when the provider refused one as too long.
 
+use crate::events::{self, LayoutOutcome};
 use crate::supply::{self, Supplied};
 use crate::window::stub_for;
 use crate::{Answering, Hooks};
@@ -24,6 +25,19 @@ const REPLY: u32 = 8_192;
 
 /// `layout(session, request)`: what the next request should hold.
 pub fn layout(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
+    decision(decide(at, request, hooks))
+}
+
+fn decision(reply: Reply) -> Reply {
+    events::layout(if reply.ok {
+        LayoutOutcome::Decided
+    } else {
+        LayoutOutcome::Failed
+    });
+    reply
+}
+
+fn decide(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
     let Some(session) = session_of(request) else {
         return Reply::refused("layout needs a session");
     };
@@ -37,10 +51,12 @@ pub fn layout(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) 
 /// `applied(session, {id, usage})`: the provider accepted what layout `id` described.
 pub fn applied(at: &mut Answering<'_>, request: &Request) -> Reply {
     let Some(session) = session_of(request) else {
+        events::layout(LayoutOutcome::ApplicationFailed);
         return Reply::refused("applied needs a session");
     };
     let said = request.args.get(1);
     let Some(id) = said.and_then(|s| s.as_str().or_else(|| s.get("id")?.as_str())) else {
+        events::layout(LayoutOutcome::ApplicationFailed);
         return Reply::refused("applied needs the layout's id");
     };
     match crate::applying::confirm(at, &session, id, said.and_then(|s| s.get("usage"))) {
@@ -60,6 +76,10 @@ pub fn applied(at: &mut Answering<'_>, request: &Request) -> Reply {
 
 /// `overflowed(session, {id, said})`: the provider refused layout `id` as too long.
 pub fn overflowed(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
+    decision(reconsider(at, request, hooks))
+}
+
+fn reconsider(at: &mut Answering<'_>, request: &Request, hooks: &mut dyn Hooks) -> Reply {
     let Some(session) = session_of(request) else {
         return Reply::refused("overflowed needs a session");
     };
@@ -107,6 +127,9 @@ fn lay_out(
         tight: prompt.overflows,
     };
     let counting = balthasar_buffer::Counting::read(asked["counting"].as_str());
+    if let Err(why) = balthasar_buffer::Room::of(rules.policy, Some(ask.window), ask.reply) {
+        return Err(format!("no request fits this window: {why:?}"));
+    }
     let caps = balthasar_buffer::budget(&rules, &ask, factor);
     let project_notes = crate::notes::projection::project(
         at,
@@ -120,7 +143,15 @@ fn lay_out(
     // since hit an error or been spoken to, which can make something relevant that was not.
     let through = turns.last().map_or(0, |turn| turn.cursor);
     let moved = supply::moved(&turns, prompt.memory.as_ref());
-    let memory = if let Some(kept) = Supplied::kept(prompt.memory.as_ref(), &query, moved) {
+    let carried = prompt
+        .memory
+        .as_ref()
+        .filter(|_| supply::acknowledges(&query))
+        .and_then(|held| held.get("query"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let wanted = carried.as_deref().unwrap_or(&query);
+    let memory = if let Some(kept) = Supplied::kept(prompt.memory.as_ref(), wanted, moved) {
         kept
     } else {
         let found = supply::candidates(at, &query, CANDIDATES);
@@ -130,6 +161,13 @@ fn lay_out(
         prompt.memory = Some(packed.as_json(&query, through));
         packed
     };
+
+    let catalog = crate::catalog::catalog(
+        at,
+        (f64::from(caps.catalog) / factor) as u32,
+        rules.estimate_chars_per_token,
+    )
+    .unwrap_or_default();
 
     let known = at
         .scrollback
@@ -146,6 +184,7 @@ fn lay_out(
             tokens: rules.estimate(&s.text),
         }),
         pinned: project_notes.tokens(),
+        catalog: catalog.tokens,
         memory: if memory.ids.is_empty() {
             0
         } else {
@@ -253,6 +292,8 @@ fn lay_out(
                 Slot::Stub(cursor) => json!({ "kind": "stub", "cursor": cursor,
                                           "text": stubs.get(cursor).cloned().unwrap_or_default() }),
                 Slot::Note => json!({ "kind": "note", "text": note }),
+                Slot::Catalog => json!({ "kind": "catalog", "text": catalog.text,
+                    "tokens": fix(catalog.tokens), "ids": catalog.ids }),
                 Slot::Memory => json!({ "kind": "memory", "text": memory.text,
                                     "tokens": fix(memory.tokens), "ids": memory.ids }),
             }]
@@ -261,9 +302,10 @@ fn lay_out(
     let b = laid.budget;
     let body = json!({
         "budget": {
-            "window": b.window, "fixed": b.fixed, "reply": b.reply, "room": b.room,
+            "window": b.window, "limit": b.limit, "fixed": b.fixed, "reply": b.reply, "room": b.room,
             "conversation": b.conversation, "memory": b.memory, "pinned": b.pinned,
-            "summary": b.summary, "used": b.used, "estimated_input": b.estimated_input,
+            "summary": b.summary, "catalog": b.catalog, "used": b.used,
+            "estimated_input": b.estimated_input,
             "factor": (b.factor * 1000.0).round() / 1000.0,
             // What the sizes above are worth: the weaker of what the caller can count and what
             // this layer can, so neither side reads an estimate as a certified ceiling.
@@ -337,19 +379,22 @@ fn gather(
     let summary =
         crate::preparing::projection(scrollback, session, scrollback.summary(session).map_err(e)?)
             .map_err(e)?;
-    let mark = turns
+    let asked_at = turns
         .iter()
         .rev()
         .find(|t| t.role == "user")
-        .map_or_else(|| format!("q:{query}"), |t| t.cursor.to_string());
-    let mut prompt = scrollback
-        .prompt(session)
-        .map_err(e)?
-        .filter(|p| p.mark == mark)
-        .unwrap_or(Prompt {
+        .map(|t| t.cursor);
+    let mark = asked_at.map_or_else(|| format!("q:{query}"), |cursor| cursor.to_string());
+    let mut prompt = match scrollback.prompt(session).map_err(e)? {
+        Some(held) if held.mark == mark => held,
+        before => Prompt {
             mark,
+            memory: asked_at.and_then(|at| {
+                crate::supply::carried(query, before.and_then(|p| p.memory), &turns, at)
+            }),
             ..Prompt::default()
-        });
+        },
+    };
     if let Some(helpers) = asked["helpers"].as_array() {
         prompt.helpers = helpers
             .iter()
@@ -410,7 +455,7 @@ fn by_policy(
     factor: f64,
 ) {
     let b = laid.budget;
-    let budget = json!({ "window": b.window, "fixed": b.fixed, "reply": b.reply, "room": b.room,
+    let budget = json!({ "window": b.window, "limit": b.limit, "fixed": b.fixed, "reply": b.reply, "room": b.room,
         "conversation": b.conversation, "memory": b.memory, "pinned": b.pinned,
         "summary": b.summary, "factor": b.factor });
     let shown: Vec<&Row> = rows
@@ -502,6 +547,7 @@ fn policy_slots(
                 out.push(Slot::Stub(cursor));
             }
             ("pinned", _) if held.pinned > 0 => out.push(Slot::Pinned),
+            ("catalog", _) if held.catalog > 0 => out.push(Slot::Catalog),
             ("summary", _) if held.summary.is_some() => out.push(Slot::Summary),
             ("memory", _) if held.memory > 0 => out.push(Slot::Memory),
             ("note", _) => {
@@ -563,6 +609,7 @@ fn refused_of(body: &Value, rules: &Rules) -> Refused {
             }
             ("note", _) => Slot::Note,
             ("memory", _) => Slot::Memory,
+            ("catalog", _) => Slot::Catalog,
             ("rules" | "observations", _) if !refused.slots.contains(&Slot::Pinned) => Slot::Pinned,
             _ => continue,
         };
@@ -608,7 +655,10 @@ fn tighten(
         .filter(|f| *f > old)
         .unwrap_or(old * 1.25);
     scrollback
-        .set_factor(&proposal.model, next.clamp(0.5, 8.0))
+        .set_factor(
+            &proposal.model,
+            next.clamp(crate::sizing::FACTOR.0, crate::sizing::FACTOR.1),
+        )
         .map_err(e)?;
     // Believed from here on, for this session: laying out again for a window the provider has
     // just said it does not have is the same refusal again.

@@ -8,20 +8,21 @@
 
 mod body;
 mod cardinality;
+mod change;
 mod channel;
 mod claim;
 mod confidence;
+mod eligible;
 pub mod floor;
 mod guard;
-mod habit;
 mod id;
 mod lifecycle;
 mod memory;
 pub mod noted;
+pub mod offered;
 mod relation;
 pub mod runtime;
 pub mod scratch;
-mod skill;
 mod strength;
 mod temporal;
 mod tier;
@@ -30,16 +31,18 @@ mod witness;
 
 pub use body::{Body, NoteKind, Outcome, Span};
 pub use cardinality::is_single_valued;
+pub use change::announces_change;
 pub use channel::{Channel, Domain};
-pub use claim::{claim_overlap, lead, same_claim, same_claim_different_value};
+pub use claim::{
+    claim_overlap, content_words, lead, negative, same_claim, same_claim_different_value,
+};
 pub use confidence::{Contradiction, of as confidence_of};
+pub use eligible::{Quoting, asks_for_generation, eligible_lines, pasted_conversation};
 pub use guard::{looks_like_injection, presentation_for, witness_for};
-pub use habit::{Avoidance, Environment, Polarity, Record, Standing};
 pub use id::{AgentId, MemoryId, ScopeId, SessionId, WitnessId};
 pub use lifecycle::{episode_holds, is_stale, tempo};
 pub use memory::{Link, LinkRelation, Memory, Provenance, Through};
 pub use relation::{Derivation, Family, Relation, View};
-pub use skill::{Skill, Step as SkillStep, Verification};
 pub use strength::{Importance, Strength};
 pub use temporal::{Temporal, Timestamp};
 pub use tier::{Privacy, Tier};
