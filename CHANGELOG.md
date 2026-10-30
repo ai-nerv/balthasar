@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.8.0] - 2026-10-30
+
+### <!-- 0 -->⛰️  Features
+
+- Keep the memory slot on an ok
+- Measure stale serving and controls
+- Climb the ladder on its own
+- Read commits as evidence
+- Capture choices, quantities, bare values
+- Flag summary claims no run backs
+- A health line and a fault suite
+- A catalog of what is on record
+- Name each memory line's handle and origin
+- Name the channel evidence arrived on
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Close what an undone rule taught
+- Settle a dispute when a score moves
+- Let a failed step replace its habit
+- Close erasure and ordering gaps
+- Extraction, config order and replay hold
+- Count confirmation and delivery as use
+- Weak or unmarked clashes only dispute
+- Keep never, always and don't in claims
+- Keep closed memories out of prompts
+- Revise a claim only for a new value
+
+### <!-- 2 -->🚜 Refactor
+
+- Remove code nothing calls
+
+### <!-- 3 -->📚 Documentation
+
+- Drop a link to a private constant
+- Match extraction, gates and counts
+
+### <!-- 5 -->🎨 Styling
+
+- Format the held-out runner
+
+### <!-- 6 -->🧪 Testing
+
+- Pass the waived held-out set
+- Run held-out F2 and F6 once written
+- Measure frecency, catalog and commits
+- Trust names each new memory's channel
+- Pin the robustness fixes
+
+### <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Take the later develop work
+- Carry later develop work
+- Run the fault suite fifty times
+- Carry uncommitted develop work
+
 ## [0.7.3] - 2026-10-16
 
 ### Build
