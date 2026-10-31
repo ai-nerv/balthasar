@@ -35,6 +35,10 @@ impl Repo {
                 "user.email=t@t",
                 "-c",
                 "commit.gpgsign=false",
+                "-c",
+                "maintenance.auto=false",
+                "-c",
+                "gc.auto=0",
             ])
             .args(args)
             .current_dir(&*self.dir)
