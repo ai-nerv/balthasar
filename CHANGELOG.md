@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.1] - 2026-11-22
+
+### <!-- 6 -->🧪 Testing
+
+- Stop git maintaining the fixture
+
+### <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Publish to cache.bresilla.com
+
 ## [0.8.0] - 2026-10-30
 
 ### <!-- 0 -->⛰️  Features
