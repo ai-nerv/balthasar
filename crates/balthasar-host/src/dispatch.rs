@@ -201,7 +201,7 @@ fn answering(
         ),
         // Shipped in the binary and identical for every session, so it answers like `verbs`.
         "client" => Reply::one(serde_json::json!(balthasar_lua::CLIENT)),
-        "status" => status(at),
+        "status" => status(at, hooks),
         "recall" => crate::recalling::recall(at, door, request, hooks),
         "why" => why(at, request),
         "sessions" => sessions(at, request),
@@ -224,22 +224,21 @@ fn answering(
         "undo" => crate::notes::undo(at, request),
         "approve" => crate::notes::decided(at, request, true),
         "reject" => crate::notes::decided(at, request, false),
-        "used" => crate::outcome::used(at, door, request),
-        "outcome" => crate::outcome::outcome(at, door, request),
+        "used" => crate::outcome::used(at, door, request, hooks),
+        "outcome" => crate::outcome::outcome(at, door, request, hooks),
         "trace" => crate::outcome::trace(at, request),
         "utility" => crate::outcome::utility(at, request),
         "remember" => remember(at, door, request),
         "forget" => forget(at, door, request),
         "disagreements" => crate::settling::disagreements(at),
         "settle" => crate::settling::settle(at, door, request),
-        // `context` needs the configuration's sections, which the caller assembles and hands in.
-        "context" => Reply::refused("context is served by the host that holds the configuration"),
+        "context" => crate::recalling::context(at, door, request, hooks),
         other => Reply::refused(format!("'{other}' is named but not wired")),
     }
 }
 
 /// What this memory holds.
-fn status(at: &mut Answering<'_>) -> Reply {
+fn status(at: &mut Answering<'_>, hooks: &dyn crate::Hooks) -> Reply {
     let census = match at.store.census() {
         Ok(census) => census,
         Err(why) => return Reply::refused(why.to_string()),
@@ -253,7 +252,7 @@ fn status(at: &mut Answering<'_>) -> Reply {
                                      "detail": c.detail, "fix": c.fix })
         })
         .collect();
-    Reply::one(serde_json::json!({
+    let mut body = serde_json::json!({
         "scope": scope,
         "health": health,
         "summary": balthasar_store::health_summary(&checks),
@@ -262,9 +261,16 @@ fn status(at: &mut Answering<'_>) -> Reply {
             .map(|(tier, count)| (tier, serde_json::json!(count)))
             .collect::<serde_json::Map<String, serde_json::Value>>(),
         "inject_floor": at.inject_floor,
-        // Waiting on a person, so it is said where a person looks rather than only in its own view.
         "disagreements": at.store.disagreements(&scope).map(|open| open.len()).unwrap_or(0),
-    }))
+    });
+    if let (Some(backends), Some(fields)) = (hooks.backends(), body.as_object_mut())
+        && let Some(extra) = backends.as_object()
+    {
+        for (key, value) in extra {
+            fields.insert(key.clone(), value.clone());
+        }
+    }
+    Reply::one(body)
 }
 
 /// The evidence for one memory.
@@ -424,12 +430,28 @@ fn remember(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         .and_then(|o| o.get("session"))
         .and_then(serde_json::Value::as_str)
         .map(SessionId::new);
+    let from_session = opts
+        .and_then(|o| o.get("from_session"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(SessionId::new);
 
     // Which file this lands in. A session's own memory goes in that run's store.
     let landing_in = session.clone();
 
+    let verified_cursor = match (&door, &landing_in, &from_session, at.scrollback.as_ref()) {
+        (Door::Socket(_), None, Some(source_session), Some(scrollback)) => {
+            crate::verbatim::find_in_user_turns(scrollback, source_session, text)
+        }
+        _ => None,
+    };
+
     // The ceiling, applied here rather than trusted to the caller.
-    let kind = door.witness_for(WitnessKind::Imperative);
+    let kind = if verified_cursor.is_some() {
+        WitnessKind::Choice
+    } else {
+        door.witness_for(WitnessKind::Imperative)
+    };
     let pinned = door.may_pin()
         && opts
             .and_then(|o| o.get("pin"))
@@ -448,29 +470,48 @@ fn remember(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
         Body::note(text, NoteKind::Claim),
         at.now,
     );
-    memory.session.clone_from(&session);
+    memory.session = session.clone().or_else(|| {
+        verified_cursor
+            .is_some()
+            .then(|| from_session.clone())
+            .flatten()
+    });
     memory.strength.pinned = pinned;
     if let Some(who) = door.who() {
         memory.provenance = balthasar_model::Provenance::peer(who);
     }
 
-    let witness = Witness::new(
+    let witness_session = if verified_cursor.is_some() {
+        from_session
+            .clone()
+            .unwrap_or_else(|| SessionId::new("peer"))
+    } else {
+        session.unwrap_or_else(|| SessionId::new("peer"))
+    };
+    let mut witness = Witness::new(
         WitnessId::new(format!("peer-{}-{}", at.now, &memory.content_hash[..8])),
         kind,
-        session.unwrap_or_else(|| SessionId::new("peer")),
+        witness_session,
         scope,
         at.now,
     );
-    let witness = match door.who() {
-        Some(who) => witness
-            .through(
-                balthasar_model::Channel::PeerAssertion,
-                Some(balthasar_model::Domain::new(format!("peer:{who}"))),
-            )
-            .noted(who),
-        None => witness
-            .through(balthasar_model::Channel::ManualWrite, None)
-            .noted("typed at the command line"),
+    witness.cursor = verified_cursor;
+    let witness = if verified_cursor.is_some() {
+        witness
+            .through(balthasar_model::Channel::UserInstruction, None)
+            .noted("verbatim in user turn")
+    } else {
+        match door.who() {
+            Some(who) => witness
+                .through(
+                    balthasar_model::Channel::PeerAssertion,
+                    Some(balthasar_model::Domain::new(format!("peer:{who}"))),
+                )
+                .noted(who),
+            None => witness
+                .through(balthasar_model::Channel::ManualWrite, None)
+                .noted("typed at the command line"),
+        }
     };
 
     let now = at.now;
@@ -484,7 +525,7 @@ fn remember(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
     match landed {
         Ok(landing) => {
             let id = landing.id().clone();
-            Reply::one(serde_json::json!({
+            let mut body = serde_json::json!({
                 "landing": match landing {
                     balthasar_store::Landing::Added(_) => "added",
                     balthasar_store::Landing::Reinforced(_) => "reinforced",
@@ -492,7 +533,19 @@ fn remember(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
                 },
                 "id": id.to_string(),
                 "witness": kind.as_str(),
-            }))
+            });
+            if from_session.is_some()
+                && let Some(map) = body.as_object_mut()
+            {
+                map.insert(
+                    "verified".to_owned(),
+                    serde_json::json!(verified_cursor.is_some()),
+                );
+                if let Some(cursor) = verified_cursor {
+                    map.insert("cursor".to_owned(), serde_json::json!(cursor));
+                }
+            }
+            Reply::one(body)
         }
         Err(why) => Reply::refused(why.to_string()),
     }

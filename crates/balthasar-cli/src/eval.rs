@@ -325,7 +325,7 @@ fn say_full(held: &balthasar_testkit::Full) {
 
 /// What each external benchmark had to say, and what it could not say.
 fn say_external(at: &std::path::Path) {
-    use balthasar_testkit::Family;
+    use balthasar_testkit::{Family, Found};
 
     crate::say!("{}", render::bold("external benchmarks"));
     for family in [
@@ -334,7 +334,23 @@ fn say_external(at: &std::path::Path) {
         Family::MemoryAgentBench,
     ] {
         let found = balthasar_testkit::load(family, at);
-        crate::say!("  {}", render::dim(&found.describe()));
+        match found {
+            Found::Read(dataset) if !dataset.cases.is_empty() => {
+                let report = balthasar_testkit::run_cases(&dataset.cases);
+                let passed = report.probes.saturating_sub(report.failures.len());
+                crate::say!(
+                    "  {}  {}",
+                    render::bold(&format!("{passed}/{}", report.probes)),
+                    render::dim(&format!(
+                        "{}: {} case(s), {} failed",
+                        dataset.family.as_str(),
+                        dataset.cases.len(),
+                        report.failures.len()
+                    ))
+                );
+            }
+            other => crate::say!("  {}", render::dim(&other.describe())),
+        }
     }
     crate::say!();
     crate::say!(

@@ -1,10 +1,10 @@
-//! `recall`: what a search finds, as rows a harness can show or inject.
+//! `recall` and `context`: search rows and assembled context for a harness or peer.
 
 use crate::saying::{describe, session_names};
 use crate::{Answering, Door};
 use balthasar_ipc::{Reply, Request};
 use balthasar_model::SessionId;
-use balthasar_store::Recall;
+use balthasar_store::{Recall, Scored};
 
 /// Search.
 pub(crate) fn recall(
@@ -13,6 +13,7 @@ pub(crate) fn recall(
     request: &Request,
     hooks: &mut dyn crate::Hooks,
 ) -> Reply {
+    let started = std::time::Instant::now();
     let query = request.args.first().and_then(|v| v.as_str()).unwrap_or("");
     let opts = request.args.get(1);
     let limit = opts
@@ -21,17 +22,21 @@ pub(crate) fn recall(
         .unwrap_or(10)
         .min(100) as usize;
 
+    let embedding = hooks.embed(query);
+    let has_vectors = embedding.is_some();
+    let budget = hooks.budget();
     let mut ask = Recall::of(query, at.now);
     ask.limit = limit;
     ask.floor = at.live_floor;
     ask.near = true;
-    // A peer asking for memory is about to send it somewhere, so the remote boundary is assumed.
+    ask.scope_name = at.scope.to_string();
+    ask.weights = hooks.weights(has_vectors);
+    ask.embedding = embedding;
+    ask.max_candidates = budget.candidates;
     ask.remote = opts
         .and_then(|o| o.get("remote"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(true);
-
-    // Closed memories are the owner's to browse; anything a peer asks for may reach a prompt.
     ask.history = matches!(door, Door::Owner)
         && opts
             .and_then(|o| o.get("history"))
@@ -53,13 +58,52 @@ pub(crate) fn recall(
         Ok(found) => found,
         Err(why) => return Reply::refused(why.to_string()),
     };
-    // A run searches its own scratch too, which now lives in its own file.
+    let policy = {
+        let held = balthasar_recall::Policy::for_shape(balthasar_recall::shape_of(query));
+        if has_vectors {
+            held
+        } else {
+            held.without_vectors()
+        }
+    };
+    let hops = policy.hops.min(budget.hops);
+    if !policy.families.is_empty() && hops > 0 && !found.is_empty() {
+        let seeds: Vec<balthasar_model::MemoryId> =
+            found.iter().take(5).map(|h| h.memory.id.clone()).collect();
+        let reach = balthasar_store::Reach {
+            hops,
+            ..balthasar_store::Reach::default()
+        };
+        if let Ok(edges) = at.store.traverse(&seeds, &policy.families, &reach) {
+            for (id, edge) in edges {
+                if found.iter().any(|h| h.memory.id == id) {
+                    continue;
+                }
+                let Ok(Some(memory)) = at.store.get(&id) else {
+                    continue;
+                };
+                if !passes_edge(&memory, &ask, at.now) {
+                    continue;
+                }
+                found.push(Scored {
+                    score: edge.weight * 0.5,
+                    semantic: None,
+                    lexical: 0.0,
+                    entity: 0.0,
+                    frecency: 0.0,
+                    confidence: memory.confidence,
+                    strength: memory.strength.at_tier(memory.tier, at.now),
+                    near: true,
+                    memory,
+                });
+            }
+        }
+    }
     if let Some(run) = opts
         .and_then(|o| o.get("session"))
         .and_then(serde_json::Value::as_str)
         .map(SessionId::new)
     {
-        // This agent's own scratch and no sibling's.
         let agent = at.agent.clone();
         let own = match at.scratch.as_mut() {
             Some(pad) => pad.peek(&run, &agent).and_then(|held| match held {
@@ -72,17 +116,18 @@ pub(crate) fn recall(
             Ok(mine) => found.extend(mine),
             Err(why) => return Reply::refused(why.to_string()),
         }
-        found.sort_by(|a, b| b.score.total_cmp(&a.score));
-        found.truncate(limit);
     }
-    // The owner sees everything on record; a session is not shown a rule nobody stood behind.
+    found.sort_by(|a, b| b.score.total_cmp(&a.score));
+    if let Some(ranker) = hooks.ranker() {
+        let store = &*at.store;
+        ranker.rerank(&mut found, has_vectors, |id| evidence_counts(store, id));
+    }
+    found.truncate(limit);
     if !matches!(door, Door::Owner) {
         let standing = crate::supply::Standing::of(at);
         found.retain(|hit| !standing.withholds(at, &hit.memory));
     }
-    // Names are resolved once for the whole result set.
     let names = session_names(at);
-    // What a peer is handed passes the same redaction as the memory slot.
     let mut redacted: Vec<Option<String>> = vec![None; found.len()];
     if !matches!(door, Door::Owner) {
         let mut kept = Vec::with_capacity(found.len());
@@ -107,9 +152,17 @@ pub(crate) fn recall(
         })
         .collect();
 
-    // Handing memories to a caller about to put them in a context is an injection.
+    let latency_us = started.elapsed().as_micros() as u64;
     let injection = if at.capture {
-        match note_served(at, query, &found, opts) {
+        let meta = ServedMeta {
+            query,
+            fingerprint: hooks.fingerprint(),
+            vectors: has_vectors,
+            latency_us,
+            remote: ask.remote,
+            policy: policy.name,
+        };
+        match note_served(at, &meta, &found, opts) {
             Ok(id) => Some(id),
             Err(why) => return Reply::refused(why.to_string()),
         }
@@ -117,8 +170,6 @@ pub(crate) fn recall(
         None
     };
 
-    // One row per memory. With a ledger on, the answer is instead one record: the search and
-    // what it served, which is a single thing rather than a listing wrapped in a row.
     match injection {
         None => Reply::rows(described),
         Some(id) => Reply::one(serde_json::json!({
@@ -128,21 +179,130 @@ pub(crate) fn recall(
     }
 }
 
-/// Record that a search happened and that its results were handed over.
-///
-/// After the answer is decided, never before it: the ledger is instrumentation.
+/// Assemble sectioned context over the socket using the configured sections.
+pub(crate) fn context(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
+) -> Reply {
+    let opts = request.args.first();
+    let turn = opts
+        .and_then(|o| o.get("turn").or_else(|| o.get("query")))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let tokens = opts
+        .and_then(|o| o.get("budget").or_else(|| o.get("tokens")))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(1000) as usize;
+    let remote = opts
+        .and_then(|o| o.get("remote"))
+        .and_then(serde_json::Value::as_bool)
+        .or_else(|| {
+            opts.and_then(|o| o.get("for"))
+                .and_then(serde_json::Value::as_str)
+                .map(|w| w == "remote")
+        })
+        .unwrap_or(!matches!(door, Door::Owner));
+
+    let sections = hooks.sections();
+    if sections.is_empty() {
+        return Reply::refused(
+            "no sections are declared — run `balthasar configs` or declare `balthasar.section`",
+        );
+    }
+
+    let embedding = hooks.embed(&turn);
+    let ask = balthasar_recall::Ask {
+        turn,
+        tokens,
+        bound: if remote {
+            balthasar_recall::Bound::Remote
+        } else {
+            balthasar_recall::Bound::Local
+        },
+        floor: at.inject_floor,
+        weights: hooks.weights(embedding.is_some()),
+        now: at.now,
+        scope: at.scope.to_string(),
+        embedding,
+    };
+
+    let assembled =
+        balthasar_recall::assemble_refs(&[(&*at.store, true)], &sections, &ask, |text, memory| {
+            if remote {
+                hooks.redact(text, memory)
+            } else {
+                Some(text.to_owned())
+            }
+        });
+    match assembled {
+        Ok(held) => Reply::one(serde_json::json!({
+            "tokens": held.tokens,
+            "deduplicated": held.deduplicated,
+            "redacted": held.redacted,
+            "text": held.text(),
+            "sections": held.sections.iter().map(|s| serde_json::json!({
+                "id": s.id,
+                "lines": s.lines,
+                "tokens": s.tokens,
+            })).collect::<Vec<_>>(),
+        })),
+        Err(why) => Reply::refused(why.to_string()),
+    }
+}
+
+fn passes_edge(
+    memory: &balthasar_model::Memory,
+    ask: &Recall,
+    at: balthasar_model::Timestamp,
+) -> bool {
+    if memory.archived_at.is_some() || memory.tier == balthasar_model::Tier::Archive {
+        return false;
+    }
+    if memory.temporal.valid_to.is_some() && !ask.history {
+        return false;
+    }
+    memory.confidence >= ask.floor
+        && memory.strength.at_tier(memory.tier, at) >= balthasar_model::floor::SPENT
+        && memory.privacy.may_show(ask.remote, ask.history)
+}
+
+fn evidence_counts(
+    store: &balthasar_store::Store,
+    id: &balthasar_model::MemoryId,
+) -> (usize, usize) {
+    let Ok(witnesses) = store.witnesses_of(id) else {
+        return (0, 0);
+    };
+    let domains: std::collections::BTreeSet<String> = witnesses
+        .iter()
+        .map(balthasar_model::Witness::domain_of)
+        .collect();
+    (witnesses.len(), domains.len())
+}
+
+struct ServedMeta<'a> {
+    query: &'a str,
+    fingerprint: String,
+    vectors: bool,
+    latency_us: u64,
+    remote: bool,
+    policy: &'static str,
+}
+
 fn note_served(
     at: &mut Answering<'_>,
-    query: &str,
-    found: &[balthasar_store::Scored],
+    meta: &ServedMeta<'_>,
+    found: &[Scored],
     opts: Option<&serde_json::Value>,
 ) -> Result<String, balthasar_store::StoreError> {
     let session = opts
         .and_then(|o| o.get("session"))
         .and_then(serde_json::Value::as_str)
         .map(SessionId::new);
-    let query_hash = balthasar_model::content_hash(query)[..16].to_owned();
-    // Two searches in one second, even for the same words, are two records.
+    let query_hash = balthasar_model::content_hash(meta.query)[..16].to_owned();
     let unique =
         balthasar_model::content_hash(&format!("{query_hash}:{}", balthasar_store::mint(at.now)));
     let stamp = format!("{}-{}", at.now, &unique[..8]);
@@ -154,10 +314,10 @@ fn note_served(
             session: session.clone(),
             query_hash,
             requested_at: at.now,
-            config_fingerprint: String::new(),
-            vector_available: false,
+            config_fingerprint: meta.fingerprint.clone(),
+            vector_available: meta.vectors,
             result_limit: found.len(),
-            latency_us: 0,
+            latency_us: meta.latency_us,
         },
         &found
             .iter()
@@ -192,13 +352,16 @@ fn note_served(
             session,
             created_at: at.now,
             token_count: tokens,
-            remote: true,
-            policy: "balanced".to_owned(),
+            remote: meta.remote,
+            policy: meta.policy.to_owned(),
         },
         &found
             .iter()
             .map(|hit| {
-                let mode = if hit.memory.is_assertable(at.inject_floor, at.now, true) {
+                let mode = if hit
+                    .memory
+                    .is_assertable(at.inject_floor, at.now, meta.remote)
+                {
                     balthasar_model::Presentation::Asserted
                 } else {
                     balthasar_model::Presentation::Evidence

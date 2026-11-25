@@ -24,31 +24,16 @@ pub struct Args {
     how: crate::render::How,
 }
 
-/// Derive, and report.
-pub fn run(
-    store_path: Option<&Path>,
+/// Derive temporal, entity, and lexical-overlap edges and write them to `store`.
+pub(crate) fn derive_and_write(
+    store: &mut balthasar_store::Store,
     scope: &ScopeId,
-    tool: &Which,
-    args: &Args,
-) -> anyhow::Result<()> {
-    let at = now();
-    let mut store = open(store_path, scope, tool)?;
+    at: balthasar_model::Timestamp,
+) -> anyhow::Result<(usize, usize)> {
     let rules = Thresholds::default();
-
-    if args.rebuild {
-        store.retire_relations(Derivation::Rule, balthasar_distil::RELATION_DERIVATION, at)?;
-        store.retire_relations(
-            Derivation::Structure,
-            balthasar_distil::RELATION_DERIVATION,
-            at,
-        )?;
-    }
-
     let held = store.all()?;
     let mut edges = temporal(&held, &rules, at);
 
-    // Rarity comes from the entity index the store already keeps, so a term everything mentions
-    // is discounted without this command having to count anything itself.
     let named: Vec<(balthasar_model::MemoryId, Vec<String>)> = held
         .iter()
         .map(|m| {
@@ -68,11 +53,34 @@ pub fn run(
     edges.extend(overlap(&texts, &rules, at));
 
     let written = store.relate(&edges)?;
+    Ok((held.len(), written))
+}
+
+/// Derive, and report.
+pub fn run(
+    store_path: Option<&Path>,
+    scope: &ScopeId,
+    tool: &Which,
+    args: &Args,
+) -> anyhow::Result<()> {
+    let at = now();
+    let mut store = open(store_path, scope, tool)?;
+
+    if args.rebuild {
+        store.retire_relations(Derivation::Rule, balthasar_distil::RELATION_DERIVATION, at)?;
+        store.retire_relations(
+            Derivation::Structure,
+            balthasar_distil::RELATION_DERIVATION,
+            at,
+        )?;
+    }
+
+    let (memories, written) = derive_and_write(&mut store, scope, at)?;
     let census = store.relation_census()?;
 
     if args.how.framed() {
         args.how.one(serde_json::json!({
-            "memories": held.len(),
+            "memories": memories,
             "written": written,
             "kinds": census.iter().map(|(view, n)| {
                 serde_json::json!({ "kind": view.as_str(), "count": n })
@@ -84,7 +92,7 @@ pub fn run(
     crate::say!(
         "{} {}",
         render::bold(&written.to_string()),
-        render::dim(&format!("edge(s) over {} memories", held.len()))
+        render::dim(&format!("edge(s) over {memories} memories"))
     );
     if census.is_empty() {
         crate::say!("{}", render::dim("nothing was related"));

@@ -152,10 +152,10 @@ turns cold when turns have waited more than two days for a consolidation.
 in the transcript and nowhere else. `scroll` finds it in its session's turns; `recall` never
 answers from them, so nothing reaches a model only because it was once said.
 
-**Built, not wired.** The advisor and the logistic ranker are exercised only by their own tests
-until an evaluation shows either earns a place in what a model is told. Nothing derives a causal
-edge: the rule pairing a failure with its fix needed a memory per command, and nothing writes
-one. Vectors rank only the owner's `recall`; `layout` and `context` never embed the turn.
+**Wired end to end.** Retrieval in `layout`, `context`, and `recall` uses the configured embedder,
+scoring weights, candidate cap, relation traversal, and optional learned ranker
+(`balthasar.ranking = "learned"`, trained by `balthasar train`). The daily `ladder` pass embeds
+unindexed memories, refreshes relation edges, and prunes ledger rows past `retention_days`.
 
 ## Status
 

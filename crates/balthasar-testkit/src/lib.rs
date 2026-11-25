@@ -17,5 +17,7 @@ pub use run::{
     Arm, Between, Measured, Ran, Score, WINDOW, measure, measure_arm, measure_between, run, run_arm,
 };
 pub use scenario::{Lesson, Scenario, Session};
-pub use suite::{Act, Case, Category, Expect, Failure, Probe, Report, Verdict, corpus, run_suite};
+pub use suite::{
+    Act, Case, Category, Expect, Failure, Probe, Report, Verdict, corpus, run_cases, run_suite,
+};
 pub use train::{Example, Fitted, TrainError, auc, features_of, fit, label};

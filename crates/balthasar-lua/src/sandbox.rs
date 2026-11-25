@@ -350,19 +350,19 @@ mod tests {
         load os os.clock os.date os.difftime os.getenv os.time
         __stream __stream.connect
         __balthasar_specs
-        __balthasar_on __balthasar_on.scope __balthasar_on.admit __balthasar_on.promote
-        __balthasar_on.importance __balthasar_on.redact __balthasar_on.withhold __balthasar_on.outcome
-        __balthasar_did __balthasar_did.observe __balthasar_did.promote __balthasar_did.contradict
+        __balthasar_on __balthasar_on.scope __balthasar_on.promote
+        __balthasar_on.redact __balthasar_on.withhold __balthasar_on.outcome
+        __balthasar_did __balthasar_did.promote __balthasar_did.contradict
         __balthasar_did.recall __balthasar_did.forget __balthasar_did.consolidate
-        __balthasar_did.compact __balthasar_did.used
-        balthasar balthasar.source balthasar.extractor balthasar.section balthasar.tool
-        balthasar.load balthasar.decay balthasar.witness balthasar.buffer balthasar.weights
+        __balthasar_did.settle __balthasar_did.used
+        balthasar balthasar.source balthasar.section
+        balthasar.load balthasar.decay balthasar.witness balthasar.weights
         balthasar.budget balthasar.mask balthasar.window balthasar.memory
         balthasar.stream balthasar.stream.connect
-        balthasar.on balthasar.on.scope balthasar.on.admit balthasar.on.promote
-        balthasar.on.importance balthasar.on.redact balthasar.on.withhold balthasar.on.outcome
-        balthasar.did balthasar.did.observe balthasar.did.promote balthasar.did.contradict
-        balthasar.did.recall balthasar.did.forget balthasar.did.consolidate balthasar.did.compact
+        balthasar.on balthasar.on.scope balthasar.on.promote
+        balthasar.on.redact balthasar.on.withhold balthasar.on.outcome
+        balthasar.did balthasar.did.promote balthasar.did.contradict
+        balthasar.did.recall balthasar.did.forget balthasar.did.consolidate balthasar.did.settle
         balthasar.did.used
         balthasar.json balthasar.json.encode balthasar.json.decode
         balthasar.path balthasar.path.basename balthasar.text balthasar.text.tail
@@ -373,12 +373,12 @@ mod tests {
 
     /// What a project file holds besides the core, once the prelude has run.
     const PROJECT: &str = "
-        balthasar balthasar.source balthasar.extractor balthasar.section balthasar.tool
+        balthasar balthasar.source balthasar.section
         balthasar.load balthasar.decay balthasar.witness balthasar.weights balthasar.window
-        balthasar.on balthasar.on.scope balthasar.on.admit balthasar.on.promote
-        balthasar.on.importance balthasar.on.redact balthasar.on.withhold balthasar.on.outcome
-        balthasar.did balthasar.did.observe balthasar.did.promote balthasar.did.contradict
-        balthasar.did.recall balthasar.did.forget balthasar.did.consolidate balthasar.did.compact
+        balthasar.on balthasar.on.scope balthasar.on.promote
+        balthasar.on.redact balthasar.on.withhold balthasar.on.outcome
+        balthasar.did balthasar.did.promote balthasar.did.contradict
+        balthasar.did.recall balthasar.did.forget balthasar.did.consolidate balthasar.did.settle
         balthasar.did.used
         balthasar.json balthasar.json.encode balthasar.json.decode
         balthasar.path balthasar.path.basename balthasar.text balthasar.text.tail

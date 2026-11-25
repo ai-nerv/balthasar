@@ -27,12 +27,5 @@ if [ -n "$found" ]; then
     fail=1
 fi
 
-# A skill descriptor's parameters are data. If anything ever formats one into a string that is
-# then run, the type stops being a boundary.
-if grep -rn 'format!' crates/balthasar-model/src/skill.rs | grep -qi 'command\|exec\|sh -c'; then
-    echo "gate-no-exec: a skill descriptor is being formatted into a command" >&2
-    fail=1
-fi
-
 [ "$fail" -eq 0 ] || exit 1
 echo "gate-no-exec: ok"

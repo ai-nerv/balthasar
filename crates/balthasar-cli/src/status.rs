@@ -51,26 +51,13 @@ pub fn run(
     }
     crate::say!("  {}", render::dim(&format!("{total:>5}  in all")));
 
-    // Not a count but a claim about what the model would actually be told, because that is the
-    // number a person is really asking about.
-    let asserted = store
-        .recall(&balthasar_store::Recall {
-            query: String::new(),
-            limit: usize::MAX,
-            tiers: vec![balthasar_model::Tier::Fact, balthasar_model::Tier::Habit],
-            floor: floors.inject,
-            include_archived: false,
-            history: false,
-            remote: false,
-            relevance: 0.0,
-            now: at,
-            scope_name: scope.to_string(),
-            weights: balthasar_store::Weights::default().without_vectors(),
-            embedding: None,
-            near: true,
-            reinforce: false,
-        })?
-        .len();
+    let mut ask = balthasar_store::Recall::of("", at);
+    ask.limit = usize::MAX;
+    ask.tiers = vec![balthasar_model::Tier::Fact, balthasar_model::Tier::Habit];
+    ask.floor = floors.inject;
+    ask.scope_name = scope.to_string();
+    ask.near = true;
+    let asserted = store.recall(&ask)?.len();
     crate::say!();
     crate::say!(
         "{} {}",
@@ -78,8 +65,6 @@ pub fn run(
         render::dim("would be asserted to a model right now")
     );
 
-    // What is actually reachable, said plainly. A memory layer that silently ran without an
-    // embedder or a distiller would leave somebody wondering why recall felt blunt.
     crate::say!();
     crate::say!(
         "{}  {}",
@@ -89,6 +74,9 @@ pub fn run(
             |e| e.model().to_owned()
         )
     );
+    if let Some(note) = loaded.embedder_note() {
+        crate::say!("            {}", render::dim(note));
+    }
     let (backends, unavailable) = loaded.distillers();
     let reachable: Vec<String> = backends
         .iter()

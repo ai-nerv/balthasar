@@ -166,23 +166,25 @@ end)
 
 -- ------------------------------------------------------------------ models, both optional
 
--- Three ways to reach a model, tried in order. With none of them reachable, extraction is
--- extractive and consolidation is clustering. Worse, and never absent: an agent whose memory
--- hard-fails without an API key is worse off than one with no memory at all.
+-- Optional model backend for distillation (prompt on stdin, answer on stdout). Without one,
+-- extraction is rule-based and consolidation is clustering — slower to infer prose, never broken.
 --
 -- balthasar.distiller = {
---   { kind = "peer",     tool = "magi" },
---   { kind = "command",  argv = { "llm", "-m", "claude-sonnet-4-5" } },
---   { kind = "endpoint", api = "openai-completions",
---     base_url = "https://api.anthropic.com/v1",
---     model = "claude-sonnet-4-5",
---     auth = { kind = "env", var = "ANTHROPIC_API_KEY" } },
+--   { kind = "command", argv = { "llm", "-m", "claude-sonnet-4-5" } },
 -- }
 
--- Local, offline, downloaded once. Never on the critical path: recall works lexically until
--- the vector lands.
+-- Local embeddings. Defaults to the dependency-free hashed n-gram embedder (`kind = "hashed"`).
+-- A sentence transformer requires a `--features dense` build and a local weights directory:
 --
--- balthasar.embedder = { kind = "onnx", model = "bge-small-en-v1.5", dimensions = 384 }
+-- balthasar.embedder = {
+--   kind = "onnx",
+--   model = "bge-small-en-v1.5",
+--   path = "/path/to/bge-small-en-v1.5",
+-- }
+
+-- Opt into reranking with the `.policy.json` written by `balthasar train`:
+--
+-- balthasar.ranking = "learned"
 
 -- ------------------------------------------------------------------ trust
 

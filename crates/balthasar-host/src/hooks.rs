@@ -1,6 +1,6 @@
 use balthasar_buffer::Rules;
 use balthasar_model::Memory;
-use balthasar_store::Turn;
+use balthasar_store::{Turn, Weights};
 use serde_json::Value;
 
 /// The configuration's say in what is sent. Every method has an answer that works without one.
@@ -34,6 +34,49 @@ pub trait Hooks {
 
     fn memory(&self) -> crate::Keeping {
         crate::Keeping::default()
+    }
+
+    fn embed(&self, text: &str) -> Option<Vec<f32>> {
+        let _ = text;
+        None
+    }
+
+    fn weights(&self, vectors: bool) -> Weights {
+        let base = Weights::default();
+        if vectors {
+            base
+        } else {
+            base.without_vectors()
+        }
+    }
+
+    fn budget(&self) -> balthasar_lua::Budget {
+        balthasar_lua::Budget::default()
+    }
+
+    fn fingerprint(&self) -> String {
+        String::new()
+    }
+
+    fn sections(&self) -> Vec<balthasar_recall::Section> {
+        Vec::new()
+    }
+
+    fn backends(&self) -> Option<Value> {
+        None
+    }
+
+    fn classify_outcome(&mut self, event: &Value) -> Option<String> {
+        let _ = event;
+        None
+    }
+
+    fn note_used(&mut self, action: &Value) {
+        let _ = action;
+    }
+
+    fn ranker(&self) -> Option<&balthasar_recall::Model> {
+        None
     }
 }
 

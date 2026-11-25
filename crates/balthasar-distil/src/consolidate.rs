@@ -64,10 +64,11 @@ pub fn consolidate(
         ..Consolidated::default()
     };
 
+    let rates = settings.decay.rates();
     let faded = if dry_run {
-        store.decay_preview(now)?
+        store.decay_preview_with(now, &rates)?
     } else {
-        store.weaken(now)?
+        store.weaken_with(now, &rates)?
     };
     report.decayed = faded.weakened.len();
 
@@ -78,7 +79,7 @@ pub fn consolidate(
     let mut found = store.scratch_clusters(scope.as_str(), 1)?;
     if let Some(pad) = scratch.as_mut() {
         if !dry_run {
-            report.decayed += pad.weaken_all(now)?;
+            report.decayed += pad.weaken_all_with(now, &rates)?;
         }
         found.extend(pad.recurring(scope.as_str(), 1, now - HORIZON, RUNS_PER_PASS)?);
     }
@@ -120,9 +121,9 @@ pub fn consolidate(
     // Swept only now: everything left has had its chance at the ladder, and sweeping earlier
     // would take away the scratch this cycle reads for corroboration.
     if !dry_run {
-        report.swept = store.sweep(now)?.swept.len();
+        report.swept = store.sweep_with(now, &rates)?.swept.len();
         if let Some(pad) = scratch.as_mut() {
-            report.swept += pad.sweep_all(now)?;
+            report.swept += pad.sweep_all_with(now, &rates)?;
         }
     }
     Ok(report)

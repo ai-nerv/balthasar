@@ -226,7 +226,7 @@ pub(crate) fn curate(
     through: u64,
     hooks: &mut dyn Hooks,
 ) -> Result<(), StoreError> {
-    let found = supply::candidates(at, query, CURATE_FROM);
+    let found = supply::candidates(at, query, CURATE_FROM, hooks);
     let mut listed = String::new();
     for hit in &found {
         if let Some(text) = hooks.redact(&hit.memory().text(), hit.memory()) {
@@ -632,7 +632,7 @@ fn curation(at: &mut Answering<'_>, job: &Job, text: &str, hooks: &mut dyn Hooks
         .and_then(|n| u32::try_from(n).ok())
         .unwrap_or(0);
     let per = hooks.window().estimate_chars_per_token;
-    let found: Vec<_> = supply::candidates(at, query, CURATE_FROM)
+    let found: Vec<_> = supply::candidates(at, query, CURATE_FROM, hooks)
         .into_iter()
         .filter(|hit| chosen.contains(&hit.memory().id.to_string()))
         .collect();

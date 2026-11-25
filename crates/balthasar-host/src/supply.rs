@@ -87,15 +87,23 @@ pub(crate) fn from_notes(
 }
 
 /// What a search for `query` finds worth offering, best first. Open memories only.
-pub(crate) fn candidates(at: &mut Answering<'_>, query: &str, limit: usize) -> Vec<Current> {
+pub(crate) fn candidates(
+    at: &mut Answering<'_>,
+    query: &str,
+    limit: usize,
+    hooks: &dyn Hooks,
+) -> Vec<Current> {
+    let embedding = hooks.embed(query);
     let mut ask = Recall::of(query, at.now);
     ask.limit = limit;
     ask.floor = at.live_floor;
     ask.near = true;
     ask.remote = true;
+    ask.scope_name = at.scope.to_string();
+    ask.weights = hooks.weights(embedding.is_some());
+    ask.embedding = embedding;
+    ask.max_candidates = hooks.budget().candidates;
     let mut found = at.store.recall_current(&ask).unwrap_or_default();
-    // Before anything is packed or handed to a helper to choose from: a helper rewrites what it
-    // is given, and what it writes is offered without the doubt its source was kept with.
     let standing = Standing::of(at);
     found.retain(|hit| !standing.withholds(at, hit.memory()));
     found

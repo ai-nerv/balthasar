@@ -25,6 +25,7 @@ mod settling;
 mod sizing;
 mod supply;
 mod titling;
+mod verbatim;
 mod verbs;
 mod verifying;
 mod window;

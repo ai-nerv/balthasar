@@ -239,7 +239,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<()> {
         Some(What::Configure(args)) => coordinated::configure(args),
         Some(What::Acknowledge(args)) => coordinated::acknowledge(args),
         Some(What::Consolidate(args)) => consolidate::run(where_, &scope, &tool, args, &mut loaded),
-        Some(What::Decay(args)) => decay::run(where_, &scope, &tool, args),
+        Some(What::Decay(args)) => decay::run(where_, &scope, &tool, args, &loaded),
         Some(What::Export(args)) => transfer::export(where_, &scope, &tool, args),
         Some(What::Import(args)) => transfer::import(where_, &scope, &tool, args),
         Some(What::Train(args)) => train::run(where_, &scope, &tool, args),

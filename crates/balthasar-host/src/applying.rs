@@ -86,10 +86,52 @@ fn delivered(at: &mut Answering<'_>, session: &SessionId, id: &str) -> Result<()
             modes.push((memory, balthasar_model::Presentation::Listed));
         }
     }
+    let recall_id = format!("recall-layout-{id}");
+    let query = proposal
+        .asked
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let candidates: Vec<balthasar_store::Candidate> = modes
+        .iter()
+        .enumerate()
+        .map(|(rank, (memory, _))| {
+            let held = at.store.get(memory).ok().flatten();
+            let (confidence, strength) = held.as_ref().map_or((0.0, 0.0), |m| {
+                (m.confidence, m.strength.at_tier(m.tier, at.now))
+            });
+            balthasar_store::Candidate {
+                memory: memory.clone(),
+                rank,
+                selected: true,
+                score: confidence,
+                signals: balthasar_store::Signals {
+                    confidence,
+                    strength,
+                    scope: 1.0,
+                    ..balthasar_store::Signals::default()
+                },
+            }
+        })
+        .collect();
+    at.store.note_recall(
+        &balthasar_store::RecallRun {
+            id: recall_id.clone(),
+            scope: at.scope.clone(),
+            session: Some(session.clone()),
+            query_hash: balthasar_model::content_hash(query)[..16].to_owned(),
+            requested_at: at.now,
+            config_fingerprint: String::new(),
+            vector_available: false,
+            result_limit: candidates.len(),
+            latency_us: 0,
+        },
+        &candidates,
+    )?;
     at.store.note_injection(
         &balthasar_store::Injection {
             id: format!("applied-{id}"),
-            recall: None,
+            recall: Some(recall_id),
             session: Some(session.clone()),
             created_at: at.now,
             token_count: memory_tokens + catalog_tokens,

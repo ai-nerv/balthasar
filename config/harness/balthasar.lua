@@ -91,11 +91,33 @@ function M.observe(session, turn)
   return ok and why == nil
 end
 
---- Ask what to send.
----
---- `nil` means balthasar had nothing to say, and a harness that gets it should do whatever it did
---- before balthasar existed. That is the whole degradation story: not an error to handle, an absence
---- to carry on through.
+--- Ask how to lay out the next request (slots, memory, notes, helper jobs).
+function M.layout(session, request)
+  local mem = reach()
+  if not mem then return nil end
+  local ok, answer = pcall(function() return mem:call("layout", session, request or {}) end)
+  if not ok or not answer then return nil end
+  return answer
+end
+
+--- Confirm a layout was sent and accepted, with provider token usage.
+function M.applied(session, receipt)
+  local mem = reach()
+  if not mem then return false end
+  local ok, _, why = pcall(function() return mem:call("applied", session, receipt) end)
+  return ok and why == nil
+end
+
+--- Report a layout refused by the provider as too long, receiving a tighter one.
+function M.overflowed(session, refusal)
+  local mem = reach()
+  if not mem then return nil end
+  local ok, answer = pcall(function() return mem:call("overflowed", session, refusal) end)
+  if not ok or not answer then return nil end
+  return answer
+end
+
+--- Ask what to send (stateless fallback when `layout` is not used).
 function M.plan(session, window)
   local mem = reach()
   if not mem then return nil end

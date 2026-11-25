@@ -56,6 +56,7 @@ dependencies = [
  "balthasar-cli",
  "balthasar-ipc",
  "balthasar-model",
+ "balthasar-recall",
  "balthasar-store",
  "serde_json",
 ]
@@ -125,6 +126,7 @@ dependencies = [
  "balthasar-ipc",
  "balthasar-lua",
  "balthasar-model",
+ "balthasar-recall",
  "balthasar-store",
  "rusqlite",
  "rustix",

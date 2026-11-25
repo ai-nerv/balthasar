@@ -60,12 +60,15 @@ fn planning_with_no_balthasar_answers_nothing() {
 #[test]
 fn every_call_survives_balthasar_being_absent() {
     for call in [
+        "harness.layout('s', {})",
+        "harness.overflowed('s', {})",
         "harness.plan('s', {})",
         "harness.recall('anything')",
         "harness.remember('a thing')",
     ] {
         assert_eq!(through(&format!("{call} == nil")), "true", "{call} raised");
     }
+    assert_eq!(through("harness.applied('s', { id = 'L-1' })"), "false");
 }
 
 #[test]

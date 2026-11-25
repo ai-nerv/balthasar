@@ -153,7 +153,9 @@ pub fn run(
     crate::say!("{}", render::dim(&format!("written to {}", into.display())));
     crate::say!(
         "{}",
-        render::dim("it will not be used until you opt in — see `balthasar recall --shadow`")
+        render::dim(
+            "it will not be used until you opt in — try `balthasar recall --shadow learned` or `--learned`"
+        )
     );
     Ok(())
 }

@@ -250,7 +250,7 @@ fn a_source_adapter_gets_a_json_parser() {
     engine
         .run(
             r#"
-            balthasar.on.admit(function(raw)
+            balthasar.on.promote(function(raw)
               local r = balthasar.json.decode(raw)
               if not r then return { keep = false } end
               return { keep = true, kind = r.type }
@@ -261,12 +261,12 @@ fn a_source_adapter_gets_a_json_parser() {
         .expect("load");
 
     let good = engine
-        .ask("admit", &[serde_json::json!(r#"{"type":"user"}"#)])
+        .ask("promote", &[serde_json::json!(r#"{"type":"user"}"#)])
         .expect("an answer");
     assert_eq!(good.get("kind"), Some(&serde_json::json!("user")));
 
     let bad = engine
-        .ask("admit", &[serde_json::json!("{ not json")])
+        .ask("promote", &[serde_json::json!("{ not json")])
         .expect("an answer");
     assert_eq!(bad.get("keep"), Some(&serde_json::json!(false)));
 }
@@ -449,8 +449,8 @@ mod trust {
             "balthasar.on.scope"
         );
         assert_eq!(
-            refusal("balthasar.did.observe(function() end)\n"),
-            "balthasar.did.observe"
+            refusal("balthasar.did.recall(function() end)\n"),
+            "balthasar.did.recall"
         );
         assert_eq!(
             refusal("balthasar.window.policy = function() return {} end\n"),
@@ -461,8 +461,8 @@ mod trust {
     #[test]
     fn a_refusal_caught_by_pcall_is_still_fatal() {
         assert_eq!(
-            refusal("pcall(balthasar.on.admit, function() end)\nbalthasar.inject_floor = 0.6\n"),
-            "balthasar.on.admit"
+            refusal("pcall(balthasar.on.promote, function() end)\nbalthasar.inject_floor = 0.6\n"),
+            "balthasar.on.promote"
         );
     }
 

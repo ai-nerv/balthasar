@@ -8,7 +8,12 @@ use balthasar_store::{Use, Verdict};
 /// `used(injection, {memories, tool, action, attribution, session})`.
 ///
 /// A caller reporting that it acted on something it was given.
-pub fn used(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
+pub fn used(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
+) -> Reply {
     let Some(injection) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("used needs an injection id");
     };
@@ -65,7 +70,17 @@ pub fn used(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
     };
 
     match at.store.note_use(&held) {
-        Ok(()) => Reply::one(serde_json::json!({ "action": action })),
+        Ok(()) => {
+            hooks.note_used(&serde_json::json!({
+                "action": action,
+                "injection": injection,
+                "tool": held.tool,
+                "attribution": held.attribution.as_str(),
+                "memories": held.memories.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "session": held.session.as_ref().map(ToString::to_string),
+            }));
+            Reply::one(serde_json::json!({ "action": action }))
+        }
         Err(why) => Reply::refused(why.to_string()),
     }
 }
@@ -74,15 +89,25 @@ pub fn used(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
 ///
 /// How it went. `unknown` is the default and a real answer: an action nobody evaluated must
 /// never drift into being a failed one.
-pub fn outcome(at: &mut Answering<'_>, door: &Door, request: &Request) -> Reply {
+pub fn outcome(
+    at: &mut Answering<'_>,
+    door: &Door,
+    request: &Request,
+    hooks: &mut dyn crate::Hooks,
+) -> Reply {
     let Some(action) = request.args.first().and_then(|v| v.as_str()) else {
         return Reply::refused("outcome needs an action id");
     };
     let said = request.args.get(1);
 
-    let kind: OutcomeKind = text(said, "kind")
-        .and_then(|t| t.parse().ok())
-        .unwrap_or(OutcomeKind::Unknown);
+    let explicit = text(said, "kind").and_then(|t| t.parse::<OutcomeKind>().ok());
+    let kind: OutcomeKind = match explicit {
+        Some(k) if k != OutcomeKind::Unknown => k,
+        _ => said
+            .and_then(|event| hooks.classify_outcome(event))
+            .and_then(|label| label.parse::<OutcomeKind>().ok())
+            .unwrap_or(OutcomeKind::Unknown),
+    };
 
     // Who says so. A peer reports as itself; only the owner records the person's judgment.
     let asked = text(said, "evaluator").unwrap_or_else(|| "caller".to_owned());

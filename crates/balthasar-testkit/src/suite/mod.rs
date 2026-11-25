@@ -14,4 +14,4 @@ pub fn corpus() -> Vec<Case> {
     all.extend(harder::harder());
     all
 }
-pub use check::{Failure, Report, Verdict, run_suite};
+pub use check::{Failure, Report, Verdict, run_cases, run_suite};

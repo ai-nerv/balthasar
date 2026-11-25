@@ -43,7 +43,7 @@ pub use id::{AgentId, MemoryId, ScopeId, SessionId, WitnessId};
 pub use lifecycle::{episode_holds, is_stale, tempo};
 pub use memory::{Link, LinkRelation, Memory, Provenance, Through};
 pub use relation::{Derivation, Family, Relation, View};
-pub use strength::{Importance, Strength};
+pub use strength::{DecayRates, Importance, Strength};
 pub use temporal::{Temporal, Timestamp};
 pub use tier::{Privacy, Tier};
 pub use utility::{Attribution, OutcomeKind, Presentation, Utility};
