@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.2] - 2026-11-25
+
+### <!-- 0 -->⛰️  Features
+
+- Verify peer remember claims verbatim against user turns
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Wire retrieval, ranker, decay, hooks, and drop dead code
+
+## [0.8.1] - 2026-11-22
+
 ## [0.8.1] - 2026-11-22
 
 ### <!-- 6 -->🧪 Testing
