@@ -55,6 +55,12 @@ pub fn run(
     if args.commit {
         let ladder = balthasar_model::SessionId::new(balthasar_store::LADDER);
         held.set_counter(&ladder, "consolidated", u64::try_from(at).unwrap_or(0))?;
+        if settings.ledger.capture && settings.ledger.retention_days > 0 {
+            let cutoff = at.saturating_sub(
+                i64::from(settings.ledger.retention_days).saturating_mul(balthasar_store::DAY),
+            );
+            let _ = store.forget_ledger_before(cutoff)?;
+        }
     }
 
     for text in &report.promoted {

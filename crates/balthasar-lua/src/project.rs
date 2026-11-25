@@ -39,8 +39,6 @@ pub const LENT: &[&str] = &[
     "looks_like_secret",
     "section",
     "source",
-    "extractor",
-    "tool",
     "load",
     "on",
     "did",
@@ -74,7 +72,7 @@ pub fn install(lua: &mut Lua, config: &Rc<RefCell<Config>>, refused: &Refused) {
         for name in NESTED {
             balthasar.set(ctx, *name, Table::new(&ctx)).ok();
         }
-        for name in ["source", "extractor", "tool", "load"] {
+        for name in ["source", "load"] {
             balthasar
                 .set(
                     ctx,

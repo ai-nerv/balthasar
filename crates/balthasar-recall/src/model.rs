@@ -86,6 +86,57 @@ impl Model {
         held.is_useful().then_some(held)
     }
 
+    /// Feature vector for one candidate, in [`FEATURES`] order.
+    #[must_use]
+    pub fn features(
+        hit: &balthasar_store::Scored,
+        rank: usize,
+        vectors: bool,
+        witnesses: usize,
+        domains: usize,
+    ) -> [f64; 12] {
+        [
+            rank as f64,
+            hit.score,
+            hit.semantic.unwrap_or(0.0),
+            hit.lexical,
+            hit.entity,
+            hit.frecency,
+            hit.confidence,
+            hit.strength,
+            f64::from(u8::from(hit.near)),
+            f64::from(u8::from(vectors)),
+            witnesses as f64,
+            domains as f64,
+        ]
+    }
+
+    /// Rerank candidates in place by predicted helpfulness, preserving ties by rule score.
+    pub fn rerank(
+        &self,
+        hits: &mut [balthasar_store::Scored],
+        vectors: bool,
+        evidence: impl Fn(&balthasar_model::MemoryId) -> (usize, usize),
+    ) {
+        let mut keyed: Vec<(f64, usize)> = hits
+            .iter()
+            .enumerate()
+            .map(|(rank, hit)| {
+                let (witnesses, domains) = evidence(&hit.memory.id);
+                let features = Self::features(hit, rank, vectors, witnesses, domains);
+                (self.predict(&features), rank)
+            })
+            .collect();
+        keyed.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        let snapshot: Vec<balthasar_store::Scored> = hits.to_vec();
+        for (dst, (prob, src)) in hits.iter_mut().zip(keyed) {
+            if let Some(mut item) = snapshot.get(src).cloned() {
+                item.score = prob;
+                *dst = item;
+            }
+        }
+    }
+
     /// Write it out.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {

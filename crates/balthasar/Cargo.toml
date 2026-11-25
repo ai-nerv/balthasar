@@ -22,6 +22,7 @@ balthasar-cli.workspace = true
 [dev-dependencies]
 balthasar-ipc.workspace = true
 balthasar-model.workspace = true
+balthasar-recall.workspace = true
 balthasar-store.workspace = true
 serde_json.workspace = true
 

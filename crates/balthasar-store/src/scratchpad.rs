@@ -203,23 +203,38 @@ impl Scratchpad {
         held.into_iter().take(cap).map(|(_, path)| path).collect()
     }
 
-    /// Let every run's scratch fade, and archive what has fallen past the floor. Sweeping before
-    /// the ladder has looked would take away the scratch it was about to find corroboration in.
+    /// Let every run's scratch fade, and archive what has fallen past the floor.
     pub fn weaken_all(&mut self, now: balthasar_model::Timestamp) -> Result<usize, StoreError> {
+        self.weaken_all_with(now, &balthasar_model::DecayRates::default())
+    }
+
+    pub fn weaken_all_with(
+        &mut self,
+        now: balthasar_model::Timestamp,
+        rates: &balthasar_model::DecayRates,
+    ) -> Result<usize, StoreError> {
         let mut faded = 0;
         for path in self.runs() {
             let mut store = Store::open(&path)?;
-            faded += store.weaken(now)?.weakened.len();
+            faded += store.weaken_with(now, rates)?.weakened.len();
         }
         Ok(faded)
     }
 
     /// Archive what every run's scratch no longer holds up.
     pub fn sweep_all(&mut self, now: balthasar_model::Timestamp) -> Result<usize, StoreError> {
+        self.sweep_all_with(now, &balthasar_model::DecayRates::default())
+    }
+
+    pub fn sweep_all_with(
+        &mut self,
+        now: balthasar_model::Timestamp,
+        rates: &balthasar_model::DecayRates,
+    ) -> Result<usize, StoreError> {
         let mut swept = 0;
         for path in self.runs() {
             let mut store = Store::open(&path)?;
-            swept += store.sweep(now)?.swept.len();
+            swept += store.sweep_with(now, rates)?.swept.len();
         }
         Ok(swept)
     }

@@ -201,7 +201,7 @@ fn answering(
         ),
         // Shipped in the binary and identical for every session, so it answers like `verbs`.
         "client" => Reply::one(serde_json::json!(balthasar_lua::CLIENT)),
-        "status" => status(at),
+        "status" => status(at, hooks),
         "recall" => crate::recalling::recall(at, door, request, hooks),
         "why" => why(at, request),
         "sessions" => sessions(at, request),
@@ -224,22 +224,21 @@ fn answering(
         "undo" => crate::notes::undo(at, request),
         "approve" => crate::notes::decided(at, request, true),
         "reject" => crate::notes::decided(at, request, false),
-        "used" => crate::outcome::used(at, door, request),
-        "outcome" => crate::outcome::outcome(at, door, request),
+        "used" => crate::outcome::used(at, door, request, hooks),
+        "outcome" => crate::outcome::outcome(at, door, request, hooks),
         "trace" => crate::outcome::trace(at, request),
         "utility" => crate::outcome::utility(at, request),
         "remember" => remember(at, door, request),
         "forget" => forget(at, door, request),
         "disagreements" => crate::settling::disagreements(at),
         "settle" => crate::settling::settle(at, door, request),
-        // `context` needs the configuration's sections, which the caller assembles and hands in.
-        "context" => Reply::refused("context is served by the host that holds the configuration"),
+        "context" => crate::recalling::context(at, door, request, hooks),
         other => Reply::refused(format!("'{other}' is named but not wired")),
     }
 }
 
 /// What this memory holds.
-fn status(at: &mut Answering<'_>) -> Reply {
+fn status(at: &mut Answering<'_>, hooks: &dyn crate::Hooks) -> Reply {
     let census = match at.store.census() {
         Ok(census) => census,
         Err(why) => return Reply::refused(why.to_string()),
@@ -253,7 +252,7 @@ fn status(at: &mut Answering<'_>) -> Reply {
                                      "detail": c.detail, "fix": c.fix })
         })
         .collect();
-    Reply::one(serde_json::json!({
+    let mut body = serde_json::json!({
         "scope": scope,
         "health": health,
         "summary": balthasar_store::health_summary(&checks),
@@ -262,9 +261,16 @@ fn status(at: &mut Answering<'_>) -> Reply {
             .map(|(tier, count)| (tier, serde_json::json!(count)))
             .collect::<serde_json::Map<String, serde_json::Value>>(),
         "inject_floor": at.inject_floor,
-        // Waiting on a person, so it is said where a person looks rather than only in its own view.
         "disagreements": at.store.disagreements(&scope).map(|open| open.len()).unwrap_or(0),
-    }))
+    });
+    if let (Some(backends), Some(fields)) = (hooks.backends(), body.as_object_mut())
+        && let Some(extra) = backends.as_object()
+    {
+        for (key, value) in extra {
+            fields.insert(key.clone(), value.clone());
+        }
+    }
+    Reply::one(body)
 }
 
 /// The evidence for one memory.

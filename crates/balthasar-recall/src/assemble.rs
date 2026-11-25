@@ -38,6 +38,8 @@ pub struct Ask {
     pub now: Timestamp,
     /// Which project's entity index to consult.
     pub scope: String,
+    /// The query's embedding, when an embedder is configured.
+    pub embedding: Option<Vec<f32>>,
 }
 
 /// One rendered section.
@@ -103,6 +105,17 @@ const RELEVANT_ENOUGH: f64 = 0.55;
 /// `redact` is asked about every line and may rewrite or withhold it.
 pub fn assemble(
     stores: &[(Store, bool)],
+    sections: &[Section],
+    ask: &Ask,
+    redact: impl FnMut(&str, &Memory) -> Option<String>,
+) -> Result<Context, balthasar_store::StoreError> {
+    let refs: Vec<(&Store, bool)> = stores.iter().map(|(s, near)| (s, *near)).collect();
+    assemble_refs(&refs, sections, ask, redact)
+}
+
+/// Assemble the context from borrowed stores.
+pub fn assemble_refs(
+    stores: &[(&Store, bool)],
     sections: &[Section],
     ask: &Ask,
     mut redact: impl FnMut(&str, &Memory) -> Option<String>,
@@ -178,7 +191,7 @@ pub fn assemble(
 
 /// The memories a section would take, best first.
 fn gather(
-    stores: &[(Store, bool)],
+    stores: &[(&Store, bool)],
     section: &Section,
     ask: &Ask,
 ) -> Result<Vec<Memory>, balthasar_store::StoreError> {
@@ -186,6 +199,7 @@ fn gather(
     let mut found = Vec::new();
 
     for (store, near) in stores {
+        let uses_turn = section.query.as_deref() == Some("turn");
         let mut recall = Recall::of(
             section.query.as_deref().map_or_else(String::new, |q| {
                 if q == "turn" {
@@ -203,6 +217,9 @@ fn gather(
         recall.weights = ask.weights;
         recall.near = *near;
         recall.scope_name = ask.scope.clone();
+        if uses_turn {
+            recall.embedding = ask.embedding.clone();
+        }
         // Only where the section is answering a turn.
         if section.query.is_some() {
             recall.relevance = RELEVANT_ENOUGH;

@@ -144,7 +144,7 @@ fn a_packed_slot_never_writes_one_claim_twice() {
         live_floor: 0.0,
         capture: false,
     };
-    let found = candidates(&mut at, "", 10);
+    let found = candidates(&mut at, "", 10, &Plain);
     let packed = pack(&at, &found, 200, 4, &mut Plain).expect("a slot");
     assert_eq!(
         packed.text.matches("uv, not pip").count(),

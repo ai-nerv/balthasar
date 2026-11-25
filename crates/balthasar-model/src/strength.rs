@@ -49,6 +49,40 @@ impl Importance {
     }
 }
 
+/// Per-importance decay constants and inertia toggle, mirroring `balthasar.decay`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DecayRates {
+    pub critical: f64,
+    pub high: f64,
+    pub normal: f64,
+    pub low: f64,
+    pub inertia: bool,
+}
+
+impl Default for DecayRates {
+    fn default() -> Self {
+        Self {
+            critical: Importance::Critical.rate(),
+            high: Importance::High.rate(),
+            normal: Importance::Normal.rate(),
+            low: Importance::Low.rate(),
+            inertia: true,
+        }
+    }
+}
+
+impl DecayRates {
+    #[must_use]
+    pub fn rate(&self, importance: Importance) -> f64 {
+        match importance {
+            Importance::Critical => self.critical,
+            Importance::High => self.high,
+            Importance::Normal => self.normal,
+            Importance::Low => self.low,
+        }
+    }
+}
+
 /// How faded a memory is, and what resists the fading.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Strength {
@@ -92,11 +126,20 @@ impl Strength {
     /// ~1000 reduce it roughly sevenfold.
     #[must_use]
     pub fn effective_rate(&self) -> f64 {
+        self.effective_rate_with(&DecayRates::default())
+    }
+
+    #[must_use]
+    pub fn effective_rate_with(&self, rates: &DecayRates) -> f64 {
         if self.pinned {
             return 0.0;
         }
-        let inertia = 1.0 / (1.0 + f64::from(self.access_count).ln_1p());
-        self.importance.rate() * inertia
+        let inertia = if rates.inertia {
+            1.0 / (1.0 + f64::from(self.access_count).ln_1p())
+        } else {
+            1.0
+        };
+        rates.rate(self.importance).max(0.0) * inertia
     }
 
     /// Strength as it would be at `now`, without writing it back.
@@ -113,16 +156,18 @@ impl Strength {
     }
 
     /// What this will be worth at `now`, for a memory of this tier.
-    ///
-    /// A fact and an afternoon's episode should not fade at the same speed; see [`crate::tempo`]
-    /// for the multipliers.
     #[must_use]
     pub fn at_tier(&self, tier: crate::Tier, now: Timestamp) -> f64 {
+        self.at_tier_with(tier, now, &DecayRates::default())
+    }
+
+    #[must_use]
+    pub fn at_tier_with(&self, tier: crate::Tier, now: Timestamp, rates: &DecayRates) -> f64 {
         if self.pinned {
             return 1.0;
         }
         let days = ((now - self.base()).max(0)) as f64 / 86_400.0;
-        let rate = self.effective_rate() * crate::tempo(tier);
+        let rate = self.effective_rate_with(rates) * crate::tempo(tier);
         (self.value * (-rate * days).exp()).clamp(0.0, 1.0)
     }
     /// Apply the fade, up to `now`.
@@ -252,5 +297,21 @@ mod tests {
     fn decay_does_not_run_backwards() {
         let s = Strength::fresh(Importance::Normal, NOW);
         assert_eq!(s.at(NOW - 100 * DAY), 1.0);
+    }
+
+    #[test]
+    fn custom_decay_rates_and_inertia_flag_apply() {
+        let mut s = Strength::fresh(Importance::Normal, NOW);
+        s.access_count = 50;
+        let faster = DecayRates {
+            normal: 0.2,
+            inertia: false,
+            ..DecayRates::default()
+        };
+        assert!(
+            s.at_tier_with(crate::Tier::Habit, NOW + 10 * DAY, &faster)
+                < s.at_tier(crate::Tier::Habit, NOW + 10 * DAY)
+        );
+        assert!((s.effective_rate_with(&faster) - 0.2).abs() < 1e-12);
     }
 }

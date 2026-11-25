@@ -69,9 +69,15 @@ impl Report {
 /// Run every scenario.
 #[must_use]
 pub fn run_suite() -> Report {
+    run_cases(&corpus())
+}
+
+/// Run an arbitrary list of scenarios.
+#[must_use]
+pub fn run_cases(cases: &[Case]) -> Report {
     let mut report = Report::default();
-    for case in corpus() {
-        run_case(&case, &mut report);
+    for case in cases {
+        run_case(case, &mut report);
     }
     report
 }

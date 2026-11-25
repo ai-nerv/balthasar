@@ -183,6 +183,7 @@ fn a_session_is_read_and_what_it_taught_is_kept() {
             weights: balthasar_store::Weights::default().without_vectors(),
             embedding: None,
             near: true,
+            max_candidates: 500,
             reinforce: false,
         })
         .expect("recall");

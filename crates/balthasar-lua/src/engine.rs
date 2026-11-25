@@ -6,9 +6,8 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
-/// The keyed registrars the `balthasar` module offers. Adding one here is the only way a config
-/// gains a new kind of declaration.
-pub const REGISTRARS: &[&str] = &["source", "extractor", "section", "tool"];
+/// The keyed registrars the `balthasar` module offers.
+pub const REGISTRARS: &[&str] = &["source", "section"];
 
 /// Where registered specs live inside the VM, keyed by registrar then by identity. A Lua table
 /// rather than a Rust map: a spec carries functions, and a function cannot cross the boundary.
@@ -360,7 +359,7 @@ impl Engine {
             // Made here so `balthasar.decay.normal = 0.02` works without a config writing
             // `balthasar.decay = {}` first.
             for nested in [
-                "decay", "witness", "buffer", "weights", "budget", "mask", "window", "memory",
+                "decay", "witness", "weights", "budget", "mask", "window", "memory",
             ] {
                 balthasar.set(ctx, nested, Table::new(&ctx)).ok();
             }

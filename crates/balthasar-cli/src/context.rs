@@ -62,14 +62,17 @@ pub fn run(
         ]
     };
 
+    let turn = args.turn.join(" ");
+    let embedding = loaded.embed_query(&turn);
     let ask = Ask {
-        turn: args.turn.join(" "),
+        turn,
         tokens: args.budget,
         bound,
         floor: loaded.settings().floors().inject,
-        weights: crate::weights_of(loaded.settings(), loaded.embedder().is_some()),
+        weights: crate::weights_of(loaded.settings(), embedding.is_some()),
         now: at,
         scope: scope.to_string(),
+        embedding,
     };
 
     // Redaction is asked of the configuration, one line at a time, at the boundary where

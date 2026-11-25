@@ -65,7 +65,7 @@ pub struct Refused {
 
 /// The settings a coordinator may set.
 ///
-/// A registrar — `source`, `section`, `extractor`, `tool` — is called rather than assigned, so it
+/// A registrar — `source`, `section` — is called rather than assigned, so it
 /// is declared in [`needs`] but not listed here.
 const SETTINGS: &[&str] = &[
     "promote_floor",

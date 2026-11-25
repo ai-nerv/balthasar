@@ -209,6 +209,30 @@ impl Pass {
             let mut pad =
                 balthasar_store::Scratchpad::at(crate::runs_under(path, &self.scope, &self.which));
             loaded.consolidate(&mut store, Some(&mut pad), &self.scope, now, false)?;
+            if started.elapsed() < self.budget
+                && let Some(embedder) = loaded.embedder()
+            {
+                let model = embedder.model().to_owned();
+                if let Ok(waiting) = store.unembedded(&model, 64)
+                    && !waiting.is_empty()
+                {
+                    let texts: Vec<String> = waiting.iter().map(|(_, t)| t.clone()).collect();
+                    if let Ok(vectors) = embedder.embed(&texts) {
+                        for ((id, _), vector) in waiting.iter().zip(&vectors) {
+                            let _ = store.embed(id, vector, &model);
+                        }
+                    }
+                }
+            }
+            if started.elapsed() < self.budget {
+                let _ = crate::relate::derive_and_write(&mut store, &self.scope, now);
+            }
+            if settings.ledger.capture && settings.ledger.retention_days > 0 {
+                let cutoff = now.saturating_sub(
+                    i64::from(settings.ledger.retention_days).saturating_mul(balthasar_store::DAY),
+                );
+                let _ = store.forget_ledger_before(cutoff);
+            }
             held.set_counter(&marked, "consolidated", u64::try_from(now).unwrap_or(0))?;
         }
         Ok(Left {

@@ -43,10 +43,12 @@ pub struct Args {
     shadow: Option<String>,
 
     /// Use the control policy: full-text search, no vectors, no traversal.
-    ///
-    /// The permanent floor, and what every retrieval experiment is measured against.
     #[arg(long)]
     lexical_only: bool,
+
+    /// Opt into reranking with the fitted `.policy.json` beside this store, if valid.
+    #[arg(long)]
+    learned: bool,
 
     /// Show the score breakdown.
     #[arg(long)]
@@ -82,6 +84,7 @@ pub fn run(
     ask.embedding = embedding;
     ask.scope_name = scope.to_string();
     ask.limit = args.limit;
+    ask.max_candidates = loaded.settings().budget.candidates;
     ask.tiers = tiers;
     ask.include_archived = args.archived;
     ask.history = args.all || args.archived;
@@ -105,16 +108,12 @@ pub fn run(
             found.push(hit);
         }
     }
-    // Which retrieval behaviour this query gets. The policy decides where candidates come from
-    // and how far to walk; it decides nothing about what may be asserted or injected, because
-    // those are constraints rather than choices and sit outside every policy.
+    // Policy and traversal decisions.
     let shape = balthasar_recall::shape_of(&ask.query);
     let policy = if args.lexical_only {
         balthasar_recall::Policy::lexical_only()
     } else {
         let held = balthasar_recall::Policy::for_shape(shape);
-        // A missing embedder degrades the policy rather than swapping it, so a store with no
-        // vectors behaves like the same strategy doing less — not like a different one.
         if ask.embedding.is_some() {
             held
         } else {
@@ -124,11 +123,14 @@ pub fn run(
 
     let mut paths: std::collections::HashMap<String, balthasar_model::Relation> =
         std::collections::HashMap::new();
-    if !policy.families.is_empty() {
+    let hops = policy.hops.min(loaded.settings().budget.hops);
+    if !policy.families.is_empty() && hops > 0 {
+        let mut walk_policy = policy.clone();
+        walk_policy.hops = hops;
         let seeds: Vec<balthasar_model::MemoryId> =
             found.iter().take(5).map(|h| h.memory.id.clone()).collect();
         for (store, _, named) in stores(store_path, scope, tool)? {
-            for (hit, edge) in reached(&store, &seeds, &policy, &ask, at)? {
+            for (hit, edge) in reached(&store, &seeds, &walk_policy, &ask, at)? {
                 if found.iter().any(|h| h.memory.id == hit.memory.id) {
                     continue;
                 }
@@ -140,18 +142,22 @@ pub fn run(
     }
 
     found.sort_by(|a, b| b.score.total_cmp(&a.score));
+    if (args.learned || loaded.wants_learned_ranking())
+        && let Some(model) = learned_model(store_path, scope, tool, None)
+    {
+        let opened = stores(store_path, scope, tool)?;
+        model.rerank(&mut found, ask.embedding.is_some(), |id| {
+            evidence_in(&opened, id)
+        });
+    }
     found.truncate(args.limit);
     let latency_us = started.elapsed().as_micros() as u64;
 
-    // Computed after the answer and thrown away. The comparison is kept; the candidates are
-    // not, and nothing here can reach the results above.
     let shadowed = match &args.shadow {
         Some(name) => shadow(store_path, scope, tool, name, &ask, &found, at)?,
         None => None,
     };
 
-    // After the answer, never before it. The ledger is instrumentation: it records that a
-    // search happened and what it weighed, and there is no path from here back into the result.
     let traced = if loaded.settings().ledger().capture && store_path.is_none() {
         let mut into = open(None, scope, tool)?;
         Some(capture(
@@ -170,8 +176,6 @@ pub fn run(
         None
     };
 
-    // Evidence is fetched for the results that survived, not for every candidate: a search
-    // over a thousand memories should not read four thousand witnesses nobody will see.
     if args.explain || args.how.framed() {
         for (store, _, _) in stores(store_path, scope, tool)? {
             for hit in &mut found {
@@ -341,15 +345,7 @@ pub fn run(
     Ok(())
 }
 
-/// Record what this search did, when the configuration asked for it.
-///
-/// Off by default and after the fact by construction: the ledger is written once the answer is
-/// already decided, so it cannot change what a search returns. F1's acceptance is that recall
-/// behaves identically with capture disabled, and the shape of this function is the argument —
-/// there is no path from here back into the result.
-///
-/// The query is hashed. A ledger that held what people search for would be a different and much
-/// worse thing than one that holds that a search happened.
+/// Record what this search did when ledger capture is enabled.
 struct Capturing<'a> {
     scope: &'a ScopeId,
     ask: &'a Recall,
@@ -413,14 +409,6 @@ fn capture(store: &mut Store, said: &Capturing<'_>) -> anyhow::Result<String> {
 }
 
 /// Candidates the relationship views reach that search alone did not.
-///
-/// The query's shape decides which families are walked; classification changes what is
-/// *generated* and never what relevance means, so these arrive as ordinary candidates and are
-/// scored by the same function as everything else. A shape with no families walks nothing and
-/// costs nothing.
-///
-/// Returns each memory with the edge that reached it, so `--explain` can show the path rather
-/// than asserting a relevance nobody can check.
 fn reached(
     store: &Store,
     seeds: &[balthasar_model::MemoryId],
@@ -586,10 +574,6 @@ fn breakdown(hit: &Scored) -> String {
 }
 
 /// Run a policy beside the real one, and keep only the comparison.
-///
-/// The shadow's candidates are computed and dropped. What survives is bounded — overlap, count,
-/// token cost, latency — because storing both result sets would be a second copy of the store
-/// keyed by query, which is a privacy problem wearing a research hat.
 fn shadow(
     store_path: Option<&Path>,
     scope: &ScopeId,
@@ -599,34 +583,51 @@ fn shadow(
     served: &[Scored],
     at: balthasar_model::Timestamp,
 ) -> anyhow::Result<Option<balthasar_recall::Shadow>> {
-    let policy = match name {
-        "lexical-only" => balthasar_recall::Policy::lexical_only(),
-        "balanced" => balthasar_recall::Policy::balanced(),
-        other => {
-            // Named by shape, so `--shadow temporal` means "what would the temporal policy have
-            // done". An unknown name is refused rather than silently ignored: a shadow that did
-            // not run would report perfect agreement, which is the most misleading answer.
-            let shape = match other {
-                "temporal" => balthasar_recall::Shape::Temporal,
-                "repair" | "causal" => balthasar_recall::Shape::Causal,
-                "entity" => balthasar_recall::Shape::Entity,
-                "similar" | "semantic" => balthasar_recall::Shape::Semantic,
-                "current-fact" | "current" => balthasar_recall::Shape::Current,
-                "procedure" | "procedural" => balthasar_recall::Shape::Procedural,
-                _ => anyhow::bail!(
-                    "no policy called '{other}' — try balanced, lexical-only, temporal, \
-                     repair, entity, similar, current-fact or procedure"
-                ),
-            };
-            balthasar_recall::Policy::for_shape(shape)
+    let learned = if name == "learned" || name.ends_with(".json") {
+        let explicit = (name != "learned").then(|| Path::new(name));
+        Some(
+            learned_model(store_path, scope, tool, explicit).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no valid fitted policy found for '{name}' — run `balthasar train` first"
+                )
+            })?,
+        )
+    } else {
+        None
+    };
+    let policy = if learned.is_some() {
+        balthasar_recall::Policy {
+            name: "learned",
+            ..balthasar_recall::Policy::balanced()
+        }
+    } else {
+        match name {
+            "lexical-only" => balthasar_recall::Policy::lexical_only(),
+            "balanced" => balthasar_recall::Policy::balanced(),
+            other => {
+                let shape = match other {
+                    "temporal" => balthasar_recall::Shape::Temporal,
+                    "repair" | "causal" => balthasar_recall::Shape::Causal,
+                    "entity" => balthasar_recall::Shape::Entity,
+                    "similar" | "semantic" => balthasar_recall::Shape::Semantic,
+                    "current-fact" | "current" => balthasar_recall::Shape::Current,
+                    "procedure" | "procedural" => balthasar_recall::Shape::Procedural,
+                    _ => anyhow::bail!(
+                        "no policy called '{other}' — try balanced, lexical-only, learned, \
+                         temporal, repair, entity, similar, current-fact or procedure"
+                    ),
+                };
+                balthasar_recall::Policy::for_shape(shape)
+            }
         }
     };
 
     let started = std::time::Instant::now();
     let mut candidates: Vec<Scored> = Vec::new();
     let mut ask = ask.clone();
-    for (store, near, _) in stores(store_path, scope, tool)? {
-        ask.near = near;
+    let opened = stores(store_path, scope, tool)?;
+    for (store, near, _) in &opened {
+        ask.near = *near;
         candidates.extend(store.recall(&ask)?);
     }
     if !policy.families.is_empty() {
@@ -635,8 +636,8 @@ fn shadow(
             .take(5)
             .map(|h| h.memory.id.clone())
             .collect();
-        for (store, _, _) in stores(store_path, scope, tool)? {
-            for (hit, _) in reached(&store, &seeds, &policy, &ask, at)? {
+        for (store, _, _) in &opened {
+            for (hit, _) in reached(store, &seeds, &policy, &ask, at)? {
                 if !candidates.iter().any(|h| h.memory.id == hit.memory.id) {
                     candidates.push(hit);
                 }
@@ -644,6 +645,11 @@ fn shadow(
         }
     }
     candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+    if let Some(model) = &learned {
+        model.rerank(&mut candidates, ask.embedding.is_some(), |id| {
+            evidence_in(&opened, id)
+        });
+    }
     candidates.truncate(ask.limit);
     let micros = started.elapsed().as_micros() as u64;
 
@@ -662,6 +668,40 @@ fn shadow(
         tokens,
         micros,
     )))
+}
+
+fn learned_model(
+    store_path: Option<&Path>,
+    scope: &ScopeId,
+    tool: &Which,
+    explicit: Option<&Path>,
+) -> Option<balthasar_recall::Model> {
+    let path = match explicit {
+        Some(path) => path.to_path_buf(),
+        None => store_path.map_or_else(
+            || crate::train::model_path(scope, &tool.tool),
+            |p| p.with_extension("policy.json"),
+        ),
+    };
+    balthasar_recall::Model::load(&path)
+}
+
+fn evidence_in(
+    opened: &[(Store, bool, balthasar_store::Tool)],
+    id: &balthasar_model::MemoryId,
+) -> (usize, usize) {
+    for (store, _, _) in opened {
+        if let Ok(witnesses) = store.witnesses_of(id)
+            && !witnesses.is_empty()
+        {
+            let domains: std::collections::BTreeSet<String> = witnesses
+                .iter()
+                .map(balthasar_model::Witness::domain_of)
+                .collect();
+            return (witnesses.len(), domains.len());
+        }
+    }
+    (0, 0)
 }
 
 #[cfg(test)]

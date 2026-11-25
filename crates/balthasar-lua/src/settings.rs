@@ -70,6 +70,19 @@ impl Default for Decay {
     }
 }
 
+impl Decay {
+    #[must_use]
+    pub fn rates(&self) -> balthasar_model::DecayRates {
+        balthasar_model::DecayRates {
+            critical: self.critical,
+            high: self.high,
+            normal: self.normal,
+            low: self.low,
+            inertia: self.inertia,
+        }
+    }
+}
+
 /// How much each retrieval signal counts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Weights {

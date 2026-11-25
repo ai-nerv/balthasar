@@ -11,25 +11,16 @@ use luna::{Callback, CallbackReturn, Table, Value};
 ///
 /// `outcome` is here rather than in [`TOLD`] because §6.7 has it returning a classification. The
 /// two namespaces stay disjoint, and a test holds them apart.
-pub const ASKED: &[&str] = &[
-    "scope",
-    "admit",
-    "promote",
-    "importance",
-    "redact",
-    "withhold",
-    "outcome",
-];
+pub const ASKED: &[&str] = &["scope", "promote", "redact", "withhold", "outcome"];
 
 /// Events `balthasar.did.<name>` may be registered against.
 pub const TOLD: &[&str] = &[
-    "observe",
     "promote",
     "contradict",
     "recall",
     "forget",
     "consolidate",
-    "compact",
+    "settle",
     "used",
 ];
 

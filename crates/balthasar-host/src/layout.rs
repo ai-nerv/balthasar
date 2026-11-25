@@ -154,7 +154,7 @@ fn lay_out(
     let memory = if let Some(kept) = Supplied::kept(prompt.memory.as_ref(), wanted, moved) {
         kept
     } else {
-        let found = supply::candidates(at, &query, CANDIDATES);
+        let found = supply::candidates(at, &query, CANDIDATES, hooks);
         let room = (f64::from(caps.memory) / factor) as u32;
         let packed = supply::pack(at, &found, room, rules.estimate_chars_per_token, hooks)
             .unwrap_or_default();

@@ -3,7 +3,7 @@
 //! Nothing here deletes; a memory that fades past the floor moves to the archive intact.
 
 use crate::{Store, StoreError, row};
-use balthasar_model::{MemoryId, Timestamp, floor};
+use balthasar_model::{DecayRates, MemoryId, Timestamp, floor};
 use rusqlite::params;
 
 /// What a pass did, or would do.
@@ -29,28 +29,51 @@ pub struct Weakened {
 
 impl Store {
     pub fn decay_preview(&mut self, now: Timestamp) -> Result<Faded, StoreError> {
-        self.fade(now, true, true)
+        self.fade(now, true, true, &DecayRates::default())
+    }
+
+    pub fn decay_preview_with(
+        &mut self,
+        now: Timestamp,
+        rates: &DecayRates,
+    ) -> Result<Faded, StoreError> {
+        self.fade(now, true, true, rates)
     }
 
     /// Apply the fade, and sweep what is spent into the archive.
     pub fn decay(&mut self, now: Timestamp) -> Result<Faded, StoreError> {
-        self.fade(now, false, true)
+        self.fade(now, false, true, &DecayRates::default())
     }
 
-    /// Apply the fade, and leave what is spent where it is. Sweeping here would archive the very
-    /// scratch the cycle is about to look at for corroboration.
+    pub fn decay_with(&mut self, now: Timestamp, rates: &DecayRates) -> Result<Faded, StoreError> {
+        self.fade(now, false, true, rates)
+    }
+
+    /// Apply the fade, and leave what is spent where it is.
     pub fn weaken(&mut self, now: Timestamp) -> Result<Faded, StoreError> {
-        self.fade(now, false, false)
+        self.fade(now, false, false, &DecayRates::default())
+    }
+
+    pub fn weaken_with(&mut self, now: Timestamp, rates: &DecayRates) -> Result<Faded, StoreError> {
+        self.fade(now, false, false, rates)
     }
 
     /// Move what is spent into the archive, the last step of a consolidation cycle.
     pub fn sweep(&mut self, now: Timestamp) -> Result<Faded, StoreError> {
-        self.fade(now, false, true)
+        self.fade(now, false, true, &DecayRates::default())
     }
 
-    /// One pass. `preview` decides whether anything is written; `sweeping` decides whether
-    /// what has fallen past the floor leaves the live set.
-    fn fade(&mut self, now: Timestamp, preview: bool, sweeping: bool) -> Result<Faded, StoreError> {
+    pub fn sweep_with(&mut self, now: Timestamp, rates: &DecayRates) -> Result<Faded, StoreError> {
+        self.fade(now, false, true, rates)
+    }
+
+    fn fade(
+        &mut self,
+        now: Timestamp,
+        preview: bool,
+        sweeping: bool,
+        rates: &DecayRates,
+    ) -> Result<Faded, StoreError> {
         let mut report = Faded {
             preview,
             ..Faded::default()
@@ -74,7 +97,7 @@ impl Store {
             }
             let was = memory.strength.value;
             // Tier-aware: a fact barely fades, a session's own scratch fades fastest.
-            let now_value = memory.strength.at_tier(memory.tier, now);
+            let now_value = memory.strength.at_tier_with(memory.tier, now, rates);
             let spent = sweeping && now_value < floor::SPENT;
             // Unchanged is not worth reporting, except when it is already spent: consolidation
             // weakens and sweeps in one pass, so by then no strength appears to have changed.

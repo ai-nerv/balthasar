@@ -28,13 +28,15 @@ pub fn run(
     scope: &ScopeId,
     tool: &Which,
     args: &Args,
+    loaded: &crate::loaded::Loaded,
 ) -> anyhow::Result<()> {
     let at = now();
     let mut store = open(store_path, scope, tool)?;
+    let rates = loaded.settings().decay.rates();
     let report = if args.commit {
-        store.decay(at)?
+        store.decay_with(at, &rates)?
     } else {
-        store.decay_preview(at)?
+        store.decay_preview_with(at, &rates)?
     };
 
     if args.how.framed() {

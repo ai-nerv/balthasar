@@ -184,6 +184,7 @@ pub fn serve(
             }
         };
         let now = now();
+        loaded.load_ranker_for(store_path, scope, &named);
         let mut at = Answering {
             store: &mut held.store,
             scrollback: Some(&mut held.scrollback),
@@ -270,6 +271,7 @@ pub fn api(
     };
 
     let capture = loaded.settings().ledger().capture;
+    loaded.load_ranker_for(store_path, scope, &tool.tool);
     let reply = match open(store_path, scope, tool).and_then(|store| {
         crate::scrollback(store_path, scope, tool).map(|scrollback| (store, scrollback))
     }) {

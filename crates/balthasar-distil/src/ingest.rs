@@ -140,6 +140,11 @@ pub fn ingest(
             ask.now,
             &settings.decisions,
         ));
+        let (backends, _) = crate::backends(engine.config().get("distiller"));
+        let (guessed, by) = crate::propose(&backends, &turns, crate::Budget::default());
+        report.inferred += guessed.len();
+        report.by = report.by.or(by);
+        found.candidates.extend(guessed);
         report.proposed += found.candidates.len();
         let from = Provenance {
             scope: ask.scope.clone(),

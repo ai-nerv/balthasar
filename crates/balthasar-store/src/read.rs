@@ -45,6 +45,8 @@ pub struct Recall {
     pub embedding: Option<Vec<f32>>,
     /// Whether this store is the project's rather than the global one.
     pub near: bool,
+    /// How many candidates full-text search may hand to scoring.
+    pub max_candidates: usize,
     /// Whether finding a memory counts as needing it.
     ///
     /// Off by default: reinforcing on every search means browsing resets the strength of
@@ -70,6 +72,7 @@ impl Recall {
             weights: Weights::default().without_vectors(),
             embedding: None,
             near: false,
+            max_candidates: CANDIDATES,
             reinforce: false,
         }
     }
@@ -405,8 +408,9 @@ impl Store {
         );
         let mut statement = self.db().prepare(&sql)?;
         let terms = fts_query(&ask.query);
+        let cap = ask.max_candidates.max(1) as i64;
         let found = statement
-            .query_map(params![terms, CANDIDATES as i64], |r| {
+            .query_map(params![terms, cap], |r| {
                 let rank: f64 = r.get("rank")?;
                 Ok((row::memory(r), rank))
             })?
@@ -437,8 +441,9 @@ impl Store {
             archive_clause(ask),
         );
         let mut statement = self.db().prepare(&sql)?;
+        let cap = ask.max_candidates.max(1) as i64;
         let found = statement
-            .query_map(params![CANDIDATES as i64], |r| Ok(row::memory(r)))?
+            .query_map(params![cap], |r| Ok(row::memory(r)))?
             .collect::<Result<Vec<_>, _>>()?;
         // No query means no lexical signal, so the term is neutral rather than zero.
         found.into_iter().map(|m| Ok((m?, 0.5))).collect()

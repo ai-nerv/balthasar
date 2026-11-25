@@ -5,7 +5,9 @@ use balthasar_model::ScopeId;
 use std::path::Path;
 
 /// What a configuration said about embedding.
-fn embedder_from(config: &balthasar_lua::Config) -> Option<Box<dyn balthasar_embed::Embed>> {
+fn embedder_from(
+    config: &balthasar_lua::Config,
+) -> (Option<Box<dyn balthasar_embed::Embed>>, Option<String>) {
     let said = config.get("embedder").map(|value| balthasar_embed::Value {
         kind: value
             .get("kind")
@@ -20,7 +22,7 @@ fn embedder_from(config: &balthasar_lua::Config) -> Option<Box<dyn balthasar_emb
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
     });
-    balthasar_embed::open(&balthasar_embed::Spec::read(said.as_ref()))
+    balthasar_embed::open_explaining(&balthasar_embed::Spec::read(said.as_ref()))
 }
 
 /// The configuration, and the VM that produced it.
@@ -28,6 +30,8 @@ pub struct Loaded {
     engine: Engine,
     settings: Settings,
     embedder: Option<Box<dyn balthasar_embed::Embed>>,
+    embedder_note: Option<String>,
+    ranker: Option<balthasar_recall::Model>,
     /// `balthasar.window` and `balthasar.memory`, read once.
     window: balthasar_host::Rules,
     keeping: balthasar_host::Keeping,
@@ -98,6 +102,60 @@ impl balthasar_host::Hooks for Loaded {
     fn memory(&self) -> balthasar_host::Keeping {
         self.keeping.clone()
     }
+
+    fn embed(&self, text: &str) -> Option<Vec<f32>> {
+        self.embed_query(text)
+    }
+
+    fn weights(&self, vectors: bool) -> balthasar_store::Weights {
+        crate::weights_of(&self.settings, vectors)
+    }
+
+    fn budget(&self) -> balthasar_lua::Budget {
+        self.settings.budget
+    }
+
+    fn fingerprint(&self) -> String {
+        self.settings.fingerprint()
+    }
+
+    fn sections(&self) -> Vec<balthasar_recall::Section> {
+        balthasar_recall::Section::all(&self.engine.config())
+    }
+
+    fn backends(&self) -> Option<serde_json::Value> {
+        let (backends, unavailable) = self.distillers();
+        let reachable: Vec<String> = backends
+            .iter()
+            .filter(|b| b.reachable())
+            .map(|b| b.name())
+            .collect();
+        Some(serde_json::json!({
+            "embedder": {
+                "model": self.embedder.as_deref().map(balthasar_embed::Embed::model),
+                "note": self.embedder_note,
+            },
+            "distiller": {
+                "reachable": reachable,
+                "unavailable": unavailable,
+            },
+        }))
+    }
+
+    fn classify_outcome(&mut self, event: &serde_json::Value) -> Option<String> {
+        let said = self.engine.ask("outcome", std::slice::from_ref(event))?;
+        said.as_str()
+            .or_else(|| said.get("kind").and_then(serde_json::Value::as_str))
+            .map(str::to_owned)
+    }
+
+    fn note_used(&mut self, action: &serde_json::Value) {
+        self.engine.tell("used", std::slice::from_ref(action));
+    }
+
+    fn ranker(&self) -> Option<&balthasar_recall::Model> {
+        self.ranker.as_ref()
+    }
 }
 
 impl Loaded {
@@ -142,7 +200,7 @@ impl Loaded {
         }
 
         let mut settings = Settings::from(&engine.config());
-        let embedder = embedder_from(&engine.config());
+        let (embedder, embedder_note) = embedder_from(&engine.config());
         let mut window = balthasar_host::Rules::read(engine.config().get("window"));
         // A repository nobody vouched for may raise a floor, never lower one, and never words
         // the warning put in front of a model.
@@ -155,6 +213,8 @@ impl Loaded {
             engine,
             settings,
             embedder,
+            embedder_note,
+            ranker: None,
             window,
             keeping,
             stubs: std::collections::HashMap::new(),
@@ -166,10 +226,14 @@ impl Loaded {
     /// Not "no configuration at all": the shipped defaults still apply.
     #[must_use]
     pub fn bare() -> Self {
+        let (embedder, embedder_note) =
+            balthasar_embed::open_explaining(&balthasar_embed::Spec::default());
         Self {
             engine: Engine::new(),
             settings: Settings::default(),
-            embedder: balthasar_embed::open(&balthasar_embed::Spec::default()),
+            embedder,
+            embedder_note,
+            ranker: None,
             window: balthasar_host::Rules::default(),
             keeping: balthasar_host::Keeping::default(),
             stubs: std::collections::HashMap::new(),
@@ -180,6 +244,36 @@ impl Loaded {
     #[must_use]
     pub fn embedder(&self) -> Option<&dyn balthasar_embed::Embed> {
         self.embedder.as_deref()
+    }
+
+    /// Why the embedder fell back from what was configured, if it did.
+    #[must_use]
+    pub fn embedder_note(&self) -> Option<&str> {
+        self.embedder_note.as_deref()
+    }
+
+    /// Whether the configuration opted into learned reranking.
+    #[must_use]
+    pub fn wants_learned_ranking(&self) -> bool {
+        self.engine.config().string("ranking") == Some("learned")
+    }
+
+    /// Load the fitted `.policy.json` beside this store if the user opted in.
+    pub fn load_ranker_for(
+        &mut self,
+        store_path: Option<&Path>,
+        scope: &ScopeId,
+        tool: &balthasar_store::Tool,
+    ) {
+        if !self.wants_learned_ranking() {
+            self.ranker = None;
+            return;
+        }
+        let path = store_path.map_or_else(
+            || crate::train::model_path(scope, tool),
+            |p| p.with_extension("policy.json"),
+        );
+        self.ranker = balthasar_recall::Model::load(&path);
     }
 
     /// The model backends a configuration asked for, and anything it asked for that is not

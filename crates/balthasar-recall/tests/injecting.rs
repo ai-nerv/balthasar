@@ -48,6 +48,7 @@ fn ask(tokens: usize, bound: Bound) -> Ask {
         weights: Weights::default().without_vectors(),
         now: NOW,
         scope: "global".to_owned(),
+        embedding: None,
     }
 }
 
