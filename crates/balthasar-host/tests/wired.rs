@@ -347,3 +347,119 @@ fn applied_layout_records_traceable_recall_run_when_capturing() {
         .expect("trace");
     assert!(traced.is_some(), "layout delivery should link a RecallRun");
 }
+
+#[test]
+fn peer_remember_promotes_only_verbatim_whole_sentences_from_user_turns() {
+    let mut store = Store::ephemeral().expect("store");
+    let mut scrollback = Transcript::ephemeral().expect("scrollback");
+    let scope = ScopeId::new("/w/proj");
+    let mut hooks = WiredHooks::default();
+
+    for (cursor, role, kind, text) in [
+        (
+            1,
+            "user",
+            "user",
+            "Never force push to main. Let's use zstd for archives.",
+        ),
+        (
+            2,
+            "assistant",
+            "prose",
+            "Always deploy straight to production.",
+        ),
+        (3, "user", "from", "Sibling says use redis everywhere."),
+        (
+            4,
+            "user",
+            "user",
+            "Here is a snippet:\n```\nUse sqlite in-memory only.\n```",
+        ),
+    ] {
+        let obs = call(
+            &mut store,
+            Some(&mut scrollback),
+            &scope,
+            false,
+            &mut hooks,
+            "observe",
+            vec![
+                json!("s1"),
+                json!({ "cursor": cursor, "role": role, "kind": kind, "text": text }),
+            ],
+        );
+        assert!(obs.ok, "{obs:?}");
+    }
+
+    let peer = Door::Socket(balthasar_ipc::Peer {
+        pid: 42,
+        uid: 1000,
+        program: Some("magi".into()),
+        agent: None,
+    });
+    let ask_peer = |store: &mut Store,
+                    scrollback: &mut Transcript,
+                    hooks: &mut WiredHooks,
+                    statement: &str| {
+        let mut at = Answering {
+            store,
+            scrollback: Some(scrollback),
+            scratch: None,
+            scope: scope.clone(),
+            agent: AgentId::default(),
+            now: NOW,
+            inject_floor: 0.35,
+            live_floor: 0.15,
+            capture: false,
+        };
+        answer_hooked(
+            &mut at,
+            &peer,
+            &Request {
+                call: "remember".into(),
+                args: vec![json!(statement), json!({ "from_session": "s1" })],
+            },
+            hooks,
+        )
+    };
+
+    let exact = ask_peer(
+        &mut store,
+        &mut scrollback,
+        &mut hooks,
+        "Let's use zstd for archives",
+    );
+    assert!(exact.ok, "{exact:?}");
+    assert_eq!(exact.result[0]["witness"], "choice");
+    assert_eq!(exact.result[0]["verified"], true);
+    assert_eq!(exact.result[0]["cursor"], 1);
+    let exact_id = balthasar_model::MemoryId::new(exact.result[0]["id"].as_str().expect("id"));
+    let kept = store.get(&exact_id).expect("get").expect("memory");
+    assert!(
+        kept.confidence >= balthasar_model::floor::INJECT,
+        "verified choice should cross inject floor: {}",
+        kept.confidence
+    );
+    assert!(kept.is_assertable(balthasar_model::floor::INJECT, NOW, true));
+    assert_eq!(kept.witnesses[0].cursor, Some(1));
+
+    for unverified in [
+        "force push to main",
+        "Always deploy straight to production.",
+        "Sibling says use redis everywhere.",
+        "Use sqlite in-memory only.",
+        "Fabricated rule the user never typed.",
+    ] {
+        let reply = ask_peer(&mut store, &mut scrollback, &mut hooks, unverified);
+        assert!(reply.ok, "{reply:?}");
+        assert_eq!(reply.result[0]["witness"], "manual", "{unverified}");
+        assert_eq!(reply.result[0]["verified"], false, "{unverified}");
+        let id = balthasar_model::MemoryId::new(reply.result[0]["id"].as_str().expect("id"));
+        let mem = store.get(&id).expect("get").expect("memory");
+        assert!(
+            mem.confidence < balthasar_model::floor::INJECT,
+            "unverified peer proposal must stay below inject floor: {}",
+            mem.confidence
+        );
+    }
+}
